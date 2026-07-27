@@ -90,6 +90,25 @@ export function WorkspaceShell() {
     setReloadNonce((n) => n + 1);
   }, [selectedRepoId]);
 
+  const [newReviewStatus, setNewReviewStatus] = useState<'idle' | 'starting' | 'error'>('idle');
+  const startNewReview = useCallback(async () => {
+    if (!window.confirm('Start a new review? Existing comments stay saved under the previous session.')) {
+      return;
+    }
+    setNewReviewStatus('starting');
+    try {
+      const res = await fetch('/api/sessions/new', { method: 'POST' });
+      if (!res.ok) throw new Error(`Failed to start a new session: ${res.status}`);
+      setReloadNonce((n) => n + 1);
+      setBtwRefreshNonce((n) => n + 1);
+      setNewReviewStatus('idle');
+    } catch (err) {
+      console.error('Failed to start new review:', err);
+      setNewReviewStatus('error');
+      setTimeout(() => setNewReviewStatus('idle'), 2000);
+    }
+  }, []);
+
   const [exportStatus, setExportStatus] = useState<'idle' | 'copied' | 'sent' | 'error'>('idle');
 
   const exportReview = useCallback(async (destination: 'clipboard' | 'cmux') => {
@@ -293,7 +312,25 @@ export function WorkspaceShell() {
                 gap: 6,
               }}
             >
-              <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.7 }}>EXPORT REVIEW</div>
+              <button
+                onClick={() => void startNewReview()}
+                disabled={newReviewStatus === 'starting'}
+                style={{
+                  fontSize: 12,
+                  padding: '6px 8px',
+                  cursor: 'pointer',
+                  border: '1px solid rgba(127,127,127,0.4)',
+                  borderRadius: 4,
+                  background: 'transparent',
+                  color: 'inherit',
+                }}
+              >
+                {newReviewStatus === 'starting' ? 'Starting…' : 'New Review'}
+              </button>
+              {newReviewStatus === 'error' && (
+                <div style={{ fontSize: 11, color: '#c0392b' }}>Failed to start new review.</div>
+              )}
+              <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.7, marginTop: 6 }}>EXPORT REVIEW</div>
               <button
                 onClick={() => void exportReview('clipboard')}
                 style={{
