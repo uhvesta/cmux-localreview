@@ -2,7 +2,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { CommentThread, DiffFile, DiffSide, LineNumber } from '../../types/diff';
-import { resolveApiUrl } from '../apiBase';
+import { getApiBase, resolveApiUrl } from '../apiBase';
 import { CommentBodyRenderer } from './CommentBodyRenderer';
 
 interface FullFileGate {
@@ -161,6 +161,41 @@ export function FullFileView({ file, threads, onAddComment }: FullFileViewProps)
     setCommentDraft('');
   };
 
+  const [askingBtwLine, setAskingBtwLine] = useState<number | null>(null);
+  const [btwDraft, setBtwDraft] = useState('');
+  const [btwStatus, setBtwStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
+
+  const submitBtw = async (lineNumber: number) => {
+    const question = btwDraft.trim();
+    if (!question) return;
+    setBtwStatus('sending');
+    try {
+      const apiBase = getApiBase(); // "/api/repos/<repoId>" — /btw is workspace-level, not repo-namespaced.
+      const repoId = apiBase.split('/').pop();
+      const content = data?.lines?.[lineNumber - 1] ?? '';
+      const res = await fetch('/api/btw/ask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          transport: 'acp',
+          repoId,
+          filePath: file.path,
+          startLine: lineNumber,
+          codeContent: content,
+          question,
+        }),
+      });
+      if (!res.ok) throw new Error(`Failed to ask: ${res.status}`);
+      setAskingBtwLine(null);
+      setBtwDraft('');
+      setBtwStatus('sent');
+    } catch {
+      setBtwStatus('error');
+    } finally {
+      setTimeout(() => setBtwStatus('idle'), 2000);
+    }
+  };
+
   if (file.status === 'deleted' && side === 'current') {
     return (
       <div className="p-4 text-sm text-github-text-secondary">
@@ -292,6 +327,15 @@ export function FullFileView({ file, threads, onAddComment }: FullFileViewProps)
                             💬
                           </span>
                         )}
+                        <button
+                          className="opacity-0 group-hover:opacity-100 text-[10px] text-github-text-muted hover:text-github-text-primary ml-auto"
+                          onClick={() =>
+                            setAskingBtwLine((cur) => (cur === row.lineNumber ? null : row.lineNumber))
+                          }
+                          title="Ask a /btw side-question about this line"
+                        >
+                          /btw
+                        </button>
                       </div>
                       {threadsByLine.get(threadKey(diffSide, row.lineNumber))?.map((thread) => (
                         <div
@@ -317,6 +361,25 @@ export function FullFileView({ file, threads, onAddComment }: FullFileViewProps)
                             onClick={() => void submitComment(row.lineNumber)}
                           >
                             Submit
+                          </button>
+                        </div>
+                      )}
+                      {askingBtwLine === row.lineNumber && (
+                        <div className="ml-12 my-1 flex gap-2 items-start">
+                          <textarea
+                            autoFocus
+                            value={btwDraft}
+                            onChange={(e) => setBtwDraft(e.target.value)}
+                            placeholder="Ask about this line (won't become a review comment)…"
+                            className="flex-1 text-xs bg-github-bg-secondary border border-github-border rounded p-1"
+                            rows={2}
+                          />
+                          <button
+                            className="text-xs px-2 py-1 rounded border border-github-border"
+                            disabled={btwStatus === 'sending'}
+                            onClick={() => void submitBtw(row.lineNumber)}
+                          >
+                            {btwStatus === 'sending' ? 'Asking…' : 'Ask'}
                           </button>
                         </div>
                       )}
