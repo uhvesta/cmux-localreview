@@ -308,4 +308,70 @@ describe("buildWorkspaceApp", () => {
       expect(res.status).toBe(400);
     });
   });
+
+  describe("sessions (New Review)", () => {
+    test("POST /api/sessions/new freezes prior comments and starts a clean session", async () => {
+      const workspace = makeTmpDir();
+      gitInit(join(workspace, "repo"));
+      const { app, repos } = await buildWorkspaceApp({ workspaceRoot: workspace, db: makeDb() });
+      const { baseUrl } = await listen(app);
+      const repoId = repos[0]!.repoId;
+
+      await fetch(`${baseUrl}/api/repos/${repoId}/api/comments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ comments: [{ file: "a.txt", line: 1, body: "old session comment" }] }),
+      });
+
+      const sessionsBefore = (await (await fetch(`${baseUrl}/api/sessions`)).json()) as {
+        activeSessionId: number;
+      };
+
+      const newSessionRes = await fetch(`${baseUrl}/api/sessions/new`, { method: "POST" });
+      expect(newSessionRes.status).toBe(200);
+      const { sessionId: newSessionId } = (await newSessionRes.json()) as { sessionId: number };
+      expect(newSessionId).not.toBe(sessionsBefore.activeSessionId);
+
+      // New session starts with no comments visible...
+      const commentsAfter = (await (
+        await fetch(`${baseUrl}/api/repos/${repoId}/api/comments-json`)
+      ).json()) as { threads: unknown[] };
+      expect(commentsAfter.threads).toHaveLength(0);
+
+      // ...but the frozen session's comment is still exportable by id.
+      const oldPrompt = await (
+        await fetch(`${baseUrl}/api/export/prompt?sessionId=${sessionsBefore.activeSessionId}`)
+      ).text();
+      expect(oldPrompt).toContain("old session comment");
+
+      const sessionsList = (await (await fetch(`${baseUrl}/api/sessions`)).json()) as {
+        sessions: { id: number; frozenAt: number | null; commentCount: number }[];
+      };
+      const frozen = sessionsList.sessions.find((s) => s.id === sessionsBefore.activeSessionId)!;
+      expect(frozen.frozenAt).not.toBeNull();
+      expect(frozen.commentCount).toBe(1);
+    });
+
+    test("a comment posted after New Review attaches to the new session, not the frozen one", async () => {
+      const workspace = makeTmpDir();
+      gitInit(join(workspace, "repo"));
+      const { app, repos } = await buildWorkspaceApp({ workspaceRoot: workspace, db: makeDb() });
+      const { baseUrl } = await listen(app);
+      const repoId = repos[0]!.repoId;
+
+      await fetch(`${baseUrl}/api/sessions/new`, { method: "POST" });
+
+      await fetch(`${baseUrl}/api/repos/${repoId}/api/comments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ comments: [{ file: "a.txt", line: 1, body: "new session comment" }] }),
+      });
+
+      const commentsRes = (await (
+        await fetch(`${baseUrl}/api/repos/${repoId}/api/comments-json`)
+      ).json()) as { threads: { messages: { body: string }[] }[] };
+      expect(commentsRes.threads).toHaveLength(1);
+      expect(commentsRes.threads[0]!.messages[0]!.body).toBe("new session comment");
+    });
+  });
 });

@@ -14,7 +14,13 @@ import {
 
 import { discoverRepos, repoIdentityKey, type RepoInfo } from "./workspace.ts";
 import { resolveDiffBase } from "./diffBase.ts";
-import { upsertRepoRow, getActiveSessionId, listThreads } from "./commentsStore.ts";
+import {
+  upsertRepoRow,
+  getActiveSessionId,
+  startNewSession,
+  listSessions,
+  listThreads,
+} from "./commentsStore.ts";
 import { createCommentsRouter } from "./commentsRouter.ts";
 import { createFullFileRouter } from "./fullFileRouter.ts";
 import { buildExportPrompt } from "./exportFormatting.ts";
@@ -67,7 +73,7 @@ export async function buildWorkspaceApp(options: WorkspaceServerOptions): Promis
   const app = express();
   const mounted: MountedRepo[] = [];
   const { db } = options;
-  const sessionId = getActiveSessionId(db);
+  const getSessionId = () => getActiveSessionId(db);
 
   for (const repo of repos) {
     const repoId = repoIdFor(repo);
@@ -83,7 +89,7 @@ export async function buildWorkspaceApp(options: WorkspaceServerOptions): Promis
 
     const commentsRouter = createCommentsRouter({
       db,
-      sessionId,
+      getSessionId,
       repoDbId,
       currentContentAt: async (filePath, side, startLine, endLine) => {
         try {
@@ -123,11 +129,17 @@ export async function buildWorkspaceApp(options: WorkspaceServerOptions): Promis
     });
   });
 
-  app.get("/api/export/prompt", (_req, res) => {
+  function sessionIdFromQuery(req: { query: Record<string, unknown> }): number {
+    const raw = req.query.sessionId ? Number(req.query.sessionId) : undefined;
+    return raw && Number.isInteger(raw) ? raw : getSessionId();
+  }
+
+  app.get("/api/export/prompt", (req, res) => {
+    const forSession = sessionIdFromQuery(req);
     const prompt = buildExportPrompt(
       mounted.map((m) => ({
         repoWorkspaceRelativePath: m.repo.workspaceRelativePath,
-        threads: listThreads(db, sessionId, m.repoDbId),
+        threads: listThreads(db, forSession, m.repoDbId),
       })),
     );
     res.type("text/plain").send(prompt);
@@ -140,10 +152,11 @@ export async function buildWorkspaceApp(options: WorkspaceServerOptions): Promis
       return;
     }
 
+    const forSession = sessionIdFromQuery(req);
     const content = buildExportPrompt(
       mounted.map((m) => ({
         repoWorkspaceRelativePath: m.repo.workspaceRelativePath,
-        threads: listThreads(db, sessionId, m.repoDbId),
+        threads: listThreads(db, forSession, m.repoDbId),
       })),
     );
 
@@ -161,9 +174,19 @@ export async function buildWorkspaceApp(options: WorkspaceServerOptions): Promis
 
     db.query(
       `INSERT INTO exports (session_id, content, destination, created_at) VALUES (?, ?, ?, ?)`,
-    ).run(sessionId, content, destination, Date.now());
+    ).run(forSession, content, destination, Date.now());
 
     res.json({ success: true, content });
+  });
+
+  app.get("/api/sessions", (_req, res) => {
+    res.json({ sessions: listSessions(db), activeSessionId: getSessionId() });
+  });
+
+  app.post("/api/sessions/new", express.json(), (req, res) => {
+    const label = (req.body as { label?: unknown })?.label;
+    const id = startNewSession(db, typeof label === "string" ? label : undefined);
+    res.json({ sessionId: id });
   });
 
   const clientDist = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "vendor", "difit", "dist", "client");

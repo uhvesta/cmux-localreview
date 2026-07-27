@@ -57,6 +57,57 @@ export function getActiveSessionId(db: Database): number {
   return Number(result.lastInsertRowid);
 }
 
+/** Freezes whatever session is currently active, if any (idempotent). */
+export function freezeActiveSession(db: Database): void {
+  db.query(`UPDATE sessions SET frozen_at = ? WHERE frozen_at IS NULL`).run(Date.now());
+}
+
+/**
+ * "New Review" (SPEC.md §5): freezes the current session and starts the
+ * next one. Comments/btw threads are session-scoped, so frozen sessions
+ * remain browsable/exportable via their own id but stop accumulating new
+ * activity.
+ */
+export function startNewSession(db: Database, label?: string): number {
+  freezeActiveSession(db);
+  const result = db
+    .query(`INSERT INTO sessions (label, started_at) VALUES (?, ?)`)
+    .run(label ?? null, Date.now());
+  return Number(result.lastInsertRowid);
+}
+
+export interface SessionSummary {
+  id: number;
+  label: string | null;
+  startedAt: number;
+  frozenAt: number | null;
+  commentCount: number;
+  btwThreadCount: number;
+}
+
+export function listSessions(db: Database): SessionSummary[] {
+  const rows = db
+    .query(`SELECT id, label, started_at, frozen_at FROM sessions ORDER BY id DESC`)
+    .all() as { id: number; label: string | null; started_at: number; frozen_at: number | null }[];
+
+  return rows.map((row) => {
+    const commentCount = (
+      db.query(`SELECT COUNT(*) as c FROM comments WHERE session_id = ?`).get(row.id) as { c: number }
+    ).c;
+    const btwThreadCount = (
+      db.query(`SELECT COUNT(*) as c FROM btw_threads WHERE session_id = ?`).get(row.id) as { c: number }
+    ).c;
+    return {
+      id: row.id,
+      label: row.label,
+      startedAt: row.started_at,
+      frozenAt: row.frozen_at,
+      commentCount,
+      btwThreadCount,
+    };
+  });
+}
+
 function lineRange(line: DiffCommentThread["position"]["line"]): { start: number; end: number } {
   return typeof line === "number" ? { start: line, end: line } : line;
 }

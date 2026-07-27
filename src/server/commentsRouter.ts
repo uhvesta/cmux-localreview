@@ -105,7 +105,8 @@ function parseThreadsPayload(body: unknown): DiffCommentThread[] {
 
 export interface CommentsRouterDeps {
   db: Database;
-  sessionId: number;
+  /** Called fresh per-request so a "New Review" mid-run is picked up immediately. */
+  getSessionId: () => number;
   repoDbId: number;
   /** Current content of a (file, side, startLine..endLine) span, or undefined if it no longer exists — used for orphan re-anchoring. */
   currentContentAt: (
@@ -132,8 +133,9 @@ export function createCommentsRouter(deps: CommentsRouterDeps): Router {
   let version = 0;
 
   async function refreshedThreads(): Promise<DiffCommentThread[]> {
-    await refreshOrphanFlags(deps.db, deps.sessionId, deps.repoDbId, deps.currentContentAt);
-    return listThreads(deps.db, deps.sessionId, deps.repoDbId);
+    const sessionId = deps.getSessionId();
+    await refreshOrphanFlags(deps.db, sessionId, deps.repoDbId, deps.currentContentAt);
+    return listThreads(deps.db, sessionId, deps.repoDbId);
   }
 
   router.get("/api/comments-json", async (_req, res) => {
@@ -147,15 +149,16 @@ export function createCommentsRouter(deps: CommentsRouterDeps): Router {
 
   router.post("/api/comments", async (req, res) => {
     try {
+      const sessionId = deps.getSessionId();
       const nextThreads = parseThreadsPayload(req.body);
-      const existingIds = new Set(listThreads(deps.db, deps.sessionId, deps.repoDbId).map((t) => t.id));
+      const existingIds = new Set(listThreads(deps.db, sessionId, deps.repoDbId).map((t) => t.id));
       const nextIds = new Set(nextThreads.map((t) => t.id));
 
       for (const thread of nextThreads) {
-        upsertThread(deps.db, deps.sessionId, deps.repoDbId, thread);
+        upsertThread(deps.db, sessionId, deps.repoDbId, thread);
       }
       for (const id of existingIds) {
-        if (!nextIds.has(id)) deleteThread(deps.db, deps.sessionId, deps.repoDbId, id);
+        if (!nextIds.has(id)) deleteThread(deps.db, sessionId, deps.repoDbId, id);
       }
 
       version += 1;
@@ -174,7 +177,7 @@ export function createCommentsRouter(deps: CommentsRouterDeps): Router {
   });
 
   router.delete("/api/comments/:threadId", (req, res) => {
-    const deleted = deleteThread(deps.db, deps.sessionId, deps.repoDbId, req.params.threadId);
+    const deleted = deleteThread(deps.db, deps.getSessionId(), deps.repoDbId, req.params.threadId);
     if (!deleted) {
       res.status(404).json({ error: `Thread not found: ${req.params.threadId}` });
       return;
@@ -191,8 +194,9 @@ export function createCommentsRouter(deps: CommentsRouterDeps): Router {
           ? JSON.stringify({ threads: JSON.parse(req.body) })
           : { threads: req.body },
       );
+      const sessionId = deps.getSessionId();
       for (const thread of imported) {
-        upsertThread(deps.db, deps.sessionId, deps.repoDbId, thread);
+        upsertThread(deps.db, sessionId, deps.repoDbId, thread);
       }
       version += 1;
       deps.onChange?.();

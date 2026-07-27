@@ -13,15 +13,25 @@ export type WsMessage =
  * with an Express app; `ws` attaches via the standard Node `upgrade` event,
  * which Bun's `node:http` compatibility layer supports).
  */
+export interface WsHubOptions {
+  /** Fired whenever the last connected client disconnects (client count 1 -> 0). */
+  onLastClientDisconnected?: () => void;
+}
+
 export class WsHub {
   private wss: WebSocketServer;
   private clients = new Set<WebSocket>();
+  private onLastClientDisconnected?: () => void;
 
-  constructor(httpServer: HttpServer, path = "/ws") {
+  constructor(httpServer: HttpServer, path = "/ws", options: WsHubOptions = {}) {
     this.wss = new WebSocketServer({ server: httpServer, path });
+    this.onLastClientDisconnected = options.onLastClientDisconnected;
     this.wss.on("connection", (ws) => {
       this.clients.add(ws);
-      ws.on("close", () => this.clients.delete(ws));
+      ws.on("close", () => {
+        this.clients.delete(ws);
+        if (this.clients.size === 0) this.onLastClientDisconnected?.();
+      });
     });
   }
 

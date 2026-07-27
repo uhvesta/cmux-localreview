@@ -9,6 +9,9 @@ import {
   listThreads,
   deleteThread,
   refreshOrphanFlags,
+  startNewSession,
+  freezeActiveSession,
+  listSessions,
   type DiffCommentThread,
 } from "./commentsStore.ts";
 
@@ -178,5 +181,55 @@ describe("refreshOrphanFlags", () => {
 
     const threads = listThreads(db, sessionId, repoId);
     expect(threads[0]!.orphaned).toBe(true);
+  });
+});
+
+describe("sessions", () => {
+  test("startNewSession freezes the old one and becomes the new active session", () => {
+    const db = makeDb();
+    const first = getActiveSessionId(db);
+
+    const second = startNewSession(db, "second review");
+    expect(second).not.toBe(first);
+    expect(getActiveSessionId(db)).toBe(second);
+
+    const sessions = listSessions(db);
+    const frozenFirst = sessions.find((s) => s.id === first)!;
+    expect(frozenFirst.frozenAt).not.toBeNull();
+    const activeSecond = sessions.find((s) => s.id === second)!;
+    expect(activeSecond.frozenAt).toBeNull();
+    expect(activeSecond.label).toBe("second review");
+  });
+
+  test("comments/threads created before a New Review stay attached to the frozen session", () => {
+    const db = makeDb();
+    const repoId = upsertRepoRow(db, fakeRepo);
+    const first = getActiveSessionId(db);
+    upsertThread(db, first, repoId, makeThread());
+
+    const second = startNewSession(db);
+
+    expect(listThreads(db, first, repoId)).toHaveLength(1);
+    expect(listThreads(db, second, repoId)).toHaveLength(0);
+  });
+
+  test("freezeActiveSession is idempotent (no active session left to freeze twice)", () => {
+    const db = makeDb();
+    getActiveSessionId(db);
+    freezeActiveSession(db);
+    freezeActiveSession(db);
+    const sessions = listSessions(db);
+    expect(sessions.filter((s) => s.frozenAt === null)).toHaveLength(0);
+  });
+
+  test("listSessions reports comment and btw thread counts per session", () => {
+    const db = makeDb();
+    const repoId = upsertRepoRow(db, fakeRepo);
+    const sessionId = getActiveSessionId(db);
+    upsertThread(db, sessionId, repoId, makeThread());
+    upsertThread(db, sessionId, repoId, makeThread({ id: "thread-2" }));
+
+    const sessions = listSessions(db);
+    expect(sessions.find((s) => s.id === sessionId)!.commentCount).toBe(2);
   });
 });

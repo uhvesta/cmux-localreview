@@ -8,6 +8,7 @@ import open from "open";
 import { openDb } from "./server/db.ts";
 import { buildWorkspaceApp } from "./server/app.ts";
 import { WsHub } from "./server/wsHub.ts";
+import { startNewSession } from "./server/commentsStore.ts";
 
 interface CliOptions {
   port?: string;
@@ -83,6 +84,11 @@ async function main() {
         // eslint-disable-next-line no-console
         console.log("cmux-localreview: --dry-run (cmux/ACP sends will be logged, not sent)");
       }
+      if (options.clean) {
+        startNewSession(db);
+        // eslint-disable-next-line no-console
+        console.log("cmux-localreview: --clean — started a fresh review session");
+      }
 
       const { app, repos, startWatchers, startBtw } = await buildWorkspaceApp({
         workspaceRoot,
@@ -103,10 +109,6 @@ async function main() {
       // eslint-disable-next-line no-console
       console.log(`cmux-localreview: server listening at ${url}`);
 
-      const hub = new WsHub(server);
-      await startWatchers(hub);
-      const { btwManager, terminalBtw } = startBtw(hub, options.agent);
-
       let shuttingDown = false;
       const shutdown = async () => {
         if (shuttingDown) return;
@@ -122,6 +124,26 @@ async function main() {
       };
       process.on("SIGINT", () => void shutdown());
       process.on("SIGTERM", () => void shutdown());
+
+      // Auto-shutdown when the last browser tab disconnects (cmux-hub
+      // pattern), like difit's own heartbeat-based shutdown — but driven by
+      // the WS hub instead, since createDiffApp's routers don't carry
+      // difit's SSE heartbeat endpoint in our multi-repo setup. A short
+      // grace period tolerates brief reconnects (e.g. a page reload).
+      const AUTO_SHUTDOWN_GRACE_MS = 3000;
+      const hub = new WsHub(server, "/ws", {
+        onLastClientDisconnected: () => {
+          if (options.keepAlive) return;
+          setTimeout(() => {
+            if (hub.clientCount > 0) return; // a tab reconnected within the grace period
+            // eslint-disable-next-line no-console
+            console.log("cmux-localreview: last browser tab disconnected, shutting down");
+            void shutdown();
+          }, AUTO_SHUTDOWN_GRACE_MS);
+        },
+      });
+      await startWatchers(hub);
+      const { btwManager, terminalBtw } = startBtw(hub, options.agent);
 
       if (options.open) {
         try {

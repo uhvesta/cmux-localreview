@@ -38,11 +38,15 @@ export function createBtwRouter(
   const router = express.Router();
   router.use(express.json());
 
-  const sessionId = getActiveSessionId(options.db);
   const btwManager = new BtwManager();
   const terminalBtw = new TerminalBtw(options.db, options.hub, options.dryRun);
 
-  router.get("/api/btw/threads", (_req, res) => {
+  router.get("/api/btw/threads", (req, res) => {
+    const requestedSessionId = req.query.sessionId ? Number(req.query.sessionId) : undefined;
+    const sessionId =
+      requestedSessionId && Number.isInteger(requestedSessionId)
+        ? requestedSessionId
+        : getActiveSessionId(options.db);
     res.json({ threads: listThreads(options.db, sessionId) });
   });
 
@@ -60,6 +64,7 @@ export function createBtwRouter(
     }
 
     try {
+      const sessionId = getActiveSessionId(options.db);
       if (body.transport === "terminal") {
         const result = await terminalBtw.ask({
           sessionId,
