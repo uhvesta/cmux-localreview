@@ -70,6 +70,7 @@ export async function buildWorkspaceApp(options: WorkspaceServerOptions): Promis
         workspaceRelativePath: m.repo.workspaceRelativePath,
         remoteUrl: m.repo.remoteUrl,
         changeCount: m.diffApp.initialDiffData.files.length,
+        files: m.diffApp.initialDiffData.files.map((f) => f.path),
       })),
     });
   });

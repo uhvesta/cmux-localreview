@@ -8,6 +8,7 @@ interface RepoSummary {
   workspaceRelativePath: string;
   remoteUrl: string | null;
   changeCount: number;
+  files: string[];
 }
 
 async function fetchRepos(): Promise<RepoSummary[]> {
@@ -31,6 +32,7 @@ export function WorkspaceShell() {
   const [error, setError] = useState<string | null>(null);
   const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [flatMode, setFlatMode] = useState(false);
 
   useEffect(() => {
     fetchRepos()
@@ -99,55 +101,127 @@ export function WorkspaceShell() {
       >
         {!sidebarCollapsed && (
           <>
-            <div style={{ padding: '12px 14px', fontWeight: 600, fontSize: 13, opacity: 0.7 }}>
-              REPOSITORIES
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                padding: '12px 14px',
+              }}
+            >
+              <span style={{ fontWeight: 600, fontSize: 13, opacity: 0.7 }}>REPOSITORIES</span>
+              <button
+                onClick={() => setFlatMode((v) => !v)}
+                title="Toggle flat all-repos file list"
+                style={{
+                  fontSize: 11,
+                  padding: '2px 6px',
+                  cursor: 'pointer',
+                  background: flatMode ? 'rgba(127,127,127,0.25)' : 'transparent',
+                  border: '1px solid rgba(127,127,127,0.4)',
+                  borderRadius: 4,
+                  color: 'inherit',
+                }}
+              >
+                flat
+              </button>
             </div>
-            <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-              {repos.map((repo) => (
-                <li key={repo.id}>
-                  <button
-                    onClick={() => selectRepo(repo.id)}
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      width: '100%',
-                      textAlign: 'left',
-                      padding: '8px 14px',
-                      background: repo.id === selectedRepoId ? 'rgba(127,127,127,0.15)' : 'transparent',
-                      border: 'none',
-                      cursor: 'pointer',
-                      fontSize: 13,
-                      color: 'inherit',
-                    }}
-                    title={repo.remoteUrl ?? repo.workspaceRelativePath}
-                  >
-                    <span
+            {!flatMode ? (
+              <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+                {repos.map((repo) => (
+                  <li key={repo.id}>
+                    <button
+                      onClick={() => selectRepo(repo.id)}
                       style={{
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        width: '100%',
+                        textAlign: 'left',
+                        padding: '8px 14px',
+                        background:
+                          repo.id === selectedRepoId ? 'rgba(127,127,127,0.15)' : 'transparent',
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: 13,
+                        color: 'inherit',
+                      }}
+                      title={repo.remoteUrl ?? repo.workspaceRelativePath}
+                    >
+                      <span
+                        style={{
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {repo.workspaceRelativePath === '.'
+                          ? '(workspace root)'
+                          : repo.workspaceRelativePath}
+                      </span>
+                      {repo.changeCount > 0 && (
+                        <span
+                          style={{
+                            fontSize: 11,
+                            borderRadius: 8,
+                            padding: '1px 6px',
+                            background: 'rgba(46,160,67,0.25)',
+                            marginLeft: 6,
+                          }}
+                        >
+                          {repo.changeCount}
+                        </span>
+                      )}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <div style={{ overflowY: 'auto' }}>
+                {repos.map((repo) => (
+                  <div key={repo.id}>
+                    <div
+                      style={{
+                        padding: '6px 14px',
+                        fontSize: 11,
+                        fontWeight: 600,
+                        opacity: 0.6,
+                        position: 'sticky',
+                        top: 0,
                       }}
                     >
                       {repo.workspaceRelativePath === '.' ? '(workspace root)' : repo.workspaceRelativePath}
-                    </span>
-                    {repo.changeCount > 0 && (
-                      <span
-                        style={{
-                          fontSize: 11,
-                          borderRadius: 8,
-                          padding: '1px 6px',
-                          background: 'rgba(46,160,67,0.25)',
-                          marginLeft: 6,
-                        }}
-                      >
-                        {repo.changeCount}
-                      </span>
-                    )}
-                  </button>
-                </li>
-              ))}
-            </ul>
+                    </div>
+                    <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+                      {repo.files.map((file) => (
+                        <li key={file}>
+                          <button
+                            onClick={() => selectRepo(repo.id)}
+                            title={`${repo.workspaceRelativePath}/${file}`}
+                            style={{
+                              width: '100%',
+                              textAlign: 'left',
+                              padding: '4px 14px 4px 22px',
+                              background:
+                                repo.id === selectedRepoId ? 'rgba(127,127,127,0.15)' : 'transparent',
+                              border: 'none',
+                              cursor: 'pointer',
+                              fontSize: 12,
+                              color: 'inherit',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {file}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            )}
           </>
         )}
       </aside>
