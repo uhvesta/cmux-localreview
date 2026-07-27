@@ -121,9 +121,24 @@ function createCommentSessionKey(selection: DiffSelection): string {
   return getDiffSelectionKey(selection);
 }
 
-export async function startServer(
-  options: ServerOptions,
-): Promise<{ port: number; url: string; isEmpty?: boolean; server?: Server }> {
+export interface DiffApp {
+  app: Express;
+  fileWatcher: FileWatcherService;
+  invalidateCache: () => void;
+  outputFinalComments: () => void;
+  repositoryPath: string;
+  repositoryId: string;
+  initialDiffData: DiffResponse;
+}
+
+/**
+ * Builds the diff/comments Express app (routes, caches, file watcher) for a
+ * single repository, without binding a port, serving static client assets,
+ * or wiring the SSE watch/heartbeat endpoints. Callers that want a
+ * standalone server (see `startServer` below) or want to mount this app
+ * under a namespaced path in a multi-repo host can both build on this.
+ */
+export async function createDiffApp(options: ServerOptions): Promise<DiffApp> {
   const app = express();
   const repositoryPath = resolve(options.repoPath ?? process.cwd());
   const repositoryId = createHash('sha256').update(repositoryPath).digest('hex');
@@ -964,6 +979,23 @@ export async function startServer(
       console.log(formatCommentsOutput(session.threads.map(toCommentThread)));
     }
   }
+
+  return {
+    app,
+    fileWatcher,
+    invalidateCache,
+    outputFinalComments,
+    repositoryPath,
+    repositoryId,
+    initialDiffData,
+  };
+}
+
+export async function startServer(
+  options: ServerOptions,
+): Promise<{ port: number; url: string; isEmpty?: boolean; server?: Server }> {
+  const { app, fileWatcher, invalidateCache, outputFinalComments, repositoryPath, initialDiffData } =
+    await createDiffApp(options);
 
   // SSE endpoint for file watching
   app.get('/api/watch', (req, res) => {

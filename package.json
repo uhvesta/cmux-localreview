@@ -31,6 +31,7 @@
     "remark-breaks": "^4.0.0",
     "remark-gfm": "^4.0.1",
     "simple-git": "^3.28.0",
+    "ws": "^8.18.0",
     "@tanstack/react-virtual": "^3.14.8",
     "@zed-industries/agent-client-protocol": "^0.4.5",
     "@zed-industries/claude-code-acp": "^0.16.2"
@@ -45,6 +46,7 @@
     "@types/express": "^5.0.3",
     "@types/node": "^24.0.8",
     "@types/react": "^19.1.8",
+    "@types/ws": "^8.5.13",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^6.0.0",
     "autoprefixer": "^10.4.21",

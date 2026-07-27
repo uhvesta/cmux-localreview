@@ -20,11 +20,15 @@ accepted per SPEC.md. Modify in place; log every change below.
 | Date | File | Why |
 |------|------|-----|
 | 2026-07-27 | `package.json` (new) | difit's `src/cli/index.ts` imports `../../package.json` for the version string; added a minimal `{name, version, private, type: "module"}` file so that import resolves and so Vite doesn't warn about untyped ESM/CJS detection for `postcss.config.js`. |
+| 2026-07-27 | `src/server/server.ts` | Extracted the app-building logic (express app + all `/api/*` diff/comments/settings routes, caches, file watcher wiring) out of `startServer` into a new exported `createDiffApp(options): Promise<DiffApp>` that returns `{ app, fileWatcher, invalidateCache, outputFinalComments, repositoryPath, repositoryId, initialDiffData }` instead of binding a port. `startServer` now calls `createDiffApp` and layers on the SSE watch/heartbeat endpoints, static client serving, `listen`, and `open` — its external behavior and route surface are unchanged (verified: rebuilt + re-ran the M1 smoke test, `/api/diff` still serves correctly). `createDiffApp` is what M2's multi-repo host mounts once per discovered repo under `/api/repos/<repoId>`. |
 
-No changes to any file under `src/` yet — M1 gate was to get the vendored copy
-building and serving unmodified. Route namespacing, SQLite-backed comments,
-and the Full File view will be layered on top starting in M2+ and logged here
-as they land.
+| 2026-07-27 | `src/client/apiBase.ts` (new) | Module-level `resolveApiUrl(path)` / `setApiBase(base)` so the client can be namespaced per repo (`/api/repos/<id>` prefix) without threading a base path through every hook/service by hand. |
+| 2026-07-27 | `src/client/WorkspaceShell.tsx` (new) | New top-level component: fetches `/api/repos`, renders the repo sidebar with per-repo change counts, and mounts `<App key={repoId} />` for the selected repo after calling `setApiBase`. This is the M2 "repo tree sidebar" work item. |
+| 2026-07-27 | `src/client/main.tsx` | Renders `<WorkspaceShell />` instead of `<App />` directly. |
+| 2026-07-27 | `src/client/App.tsx`, `src/client/utils/eventSourceUrl.ts`, `src/client/hooks/{useExpandedLines,useLazyDiffRendering,useFileLevelTokens}.ts`, `src/client/viewers/{ImageDiffViewer,NotebookDiffViewer,MarkdownDiffViewer}.tsx`, `src/client/services/userSettings.ts` | All 16 hardcoded `/api/...` fetch/EventSource call sites now go through `resolveApiUrl`/`resolveEventSourceUrl` (which itself now calls `resolveApiUrl`) so every request is automatically namespaced to the selected repo. Behavior is unchanged when no base is set (`resolveApiUrl` is a no-op then), so `vendor-difit-server`'s single-repo smoke path (M1) still works untouched. |
+
+Full File view (M4) and comment persistence swapped to SQLite (M3) will touch
+this file further; logged here as they land.
 
 ## Root-level dependency additions
 

@@ -6,6 +6,10 @@
     "moduleResolution": "bundler",
     "types": ["bun"],
     "allowImportingTsExtensions": true,
+    "paths": {
+      "@/*": ["./vendor/difit/src/*"],
+      "@/types/*": ["./vendor/difit/src/types/*"]
+    },
     "noEmit": true,
     "strict": true,
     "esModuleInterop": true,

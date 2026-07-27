@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
 import type { DiffLine } from '../../types/diff';
+import { resolveApiUrl } from '../apiBase';
 import { MermaidDiagram } from '../components/MermaidDiagram';
 import { PrismSyntaxHighlighter } from '../components/PrismSyntaxHighlighter';
 import type { MergedChunk } from '../hooks/useExpandedLines';
@@ -508,7 +509,7 @@ export function MarkdownDiffViewer(props: DiffViewerBodyProps) {
       try {
         const encodedPath = encodeURIComponent(previewSource.path);
         const response = await fetch(
-          `/api/blob/${encodedPath}?ref=${encodeURIComponent(previewSource.ref)}`,
+          `${resolveApiUrl(`/api/blob/${encodedPath}`)}?ref=${encodeURIComponent(previewSource.ref)}`,
         );
         if (!response.ok) {
           throw new Error(`Failed to fetch preview: ${response.statusText}`);

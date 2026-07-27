@@ -34,6 +34,7 @@ import { RevisionDetailModal } from './components/RevisionDetailModal';
 import { SettingsModal } from './components/SettingsModal';
 import { SparkleAnimation } from './components/SparkleAnimation';
 import { WordHighlightProvider } from './contexts/WordHighlightContext';
+import { resolveApiUrl } from './apiBase';
 import { useAppearanceSettings } from './hooks/useAppearanceSettings';
 import { useDiffComments } from './hooks/useDiffComments';
 import { useExpandedLines, type MergedChunk } from './hooks/useExpandedLines';
@@ -230,9 +231,9 @@ function App() {
   const getCommentApiUrl = useCallback(
     (path: string) => {
       if (!commentSessionQueryString) {
-        return path;
+        return resolveApiUrl(path);
       }
-      return `${path}?${commentSessionQueryString}`;
+      return `${resolveApiUrl(path)}?${commentSessionQueryString}`;
     },
     [commentSessionQueryString],
   );
@@ -707,7 +708,7 @@ function App() {
         if (requestedSelection?.baseMode === 'merge-base')
           params.set('baseMode', requestedSelection.baseMode);
 
-        const response = await fetch(`/api/diff?${params}`, {
+        const response = await fetch(`${resolveApiUrl('/api/diff')}?${params}`, {
           signal: controller.signal,
         });
         if (!response.ok) throw new Error('Failed to fetch diff data');
@@ -854,7 +855,7 @@ function App() {
 
   // Fetch revision options on mount
   useEffect(() => {
-    fetch('/api/revisions')
+    fetch(resolveApiUrl('/api/revisions'))
       .then((res) => (res.ok ? res.json() : null))
       .then((data: RevisionsResponse | null) => {
         setRevisionOptions(data);
@@ -1102,7 +1103,7 @@ function App() {
   const handleOpenInEditor = useCallback(
     async (filePath: string, lineNumber: number) => {
       try {
-        const response = await fetch('/api/open-in-editor', {
+        const response = await fetch(resolveApiUrl('/api/open-in-editor'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

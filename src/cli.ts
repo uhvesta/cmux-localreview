@@ -3,8 +3,11 @@ import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { resolve, join } from "node:path";
 import { Command } from "commander";
+import open from "open";
 
 import { openDb } from "./server/db.ts";
+import { buildWorkspaceApp } from "./server/app.ts";
+import { WsHub } from "./server/wsHub.ts";
 
 interface CliOptions {
   port?: string;
@@ -16,6 +19,27 @@ interface CliOptions {
   dryRun: boolean;
   clean: boolean;
   keepAlive: boolean;
+}
+
+import type { Express } from "express";
+import type { Server } from "node:http";
+
+function listenWithFallback(app: Express, preferredPort: number, host: string): Promise<Server> {
+  return new Promise((resolvePromise, reject) => {
+    const server = app.listen(preferredPort, host, (err?: NodeJS.ErrnoException) => {
+      if (!err) {
+        resolvePromise(server);
+        return;
+      }
+      if (err.code === "EADDRINUSE") {
+        // eslint-disable-next-line no-console
+        console.log(`cmux-localreview: port ${preferredPort} is busy, trying ${preferredPort + 1}...`);
+        listenWithFallback(app, preferredPort + 1, host).then(resolvePromise, reject);
+        return;
+      }
+      reject(err);
+    });
+  });
 }
 
 function defaultDbPath(workspaceRoot: string): string {
@@ -60,8 +84,48 @@ async function main() {
         console.log("cmux-localreview: --dry-run (cmux/ACP sends will be logged, not sent)");
       }
 
-      // Workspace scanning, the HTTP/WebSocket server, and route wiring land
-      // in M2+; M1's scope is scaffolding + vendoring + the SQLite layer.
+      const { app, repos, startWatchers } = await buildWorkspaceApp({
+        workspaceRoot,
+        base: options.base,
+      });
+      // eslint-disable-next-line no-console
+      console.log(
+        `cmux-localreview: found ${repos.length} repo(s): ${repos.map((r) => r.repo.workspaceRelativePath).join(", ") || "(none)"}`,
+      );
+
+      const preferredPort = options.port ? Number.parseInt(options.port, 10) : 4977;
+      const server = await listenWithFallback(app, preferredPort, options.host);
+      const address = server.address();
+      const port = address && typeof address !== "string" ? address.port : preferredPort;
+      const url = `http://${options.host === "0.0.0.0" ? "localhost" : options.host}:${port}`;
+      // eslint-disable-next-line no-console
+      console.log(`cmux-localreview: server listening at ${url}`);
+
+      const hub = new WsHub(server);
+      await startWatchers(hub);
+
+      let shuttingDown = false;
+      const shutdown = async () => {
+        if (shuttingDown) return;
+        shuttingDown = true;
+        // eslint-disable-next-line no-console
+        console.log("cmux-localreview: shutting down");
+        hub.close();
+        server.close();
+        db.close();
+        process.exit(0);
+      };
+      process.on("SIGINT", () => void shutdown());
+      process.on("SIGTERM", () => void shutdown());
+
+      if (options.open) {
+        try {
+          await open(url);
+        } catch {
+          // eslint-disable-next-line no-console
+          console.warn("cmux-localreview: failed to open browser automatically");
+        }
+      }
     });
 
   await program.parseAsync(process.argv);

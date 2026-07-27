@@ -2,7 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { HotkeysProvider } from 'react-hotkeys-hook';
 
-import App from './App';
+import { WorkspaceShell } from './WorkspaceShell';
 import './styles/global.css';
 
 const rootElement = document.getElementById('root');
@@ -14,7 +14,7 @@ if (!rootElement) {
 ReactDOM.createRoot(rootElement).render(
   <React.StrictMode>
     <HotkeysProvider initiallyActiveScopes={['navigation']}>
-      <App />
+      <WorkspaceShell />
     </HotkeysProvider>
   </React.StrictMode>,
 );

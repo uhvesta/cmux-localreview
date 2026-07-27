@@ -1,12 +1,15 @@
+import { resolveApiUrl } from '../apiBase';
+
 export function resolveEventSourceUrl(path: string): string {
+  const basedPath = resolveApiUrl(path);
   const apiUrl = import.meta.env.VITE_DIFIT_API_URL?.trim();
   if (!apiUrl) {
-    return path;
+    return basedPath;
   }
 
   try {
-    return new URL(path, apiUrl).toString();
+    return new URL(basedPath, apiUrl).toString();
   } catch {
-    return path;
+    return basedPath;
   }
 }
