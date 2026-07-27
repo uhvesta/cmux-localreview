@@ -27,8 +27,9 @@ accepted per SPEC.md. Modify in place; log every change below.
 | 2026-07-27 | `src/client/main.tsx` | Renders `<WorkspaceShell />` instead of `<App />` directly. |
 | 2026-07-27 | `src/client/App.tsx`, `src/client/utils/eventSourceUrl.ts`, `src/client/hooks/{useExpandedLines,useLazyDiffRendering,useFileLevelTokens}.ts`, `src/client/viewers/{ImageDiffViewer,NotebookDiffViewer,MarkdownDiffViewer}.tsx`, `src/client/services/userSettings.ts` | All 16 hardcoded `/api/...` fetch/EventSource call sites now go through `resolveApiUrl`/`resolveEventSourceUrl` (which itself now calls `resolveApiUrl`) so every request is automatically namespaced to the selected repo. Behavior is unchanged when no base is set (`resolveApiUrl` is a no-op then), so `vendor-difit-server`'s single-repo smoke path (M1) still works untouched. |
 
-Full File view (M4) and comment persistence swapped to SQLite (M3) will touch
-this file further; logged here as they land.
+| 2026-07-27 | `src/server/server.ts` | `DiffApp` now also returns `parser` (the repo's `GitDiffParser`) so the workspace host can fetch blob content (`getBlobContent`) for comment re-anchoring/orphan detection without duplicating git plumbing. |
+
+Full File view (M4) will touch this file further; logged here as it lands.
 
 ## Root-level dependency additions
 

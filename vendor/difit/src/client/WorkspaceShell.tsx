@@ -54,6 +54,31 @@ export function WorkspaceShell() {
     setSelectedRepoId(id);
   }, []);
 
+  const [exportStatus, setExportStatus] = useState<'idle' | 'copied' | 'sent' | 'error'>('idle');
+
+  const exportReview = useCallback(async (destination: 'clipboard' | 'cmux') => {
+    try {
+      const response = await fetch('/api/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ destination }),
+      });
+      const data = (await response.json()) as { success?: boolean; content?: string; error?: string };
+      if (!response.ok || !data.success) {
+        throw new Error(data.error ?? `Export failed: ${response.status}`);
+      }
+      if (destination === 'clipboard' && data.content) {
+        await navigator.clipboard.writeText(data.content);
+      }
+      setExportStatus(destination === 'clipboard' ? 'copied' : 'sent');
+      setTimeout(() => setExportStatus('idle'), 2000);
+    } catch (err) {
+      console.error('Failed to export review:', err);
+      setExportStatus('error');
+      setTimeout(() => setExportStatus('idle'), 2000);
+    }
+  }, []);
+
   if (error) {
     return (
       <div style={{ padding: 24, fontFamily: 'sans-serif' }}>
@@ -222,6 +247,49 @@ export function WorkspaceShell() {
                 ))}
               </div>
             )}
+            <div
+              style={{
+                marginTop: 'auto',
+                borderTop: '1px solid rgba(127,127,127,0.3)',
+                padding: 10,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 6,
+              }}
+            >
+              <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.7 }}>EXPORT REVIEW</div>
+              <button
+                onClick={() => void exportReview('clipboard')}
+                style={{
+                  fontSize: 12,
+                  padding: '6px 8px',
+                  cursor: 'pointer',
+                  border: '1px solid rgba(127,127,127,0.4)',
+                  borderRadius: 4,
+                  background: 'transparent',
+                  color: 'inherit',
+                }}
+              >
+                Copy all comments to clipboard
+              </button>
+              <button
+                onClick={() => void exportReview('cmux')}
+                style={{
+                  fontSize: 12,
+                  padding: '6px 8px',
+                  cursor: 'pointer',
+                  border: '1px solid rgba(127,127,127,0.4)',
+                  borderRadius: 4,
+                  background: 'transparent',
+                  color: 'inherit',
+                }}
+              >
+                Send all comments to cmux
+              </button>
+              {exportStatus === 'copied' && <div style={{ fontSize: 11, color: '#2ea043' }}>Copied.</div>}
+              {exportStatus === 'sent' && <div style={{ fontSize: 11, color: '#2ea043' }}>Sent to cmux.</div>}
+              {exportStatus === 'error' && <div style={{ fontSize: 11, color: '#c0392b' }}>Export failed.</div>}
+            </div>
           </>
         )}
       </aside>

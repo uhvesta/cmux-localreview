@@ -46,7 +46,7 @@ const MIGRATIONS: Migration[] = [
           session_id INTEGER NOT NULL REFERENCES sessions(id),
           repo_id INTEGER NOT NULL REFERENCES repos(id),
           file_path TEXT NOT NULL,
-          side TEXT NOT NULL CHECK (side IN ('base', 'current')),
+          side TEXT NOT NULL CHECK (side IN ('old', 'new')),
           start_line INTEGER NOT NULL,
           end_line INTEGER NOT NULL,
           body TEXT NOT NULL,
@@ -104,6 +104,23 @@ const MIGRATIONS: Migration[] = [
           updated_at INTEGER NOT NULL
         )
       `);
+    },
+  },
+  {
+    version: 2,
+    up: (db) => {
+      // difit's client already speaks in "threads" (a position + an ordered
+      // list of messages, supporting replies/edits) via /api/comments*; we
+      // keep that shape server-side instead of collapsing to one message per
+      // row. `thread_id` is the client-generated id (createId()); `body` is
+      // kept as a denormalized copy of the first message's body so simple
+      // queries/exports don't need to parse messages_json.
+      db.run(`ALTER TABLE comments ADD COLUMN thread_id TEXT`);
+      db.run(`ALTER TABLE comments ADD COLUMN messages_json TEXT`);
+      db.run(`ALTER TABLE comments ADD COLUMN anchor_content TEXT`);
+      db.run(
+        `CREATE UNIQUE INDEX idx_comments_thread ON comments(session_id, repo_id, thread_id)`,
+      );
     },
   },
 ];

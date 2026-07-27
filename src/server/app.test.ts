@@ -1,4 +1,5 @@
 import { describe, expect, test, afterEach, afterAll } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +8,13 @@ import type { Server } from "node:http";
 
 import { buildWorkspaceApp, repoIdFor } from "./app.ts";
 import { discoverRepos } from "./workspace.ts";
+import { runMigrations } from "./db.ts";
+
+function makeDb(): Database {
+  const db = new Database(":memory:");
+  runMigrations(db);
+  return db;
+}
 
 const dirsToClean: string[] = [];
 const serversToClose: Server[] = [];
@@ -63,7 +71,7 @@ describe("buildWorkspaceApp", () => {
     appendFileSync(join(repoAPath, "a.txt"), "change in repo A\n");
     appendFileSync(join(repoBPath, "a.txt"), "change in repo B\n");
 
-    const { app, repos } = await buildWorkspaceApp({ workspaceRoot: workspace });
+    const { app, repos } = await buildWorkspaceApp({ workspaceRoot: workspace, db: makeDb() });
     expect(repos).toHaveLength(2);
 
     const { baseUrl } = await listen(app);
@@ -115,11 +123,95 @@ describe("buildWorkspaceApp", () => {
     const workspace = makeTmpDir();
     gitInit(join(workspace, "repo"));
 
-    const { app, repos } = await buildWorkspaceApp({ workspaceRoot: workspace });
+    const { app, repos } = await buildWorkspaceApp({ workspaceRoot: workspace, db: makeDb() });
     const { baseUrl } = await listen(app);
     const repoId = repos[0]!.repoId;
 
     const res = await fetch(`${baseUrl}/api/repos/${repoId}/api/blob/..%2F..%2Fetc%2Fpasswd`);
     expect(res.status).toBe(400);
+  });
+
+  test("export prompt aggregates comments across repos with repo-relative path prefixes", async () => {
+    const workspace = makeTmpDir();
+    gitInit(join(workspace, "repo-a"));
+    gitInit(join(workspace, "nested", "repo-b"));
+
+    const { app, repos } = await buildWorkspaceApp({ workspaceRoot: workspace, db: makeDb() });
+    const { baseUrl } = await listen(app);
+    const repoA = repos.find((r) => r.repo.workspaceRelativePath === "repo-a")!;
+    const repoB = repos.find((r) => r.repo.workspaceRelativePath === "nested/repo-b")!;
+
+    await fetch(`${baseUrl}/api/repos/${repoA.repoId}/api/comments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ comments: [{ file: "a.txt", line: 1, body: "fix this in A" }] }),
+    });
+    await fetch(`${baseUrl}/api/repos/${repoB.repoId}/api/comments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ comments: [{ file: "a.txt", line: 1, body: "fix this in B" }] }),
+    });
+
+    const promptRes = await fetch(`${baseUrl}/api/export/prompt`);
+    const prompt = await promptRes.text();
+
+    expect(prompt).toContain("repo-a/a.txt:L1");
+    expect(prompt).toContain("nested/repo-b/a.txt:L1");
+    expect(prompt).toContain("fix this in A");
+    expect(prompt).toContain("fix this in B");
+  });
+
+  test("POST /api/export with destination=cmux logs a dry-run send and records the export", async () => {
+    const workspace = makeTmpDir();
+    gitInit(join(workspace, "repo"));
+    const db = makeDb();
+
+    const { app, repos } = await buildWorkspaceApp({ workspaceRoot: workspace, db, dryRun: true });
+    const { baseUrl } = await listen(app);
+
+    await fetch(`${baseUrl}/api/repos/${repos[0]!.repoId}/api/comments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ comments: [{ file: "a.txt", line: 1, body: "hello" }] }),
+    });
+
+    const exportRes = await fetch(`${baseUrl}/api/export`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ destination: "cmux" }),
+    });
+    expect(exportRes.status).toBe(200);
+    const exportJson = (await exportRes.json()) as { success: boolean; content: string };
+    expect(exportJson.success).toBe(true);
+    expect(exportJson.content).toContain("hello");
+
+    const rows = db.query(`SELECT destination, content FROM exports`).all() as {
+      destination: string;
+      content: string;
+    }[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.destination).toBe("cmux");
+    expect(rows[0]!.content).toContain("hello");
+  });
+
+  test("comments persist across a fresh buildWorkspaceApp call against the same db (restart)", async () => {
+    const workspace = makeTmpDir();
+    gitInit(join(workspace, "repo"));
+    const db = makeDb();
+
+    const first = await buildWorkspaceApp({ workspaceRoot: workspace, db });
+    const { baseUrl: url1 } = await listen(first.app);
+    await fetch(`${url1}/api/repos/${first.repos[0]!.repoId}/api/comments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ comments: [{ file: "a.txt", line: 1, body: "survives restart" }] }),
+    });
+
+    const second = await buildWorkspaceApp({ workspaceRoot: workspace, db });
+    const { baseUrl: url2 } = await listen(second.app);
+    const res = await fetch(`${url2}/api/repos/${second.repos[0]!.repoId}/api/comments-json`);
+    const json = (await res.json()) as { threads: { messages: { body: string }[] }[] };
+    expect(json.threads).toHaveLength(1);
+    expect(json.threads[0]!.messages[0]!.body).toBe("survives restart");
   });
 });

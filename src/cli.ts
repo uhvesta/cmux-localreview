@@ -86,7 +86,9 @@ async function main() {
 
       const { app, repos, startWatchers } = await buildWorkspaceApp({
         workspaceRoot,
+        db,
         base: options.base,
+        dryRun: options.dryRun,
       });
       // eslint-disable-next-line no-console
       console.log(

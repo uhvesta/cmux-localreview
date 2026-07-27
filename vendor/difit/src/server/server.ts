@@ -129,6 +129,7 @@ export interface DiffApp {
   repositoryPath: string;
   repositoryId: string;
   initialDiffData: DiffResponse;
+  parser: GitDiffParser;
 }
 
 /**
@@ -988,6 +989,7 @@ export async function createDiffApp(options: ServerOptions): Promise<DiffApp> {
     repositoryPath,
     repositoryId,
     initialDiffData,
+    parser,
   };
 }
 

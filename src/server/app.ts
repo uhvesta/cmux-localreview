@@ -1,24 +1,38 @@
+import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type Express } from "express";
 
 import { createDiffApp, type DiffApp } from "../../vendor/difit/src/server/server.ts";
+import {
+  createCmuxService,
+  createSocketConnector,
+  createDryRunConnector,
+} from "../../vendor/cmux-hub/cmux.ts";
 
 import { discoverRepos, repoIdentityKey, type RepoInfo } from "./workspace.ts";
 import { resolveDiffBase } from "./diffBase.ts";
+import { upsertRepoRow, getActiveSessionId, listThreads } from "./commentsStore.ts";
+import { createCommentsRouter } from "./commentsRouter.ts";
+import { buildExportPrompt } from "./exportFormatting.ts";
 import type { WsHub } from "./wsHub.ts";
 
 export interface MountedRepo {
   repo: RepoInfo;
   repoId: string;
+  repoDbId: number;
   diffApp: DiffApp;
 }
 
 export interface WorkspaceServerOptions {
   workspaceRoot: string;
+  db: Database;
   /** Workspace-wide default diff base ('.', 'staged', 'working', or a ref). */
   base?: string;
+  /** Log cmux sends instead of connecting to the real socket. */
+  dryRun?: boolean;
 }
 
 /** Stable short id for a repo, derived from its durable identity (gitDir). */
@@ -46,9 +60,12 @@ export async function buildWorkspaceApp(options: WorkspaceServerOptions): Promis
   const repos = await discoverRepos(options.workspaceRoot);
   const app = express();
   const mounted: MountedRepo[] = [];
+  const { db } = options;
+  const sessionId = getActiveSessionId(db);
 
   for (const repo of repos) {
     const repoId = repoIdFor(repo);
+    const repoDbId = upsertRepoRow(db, repo);
     const { selection, diffMode } = resolveDiffBase(options.base ?? ".");
 
     const diffApp = await createDiffApp({
@@ -58,8 +75,30 @@ export async function buildWorkspaceApp(options: WorkspaceServerOptions): Promis
       openBrowser: false,
     });
 
+    const commentsRouter = createCommentsRouter({
+      db,
+      sessionId,
+      repoDbId,
+      currentContentAt: async (filePath, side, startLine, endLine) => {
+        try {
+          const text =
+            side === "old"
+              ? (await diffApp.parser.getBlobContent(filePath, "HEAD")).toString("utf-8")
+              : readFileSync(join(repo.absolutePath, filePath), "utf-8");
+          const lines = text.split("\n");
+          const slice = lines.slice(startLine - 1, endLine);
+          return slice.length > 0 ? slice.join("\n") : undefined;
+        } catch {
+          return undefined;
+        }
+      },
+    });
+
+    // Mounted before diffApp.app so these SQLite-backed routes shadow
+    // difit's own in-memory /api/comments* endpoints (SPEC.md §3).
+    app.use(`/api/repos/${repoId}`, commentsRouter);
     app.use(`/api/repos/${repoId}`, diffApp.app);
-    mounted.push({ repo, repoId, diffApp });
+    mounted.push({ repo, repoId, repoDbId, diffApp });
   }
 
   app.get("/api/repos", (_req, res) => {
@@ -73,6 +112,49 @@ export async function buildWorkspaceApp(options: WorkspaceServerOptions): Promis
         files: m.diffApp.initialDiffData.files.map((f) => f.path),
       })),
     });
+  });
+
+  app.get("/api/export/prompt", (_req, res) => {
+    const prompt = buildExportPrompt(
+      mounted.map((m) => ({
+        repoWorkspaceRelativePath: m.repo.workspaceRelativePath,
+        threads: listThreads(db, sessionId, m.repoDbId),
+      })),
+    );
+    res.type("text/plain").send(prompt);
+  });
+
+  app.post("/api/export", express.json(), async (req, res) => {
+    const destination = (req.body as { destination?: unknown })?.destination;
+    if (destination !== "clipboard" && destination !== "cmux") {
+      res.status(400).json({ error: "destination must be 'clipboard' or 'cmux'" });
+      return;
+    }
+
+    const content = buildExportPrompt(
+      mounted.map((m) => ({
+        repoWorkspaceRelativePath: m.repo.workspaceRelativePath,
+        threads: listThreads(db, sessionId, m.repoDbId),
+      })),
+    );
+
+    if (destination === "cmux") {
+      const cmux = createCmuxService(
+        options.dryRun ? createDryRunConnector() : createSocketConnector(),
+      );
+      try {
+        await cmux.sendText(content);
+      } catch (error) {
+        res.status(502).json({ error: `Failed to send to cmux: ${String(error)}` });
+        return;
+      }
+    }
+
+    db.query(
+      `INSERT INTO exports (session_id, content, destination, created_at) VALUES (?, ?, ?, ?)`,
+    ).run(sessionId, content, destination, Date.now());
+
+    res.json({ success: true, content });
   });
 
   const clientDist = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "vendor", "difit", "dist", "client");
