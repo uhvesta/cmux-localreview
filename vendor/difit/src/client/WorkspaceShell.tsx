@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { setApiBase } from './apiBase';
 import App from './App';
+import { BtwPanel } from './components/BtwPanel';
 
 interface RepoSummary {
   id: string;
@@ -53,6 +54,41 @@ export function WorkspaceShell() {
     setApiBase(`/api/repos/${id}`);
     setSelectedRepoId(id);
   }, []);
+
+  // Live updates (SPEC.md §1/§4): one WebSocket, fanned out to a per-repo
+  // "changes detected" reload banner and to the /btw panel's refetch.
+  const [reloadableRepoIds, setReloadableRepoIds] = useState<Set<string>>(new Set());
+  const [reloadNonce, setReloadNonce] = useState(0);
+  const [btwRefreshNonce, setBtwRefreshNonce] = useState(0);
+  const [btwPanelCollapsed, setBtwPanelCollapsed] = useState(true);
+
+  useEffect(() => {
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${proto}//${window.location.host}/ws`);
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data as string) as { type: string; repoId?: string };
+        if (msg.type === 'diff-updated' && msg.repoId) {
+          setReloadableRepoIds((prev) => new Set(prev).add(msg.repoId!));
+        } else if (msg.type === 'btw-update') {
+          setBtwRefreshNonce((n) => n + 1);
+        }
+      } catch {
+        // ignore malformed messages
+      }
+    };
+    return () => ws.close();
+  }, []);
+
+  const reloadSelectedRepo = useCallback(() => {
+    if (!selectedRepoId) return;
+    setReloadableRepoIds((prev) => {
+      const next = new Set(prev);
+      next.delete(selectedRepoId);
+      return next;
+    });
+    setReloadNonce((n) => n + 1);
+  }, [selectedRepoId]);
 
   const [exportStatus, setExportStatus] = useState<'idle' | 'copied' | 'sent' | 'error'>('idle');
 
@@ -309,8 +345,33 @@ export function WorkspaceShell() {
         >
           {sidebarCollapsed ? '»' : '«'}
         </button>
-        {selectedRepoId && <App key={selectedRepoId} />}
+        {selectedRepoId && reloadableRepoIds.has(selectedRepoId) && (
+          <div
+            style={{
+              position: 'absolute',
+              top: 8,
+              left: 40,
+              zIndex: 50,
+              fontSize: 12,
+              padding: '4px 10px',
+              borderRadius: 4,
+              background: '#9e6a03',
+              color: 'white',
+              cursor: 'pointer',
+            }}
+            onClick={reloadSelectedRepo}
+          >
+            Changes detected — click to reload
+          </div>
+        )}
+        {selectedRepoId && <App key={`${selectedRepoId}-${reloadNonce}`} />}
       </div>
+      <BtwPanel
+        selectedRepoId={selectedRepoId}
+        refreshNonce={btwRefreshNonce}
+        collapsed={btwPanelCollapsed}
+        onToggleCollapsed={() => setBtwPanelCollapsed((v) => !v)}
+      />
     </div>
   );
 }
