@@ -18,6 +18,9 @@ import { upsertRepoRow, getActiveSessionId, listThreads } from "./commentsStore.
 import { createCommentsRouter } from "./commentsRouter.ts";
 import { createFullFileRouter } from "./fullFileRouter.ts";
 import { buildExportPrompt } from "./exportFormatting.ts";
+import { createBtwRouter } from "./btwRouter.ts";
+import type { BtwManager } from "./btwManager.ts";
+import type { TerminalBtw } from "./terminalBtw.ts";
 import type { WsHub } from "./wsHub.ts";
 
 export interface MountedRepo {
@@ -47,6 +50,8 @@ export interface WorkspaceApp {
   /** Wires each repo's file watcher to invalidate its cache and broadcast over `hub`. Call once `hub` (needs the listening http.Server) exists. */
   startWatchers: (hub: WsHub) => Promise<void>;
   stopWatchers: () => Promise<void>;
+  /** Mounts /api/btw/* (needs `hub`, so called after listen(), like startWatchers). Safe to mount after the SPA fallback: its catch-all regex excludes /api/*. */
+  startBtw: (hub: WsHub, agent: string) => { btwManager: BtwManager; terminalBtw: TerminalBtw };
 }
 
 /**
@@ -185,5 +190,18 @@ export async function buildWorkspaceApp(options: WorkspaceServerOptions): Promis
     await Promise.all(mounted.map((m) => m.diffApp.fileWatcher.stop()));
   }
 
-  return { app, repos: mounted, startWatchers, stopWatchers };
+  function startBtw(hub: WsHub, agent: string) {
+    const { router, btwManager, terminalBtw } = createBtwRouter({
+      db,
+      hub,
+      agent,
+      workspaceRoot: options.workspaceRoot,
+      dryRun: options.dryRun ?? false,
+      repos: mounted,
+    });
+    app.use(router);
+    return { btwManager, terminalBtw };
+  }
+
+  return { app, repos: mounted, startWatchers, stopWatchers, startBtw };
 }

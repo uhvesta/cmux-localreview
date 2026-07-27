@@ -84,7 +84,7 @@ async function main() {
         console.log("cmux-localreview: --dry-run (cmux/ACP sends will be logged, not sent)");
       }
 
-      const { app, repos, startWatchers } = await buildWorkspaceApp({
+      const { app, repos, startWatchers, startBtw } = await buildWorkspaceApp({
         workspaceRoot,
         db,
         base: options.base,
@@ -105,6 +105,7 @@ async function main() {
 
       const hub = new WsHub(server);
       await startWatchers(hub);
+      const { btwManager, terminalBtw } = startBtw(hub, options.agent);
 
       let shuttingDown = false;
       const shutdown = async () => {
@@ -112,6 +113,8 @@ async function main() {
         shuttingDown = true;
         // eslint-disable-next-line no-console
         console.log("cmux-localreview: shutting down");
+        btwManager.disposeAll();
+        terminalBtw.stop();
         hub.close();
         server.close();
         db.close();
