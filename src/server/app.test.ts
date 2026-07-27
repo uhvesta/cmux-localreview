@@ -214,4 +214,98 @@ describe("buildWorkspaceApp", () => {
     expect(json.threads).toHaveLength(1);
     expect(json.threads[0]!.messages[0]!.body).toBe("survives restart");
   });
+
+  describe("Full File view (/api/fullfile)", () => {
+    test("side=current returns the full working-tree file with deletion gates", async () => {
+      const workspace = makeTmpDir();
+      const repoPath = join(workspace, "repo");
+      mkdirSync(repoPath, { recursive: true });
+      execFileSync("git", ["init", "-q"], { cwd: repoPath });
+      execFileSync("git", ["config", "user.email", "t@t.com"], { cwd: repoPath });
+      execFileSync("git", ["config", "user.name", "t"], { cwd: repoPath });
+      writeFileSync(join(repoPath, "f.txt"), "one\ntwo\nthree\nfour\nfive\n");
+      execFileSync("git", ["add", "."], { cwd: repoPath });
+      execFileSync("git", ["commit", "-q", "-m", "init"], { cwd: repoPath });
+      writeFileSync(join(repoPath, "f.txt"), "one\nthree\nfive\nsix\n");
+
+      const { app, repos } = await buildWorkspaceApp({ workspaceRoot: workspace, db: makeDb() });
+      const { baseUrl } = await listen(app);
+      const repoId = repos[0]!.repoId;
+
+      const res = await fetch(`${baseUrl}/api/repos/${repoId}/api/fullfile/f.txt?side=current`);
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as {
+        lines: string[];
+        gates: { afterLine: number; hiddenStart: number; hiddenEnd: number; lines: string[] }[];
+      };
+      expect(json.lines).toEqual(["one", "three", "five", "six"]);
+      // "two" (old line 2) was deleted, anchored after new-file line 1 ("one").
+      expect(json.gates).toContainEqual({ afterLine: 1, hiddenStart: 2, hiddenEnd: 2, lines: ["two"] });
+      // "four" (old line 4) was deleted, anchored after new-file line 2 ("three").
+      expect(json.gates).toContainEqual({ afterLine: 2, hiddenStart: 4, hiddenEnd: 4, lines: ["four"] });
+    });
+
+    test("side=base returns the full old file with addition gates", async () => {
+      const workspace = makeTmpDir();
+      const repoPath = join(workspace, "repo");
+      mkdirSync(repoPath, { recursive: true });
+      execFileSync("git", ["init", "-q"], { cwd: repoPath });
+      execFileSync("git", ["config", "user.email", "t@t.com"], { cwd: repoPath });
+      execFileSync("git", ["config", "user.name", "t"], { cwd: repoPath });
+      writeFileSync(join(repoPath, "f.txt"), "one\ntwo\nthree\n");
+      execFileSync("git", ["add", "."], { cwd: repoPath });
+      execFileSync("git", ["commit", "-q", "-m", "init"], { cwd: repoPath });
+      writeFileSync(join(repoPath, "f.txt"), "one\ntwo\nnew-line\nthree\n");
+
+      const { app, repos } = await buildWorkspaceApp({ workspaceRoot: workspace, db: makeDb() });
+      const { baseUrl } = await listen(app);
+      const repoId = repos[0]!.repoId;
+
+      const res = await fetch(`${baseUrl}/api/repos/${repoId}/api/fullfile/f.txt?side=base`);
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as {
+        lines: string[];
+        gates: { afterLine: number; hiddenStart: number; hiddenEnd: number; lines: string[] }[];
+      };
+      expect(json.lines).toEqual(["one", "two", "three"]);
+      expect(json.gates).toContainEqual({
+        afterLine: 2,
+        hiddenStart: 3,
+        hiddenEnd: 3,
+        lines: ["new-line"],
+      });
+    });
+
+    test("deleted file: side=current reports deleted:true instead of gates", async () => {
+      const workspace = makeTmpDir();
+      const repoPath = join(workspace, "repo");
+      mkdirSync(repoPath, { recursive: true });
+      execFileSync("git", ["init", "-q"], { cwd: repoPath });
+      execFileSync("git", ["config", "user.email", "t@t.com"], { cwd: repoPath });
+      execFileSync("git", ["config", "user.name", "t"], { cwd: repoPath });
+      writeFileSync(join(repoPath, "gone.txt"), "bye\n");
+      execFileSync("git", ["add", "."], { cwd: repoPath });
+      execFileSync("git", ["commit", "-q", "-m", "init"], { cwd: repoPath });
+      execFileSync("git", ["rm", "-q", "gone.txt"], { cwd: repoPath });
+
+      const { app, repos } = await buildWorkspaceApp({ workspaceRoot: workspace, db: makeDb() });
+      const { baseUrl } = await listen(app);
+      const repoId = repos[0]!.repoId;
+
+      const res = await fetch(`${baseUrl}/api/repos/${repoId}/api/fullfile/gone.txt?side=current`);
+      const json = (await res.json()) as { deleted?: boolean };
+      expect(json.deleted).toBe(true);
+    });
+
+    test("rejects path traversal", async () => {
+      const workspace = makeTmpDir();
+      gitInit(join(workspace, "repo"));
+      const { app, repos } = await buildWorkspaceApp({ workspaceRoot: workspace, db: makeDb() });
+      const { baseUrl } = await listen(app);
+      const res = await fetch(
+        `${baseUrl}/api/repos/${repos[0]!.repoId}/api/fullfile/..%2F..%2Fetc%2Fpasswd`,
+      );
+      expect(res.status).toBe(400);
+    });
+  });
 });

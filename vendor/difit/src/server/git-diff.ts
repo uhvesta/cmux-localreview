@@ -646,6 +646,7 @@ export class GitDiffParser {
         // For staged files, use git show :filepath
         // Using execFileSync to prevent command injection
         const buffer = execFileSync('git', ['show', `:${normalizedFilepath}`], {
+          cwd: this.repoPath,
           maxBuffer: 10 * 1024 * 1024, // 10MB limit
         });
         return buffer;
@@ -654,6 +655,7 @@ export class GitDiffParser {
       // First, get the blob hash for the file at the given ref
       // Using execFileSync to prevent command injection
       const blobHash = execFileSync('git', ['rev-parse', `${ref}:${normalizedFilepath}`], {
+        cwd: this.repoPath,
         encoding: 'utf8',
         maxBuffer: 10 * 1024 * 1024,
       }).trim();
@@ -661,6 +663,7 @@ export class GitDiffParser {
       // Then use git cat-file to get the raw binary content
       // Increase maxBuffer to handle large files (default is 1024*1024 = 1MB)
       const buffer = execFileSync('git', ['cat-file', 'blob', blobHash], {
+        cwd: this.repoPath,
         maxBuffer: 10 * 1024 * 1024, // 10MB limit
       });
 

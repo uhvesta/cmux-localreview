@@ -29,7 +29,12 @@ accepted per SPEC.md. Modify in place; log every change below.
 
 | 2026-07-27 | `src/server/server.ts` | `DiffApp` now also returns `parser` (the repo's `GitDiffParser`) so the workspace host can fetch blob content (`getBlobContent`) for comment re-anchoring/orphan detection without duplicating git plumbing. |
 
-Full File view (M4) will touch this file further; logged here as it lands.
+| 2026-07-27 | `src/server/git-diff.ts` | `getBlobContent`'s three `execFileSync('git', ...)` calls (for `staged`/ref blob lookups) didn't pass `cwd: this.repoPath` — harmless for difit's normal single-repo CLI use (process cwd == the repo), but under our multi-repo server `process.cwd()` is the cmux-localreview install dir, so any non-`.`/`working` ref lookup (e.g. `HEAD`, used by Full File view's Base side and by context expansion's base-side blob fetches) failed with `invalid object name`. Added `cwd: this.repoPath` to all three. Caught by an M4 integration test (`side=base` full-file fetch), but it also silently affected M2/M3's `HEAD`-ref paths before this — worth knowing if something upstream of M4 seemed to work with `.`/`working` refs but not named refs. |
+| 2026-07-27 | `src/client/components/FullFileView.tsx` (new), `src/client/App.tsx` | Full File view (SPEC.md §2): a per-file "View Full File" toggle (next to each file, independent of the page-wide Split/Unified mode) swaps that file's `<DiffViewer/>` for `<FullFileView/>` — virtualized (`@tanstack/react-virtual`) full file content with deletion gates (Current side) / addition gates (Base side), global expand/collapse, deleted/added-file banners, and inline click-to-comment that calls the same `onAddComment` prop `DiffViewer` uses, so a comment placed there round-trips through the same `/api/comments` endpoint and shows up in Unified/Split (verified in a real browser: commented on an unchanged line in Full File, switched back to diff view, comment thread appeared anchored to that line). |
+
+## Full File view server support
+
+`src/server/fullFileProjection.ts` (in `cmux-localreview/src/`, not vendored) derives gates purely from a file's existing `DiffChunk[]` — no extra git plumbing needed, since gate content is already present in the diff lines. `src/server/fullFileRouter.ts` exposes it as `GET /api/fullfile/<path>?side=current|base`, mounted per-repo before `diffApp.app`.
 
 ## Root-level dependency additions
 

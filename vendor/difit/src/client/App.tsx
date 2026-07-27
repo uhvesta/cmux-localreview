@@ -25,6 +25,7 @@ import { CommentsDropdown } from './components/CommentsDropdown';
 import { CommentsListModal } from './components/CommentsListModal';
 import { DiffQuickMenu } from './components/DiffQuickMenu';
 import { DiffViewer } from './components/DiffViewer';
+import { FullFileView } from './components/FullFileView';
 import { FileList } from './components/FileList';
 import { GitHubIcon } from './components/GitHubIcon';
 import { HelpModal } from './components/HelpModal';
@@ -440,6 +441,19 @@ function App() {
 
   const handleMobileFileSelected = useCallback(() => {
     setIsFileTreeOpen(false);
+  }, []);
+
+  // Per-file "Full File" mode (SPEC.md §2): an independent toggle from
+  // split/unified, layered on top of the same stacked file list rather than
+  // replacing it — a file shows either its normal DiffViewer or FullFileView.
+  const [fullFileOpenFor, setFullFileOpenFor] = useState<Set<string>>(new Set());
+  const toggleFullFile = useCallback((path: string) => {
+    setFullFileOpenFor((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
   }, []);
 
   const handleDiffModeChange = useCallback((mode: DiffViewMode) => {
@@ -1493,7 +1507,18 @@ function App() {
                     }
                   }}
                 >
-                  {isRendered ? (
+                  <div className="flex justify-end mb-1">
+                    <button
+                      type="button"
+                      onClick={() => toggleFullFile(file.path)}
+                      className="text-xs px-2 py-1 rounded border border-github-border text-github-text-secondary hover:text-github-text-primary hover:bg-github-bg-tertiary"
+                    >
+                      {fullFileOpenFor.has(file.path) ? 'Back to diff' : 'View Full File'}
+                    </button>
+                  </div>
+                  {fullFileOpenFor.has(file.path) ? (
+                    <FullFileView file={file} threads={fileThreads} onAddComment={handleAddComment} />
+                  ) : isRendered ? (
                     <DiffViewer
                       file={file}
                       threads={fileThreads}

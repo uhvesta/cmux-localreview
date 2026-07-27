@@ -16,6 +16,7 @@ import { discoverRepos, repoIdentityKey, type RepoInfo } from "./workspace.ts";
 import { resolveDiffBase } from "./diffBase.ts";
 import { upsertRepoRow, getActiveSessionId, listThreads } from "./commentsStore.ts";
 import { createCommentsRouter } from "./commentsRouter.ts";
+import { createFullFileRouter } from "./fullFileRouter.ts";
 import { buildExportPrompt } from "./exportFormatting.ts";
 import type { WsHub } from "./wsHub.ts";
 
@@ -96,7 +97,10 @@ export async function buildWorkspaceApp(options: WorkspaceServerOptions): Promis
 
     // Mounted before diffApp.app so these SQLite-backed routes shadow
     // difit's own in-memory /api/comments* endpoints (SPEC.md §3).
+    const fullFileRouter = createFullFileRouter(diffApp, selection);
+
     app.use(`/api/repos/${repoId}`, commentsRouter);
+    app.use(`/api/repos/${repoId}`, fullFileRouter);
     app.use(`/api/repos/${repoId}`, diffApp.app);
     mounted.push({ repo, repoId, repoDbId, diffApp });
   }
