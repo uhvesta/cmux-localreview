@@ -43,7 +43,7 @@ func (d *Daemon) handleAsk(w http.ResponseWriter, r *http.Request, path string) 
 		if err != nil {
 			// Keep the model picker usable while clearly identifying this as an
 			// offline choice—not an SDK-provided model list.
-			writeJSON(w, http.StatusOK, map[string]any{"models": []map[string]any{{"id": "auto", "name": "Copilot default (connect to load models)", "capabilities": map[string]any{"supports": map[string]bool{"reasoningEffort": true, "contextTier": true}}}}, "state": "unavailable", "source": "fallback", "warning": err.Error(), "workspaceDefaults": defaults})
+			writeJSON(w, http.StatusOK, map[string]any{"models": []map[string]any{{"id": "auto", "name": "Copilot default (connect to load models)", "capabilities": map[string]any{"supports": map[string]bool{"reasoningEffort": true, "contextTier": true}}}}, "state": "unavailable", "source": "fallback", "warning": askModelRecoveryMessage(err), "workspaceDefaults": defaults})
 			return true
 		}
 		models := make([]map[string]any, 0, len(result.Models))
@@ -419,4 +419,20 @@ func (d *Daemon) handleAsk(w http.ResponseWriter, r *http.Request, path string) 
 		return true
 	}
 	return false
+}
+
+// askModelRecoveryMessage is deliberately a fixed, token-free operator hint.
+// SDK/CLI transport errors can include child-process details, so never return
+// their raw text to the browser. A model refresh is read-only and must not
+// silently switch authentication sources or retry an explicit question.
+func askModelRecoveryMessage(err error) string {
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "connection reset"), strings.Contains(message, "broken pipe"), strings.Contains(message, "client not connected"):
+		return "Copilot CLI runtime disconnected while loading models. Restart the localreview daemon, confirm `copilot --version`, update with `copilot update` if needed, then refresh /ask. This does not use a Copilot CLI login; reconnect the dedicated Copilot OAuth capability only if it is unauthenticated."
+	case strings.Contains(message, "executable file not found"), strings.Contains(message, "no such file or directory"), strings.Contains(message, "failed to start cli server"):
+		return "Copilot CLI could not be started. Install a current Copilot CLI on PATH, confirm `copilot --version`, restart the localreview daemon, then refresh /ask."
+	default:
+		return "Copilot model discovery is unavailable. Confirm the dedicated Copilot OAuth capability is connected, then restart the localreview daemon and refresh /ask. Saved transcripts and failed questions are not resent."
+	}
 }

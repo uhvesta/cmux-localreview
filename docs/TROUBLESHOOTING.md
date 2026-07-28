@@ -86,6 +86,25 @@ login. An explicit `copilot GitHub App is not connected` error therefore means
 the dedicated capability still needs to be authorized, not that the prompt was
 silently sent.
 
+The official Go SDK still launches the **Copilot CLI binary** as its isolated
+runtime. The binary is required, but its local login is not used: the daemon
+passes only the dedicated `copilot` OAuth capability to that child process. If
+the model picker says that the CLI runtime disconnected or reset its
+connection, run the following locally, then reopen `/ask` and press **Refresh
+chat**:
+
+```sh
+copilot --version
+copilot update
+localreview daemon stop
+localreview open
+```
+
+Restarting creates a fresh SDK runtime; it never replays saved `/ask` turns.
+If the error persists after the CLI is current, reconnect only the dedicated
+capability (`localreview github-app connect --capability copilot`) rather than
+sharing a `gh` token or a Copilot CLI session.
+
 ## GitHub PR cannot be added or appears stale
 
 Connect the least-privileged `read` capability and check its state:

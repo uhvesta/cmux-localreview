@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -20,12 +21,30 @@ import (
 )
 
 type askRouteBackend struct {
-	session *askRouteSession
-	models  []copilotsdk.ModelInfo
+	session  *askRouteSession
+	models   []copilotsdk.ModelInfo
+	modelErr error
 }
 
 func (b askRouteBackend) ListModels(context.Context) ([]copilotsdk.ModelInfo, error) {
-	return b.models, nil
+	return b.models, b.modelErr
+}
+
+func TestAskModelsConnectionResetReturnsSafeRecoveryGuidance(t *testing.T) {
+	d := askRouteDaemon(t)
+	d.askRuntime = askruntime.New(askRouteBackend{session: &askRouteSession{}, modelErr: errors.New("read models: connection reset by peer; token=must-not-leak")})
+	d.askFactory = &AskRuntimeFactory{}
+	response := askRequest(t, d, http.MethodGet, "/ask/models", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("models=%d %s", response.Code, response.Body.String())
+	}
+	body := response.Body.String()
+	if !strings.Contains(body, `"state":"unavailable"`) || !strings.Contains(body, "Copilot CLI runtime disconnected") || !strings.Contains(body, "copilot update") {
+		t.Fatalf("models recovery=%s", body)
+	}
+	if strings.Contains(body, "must-not-leak") || strings.Contains(body, "token=") {
+		t.Fatalf("models recovery leaked raw SDK error: %s", body)
+	}
 }
 func (b askRouteBackend) OpenSession(_ context.Context, config copilot.SessionConfig) (askruntime.Session, error) {
 	b.session.mu.Lock()

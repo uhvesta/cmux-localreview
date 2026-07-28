@@ -14,6 +14,7 @@ interface AskModel {
   supportedReasoningEfforts?: ReasoningEffort[];
   defaultReasoningEffort?: ReasoningEffort;
 }
+interface AskModelsResponse { models?: AskModel[]; state?: 'ready' | 'unavailable'; warning?: string; }
 interface AskMessage { id: string | number; role: 'user' | 'assistant' | 'system'; body: string; pending: boolean; createdAt: number; location?: { filePath?: string; startLine?: number } | null; }
 interface AskConversation { id: string; model?: string | null; reasoningEffort?: ReasoningEffort | null; contextTier?: ContextTier | null; context?: { filePath?: string } | null; reviewSessionId?: number | null; archivedAt?: number | null; updatedAt?: number; }
 interface QuestionSet { id: string; name: string; questions: { body: string }[]; }
@@ -89,9 +90,18 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
       const modelsResponse = modelsResult.status === 'fulfilled' ? modelsResult.value : null;
       const conversationsResponse = conversationsResult.status === 'fulfilled' ? conversationsResult.value : null;
       if (modelsResponse?.ok) {
-        const modelData = (await modelsResponse.json()) as { models?: AskModel[] };
+        const modelData = (await modelsResponse.json()) as AskModelsResponse;
         const nextModels = Array.isArray(modelData.models) ? modelData.models : [];
-        setModels(nextModels); setModelStatus('available'); setModel((current) => current || nextModels[0]?.id || '');
+        if (modelData.state === 'unavailable') {
+          // A 200 fallback is intentionally not an authenticated model list.
+          // Do not let the reviewer unknowingly start a question with a fake
+          // picker choice; preserve the saved draft and show the daemon's
+          // token-free recovery guidance instead.
+          setModels([]); setModelStatus('unavailable');
+          setError(modelData.warning || 'Copilot SDK is unavailable. Restart the localreview daemon, then refresh /ask; saved transcripts remain available.');
+        } else {
+          setModels(nextModels); setModelStatus('available'); setModel((current) => current || nextModels[0]?.id || '');
+        }
       } else {
         setModels([]); setModelStatus('unavailable');
         if (modelsResponse?.status === 401 || modelsResponse?.status === 503) {
@@ -290,6 +300,10 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
     // State updates are asynchronous. The ref closes the double-click/keyboard
     // race before `sending` has rendered disabled controls.
     if (!text || sending || sendInFlightRef.current) return;
+	if (modelStatus === 'unavailable') {
+	  setError('Copilot is unavailable. Follow the recovery steps above, then refresh /ask; this draft has not been sent.');
+	  return;
+	}
     sendInFlightRef.current = true;
     setSending(true); setError(null); setPrompt('');
     try {
@@ -307,7 +321,7 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
       sendInFlightRef.current = false;
       setSending(false);
     }
-  }, [prompt, sendPrompt, sending]);
+  }, [modelStatus, prompt, sendPrompt, sending]);
 
   const cancel = useCallback(async () => {
     activeResponseRef.current?.abort();
@@ -417,6 +431,7 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
   const visibleConversations = showHistory ? conversations : activeConversations;
   const selectedConversation = conversations.find((item) => item.id === conversationId);
   const historicalConversation = Boolean(selectedConversation && (selectedConversation.archivedAt || selectedConversation.reviewSessionId !== activeReviewSessionId));
+	const copilotUnavailable = modelStatus === 'unavailable';
 
   if (collapsed) return <button onClick={onToggleCollapsed} title="Open /ask panel" style={{ ...panelButton, position: 'fixed', right: 86, bottom: 12, zIndex: 60, borderRadius: 20 }}>/ask</button>;
 
@@ -457,8 +472,8 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
         <button onClick={() => startNewQuestionSet(prompt)} disabled={!prompt.trim() || historicalConversation} style={panelButton}>Save as set</button>
         {questionSetId && <button onClick={() => setEditingQuestionSet((value) => !value)} style={panelButton}>{editingQuestionSet ? 'Hide set' : 'Edit set'}</button>}
-        {questionSetId && <><button onClick={() => void sendQuestionSet('combined')} disabled={sending || historicalConversation} style={panelButton}>Ask set</button><button onClick={() => void sendQuestionSet('sequential')} disabled={sending || historicalConversation} style={panelButton}>Ask one-by-one</button></>}
-        {sending && <button onClick={() => void cancel()} style={panelButton}>Cancel</button>}<button onClick={() => void send()} disabled={sending || historicalConversation || !prompt.trim()} style={panelButton}>{sending ? 'Asking…' : 'Ask'}</button></div>
+        {questionSetId && <><button onClick={() => void sendQuestionSet('combined')} disabled={sending || historicalConversation || copilotUnavailable} style={panelButton}>Ask set</button><button onClick={() => void sendQuestionSet('sequential')} disabled={sending || historicalConversation || copilotUnavailable} style={panelButton}>Ask one-by-one</button></>}
+        {sending && <button onClick={() => void cancel()} style={panelButton}>Cancel</button>}<button onClick={() => void send()} disabled={sending || historicalConversation || copilotUnavailable || !prompt.trim()} style={panelButton}>{sending ? 'Asking…' : 'Ask'}</button></div>
     </div>
   </section>;
 }
