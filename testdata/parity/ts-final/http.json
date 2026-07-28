@@ -36,6 +36,20 @@
       }
     },
     {
+      "name": "browser_session_exchange",
+      "request": {
+        "method": "POST",
+        "path": "/api/browser/session",
+        "body": {},
+        "authenticated": true
+      },
+      "response": {
+        "status": 204,
+        "contentType": null,
+        "body": ""
+      }
+    },
+    {
       "name": "github_auth_status",
       "request": {
         "method": "GET",
@@ -67,6 +81,128 @@
               "error": "Configure a dedicated GitHub App for copilot."
             }
           }
+        }
+      }
+    },
+    {
+      "name": "github_auth_configure",
+      "request": {
+        "method": "POST",
+        "path": "/api/github/auth/configure",
+        "body": {
+          "capability": "read",
+          "clientId": "Iv1.fixtureRead"
+        },
+        "authenticated": true
+      },
+      "response": {
+        "status": 204,
+        "contentType": null,
+        "body": ""
+      }
+    },
+    {
+      "name": "github_auth_device_start",
+      "request": {
+        "method": "POST",
+        "path": "/api/github/auth/read/start",
+        "body": {},
+        "authenticated": true
+      },
+      "response": {
+        "status": 202,
+        "contentType": "application/json; charset=utf-8",
+        "body": {
+          "userCode": "ABCD-1234",
+          "verificationUri": "https://github.com/login/device",
+          "expiresAt": 1785254919836
+        }
+      }
+    },
+    {
+      "name": "github_auth_device_poll",
+      "request": {
+        "method": "POST",
+        "path": "/api/github/auth/read/poll",
+        "body": {},
+        "authenticated": true
+      },
+      "response": {
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "body": {
+          "configured": true,
+          "authenticated": true,
+          "loginState": "succeeded",
+          "message": "Connected as @fixture-reviewer.",
+          "login": "fixture-reviewer"
+        }
+      }
+    },
+    {
+      "name": "github_auth_authenticated_status",
+      "request": {
+        "method": "GET",
+        "path": "/api/github/auth/status",
+        "authenticated": true
+      },
+      "response": {
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "body": {
+          "provider": "github-app-device-flow",
+          "capabilities": {
+            "read": {
+              "configured": true,
+              "authenticated": true,
+              "loginState": "succeeded",
+              "message": "Connected as @fixture-reviewer.",
+              "login": "fixture-reviewer"
+            },
+            "write": {
+              "configured": false,
+              "authenticated": false,
+              "loginState": "idle",
+              "error": "Configure a dedicated GitHub App for write."
+            },
+            "copilot": {
+              "configured": false,
+              "authenticated": false,
+              "loginState": "idle",
+              "error": "Configure a dedicated GitHub App for copilot."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "github_auth_disconnect",
+      "request": {
+        "method": "DELETE",
+        "path": "/api/github/auth/read",
+        "authenticated": true
+      },
+      "response": {
+        "status": 204,
+        "contentType": null,
+        "body": ""
+      }
+    },
+    {
+      "name": "local_pr_requires_read_auth",
+      "request": {
+        "method": "POST",
+        "path": "/api/local-review/pr",
+        "body": {
+          "remoteUrl": "https://github.com/fixture/repository/pull/1"
+        },
+        "authenticated": true
+      },
+      "response": {
+        "status": 400,
+        "contentType": "application/json; charset=utf-8",
+        "body": {
+          "error": "Error: The read GitHub App is not connected."
         }
       }
     },
@@ -122,7 +258,7 @@
         "method": "POST",
         "path": "/api/workspaces/open",
         "body": {
-          "workspacePath": "/var/folders/hf/t1wlqzj97dj71scmsxlb9w7c0000gn/T/cmux-localreview-parity-JGrDC3/workspace"
+          "workspacePath": "/var/folders/hf/t1wlqzj97dj71scmsxlb9w7c0000gn/T/cmux-localreview-parity-qaVlDm/workspace"
         },
         "authenticated": true
       },
@@ -133,7 +269,7 @@
           "workspacePath": "<fixture-root>/workspace",
           "repos": [
             {
-              "id": "3a5870957cff",
+              "id": "bc8b8d82b0ab",
               "path": "."
             }
           ],
@@ -155,7 +291,7 @@
           "workspaceRoot": "<fixture-root>/workspace",
           "repos": [
             {
-              "id": "3a5870957cff",
+              "id": "bc8b8d82b0ab",
               "workspaceRelativePath": ".",
               "remoteUrl": null,
               "changeCount": 1,
@@ -171,14 +307,14 @@
       "name": "repo_diff",
       "request": {
         "method": "GET",
-        "path": "/api/repos/3a5870957cff/api/diff",
+        "path": "/api/repos/bc8b8d82b0ab/api/diff",
         "authenticated": false
       },
       "response": {
         "status": 200,
         "contentType": "application/json; charset=utf-8",
         "body": {
-          "commit": "8083f8d vs Working Directory (all uncommitted changes)",
+          "commit": "979d6c2 vs Working Directory (all uncommitted changes)",
           "files": [
             {
               "path": "root.ts",
@@ -210,13 +346,13 @@
             }
           ],
           "isEmpty": false,
-          "baseCommitish": "8083f8d",
+          "baseCommitish": "979d6c2",
           "targetCommitish": ".",
           "requestedBaseCommitish": "HEAD",
           "requestedTargetCommitish": ".",
           "ignoreWhitespace": false,
           "openInEditorAvailable": true,
-          "repositoryId": "521bdd53ae904902de9c20ee3b4f2233eecbd3421a3f5e368324627b458ea4d1"
+          "repositoryId": "d2428e8f519141b5f7f165ed90595e2a097c5c6308b903635db29b4ac8e92686"
         }
       }
     },
@@ -224,14 +360,14 @@
       "name": "repo_diff_ignore_whitespace",
       "request": {
         "method": "GET",
-        "path": "/api/repos/3a5870957cff/api/diff?ignoreWhitespace=true",
+        "path": "/api/repos/bc8b8d82b0ab/api/diff?ignoreWhitespace=true",
         "authenticated": false
       },
       "response": {
         "status": 200,
         "contentType": "application/json; charset=utf-8",
         "body": {
-          "commit": "8083f8d vs Working Directory (all uncommitted changes)",
+          "commit": "979d6c2 vs Working Directory (all uncommitted changes)",
           "files": [
             {
               "path": "root.ts",
@@ -263,13 +399,13 @@
             }
           ],
           "isEmpty": false,
-          "baseCommitish": "8083f8d",
+          "baseCommitish": "979d6c2",
           "targetCommitish": ".",
           "requestedBaseCommitish": "HEAD",
           "requestedTargetCommitish": ".",
           "ignoreWhitespace": true,
           "openInEditorAvailable": true,
-          "repositoryId": "521bdd53ae904902de9c20ee3b4f2233eecbd3421a3f5e368324627b458ea4d1"
+          "repositoryId": "d2428e8f519141b5f7f165ed90595e2a097c5c6308b903635db29b4ac8e92686"
         }
       }
     },
@@ -277,7 +413,7 @@
       "name": "repo_revisions",
       "request": {
         "method": "GET",
-        "path": "/api/repos/3a5870957cff/api/revisions",
+        "path": "/api/repos/bc8b8d82b0ab/api/revisions",
         "authenticated": false
       },
       "response": {
@@ -306,13 +442,13 @@
           ],
           "commits": [
             {
-              "hash": "8083f8d3697d967a6a4b336b9c1ff7bab48c590c",
-              "shortHash": "8083f8d",
+              "hash": "979d6c2f206bdef9d0cee1faaae40c3a931f71b8",
+              "shortHash": "979d6c2",
               "message": "fixture"
             }
           ],
           "originDefaultBranch": "origin/main",
-          "resolvedBase": "8083f8d"
+          "resolvedBase": "979d6c2"
         }
       }
     },
@@ -320,7 +456,7 @@
       "name": "repo_line_count",
       "request": {
         "method": "GET",
-        "path": "/api/repos/3a5870957cff/api/line-count/root.ts?oldRef=HEAD&newRef=HEAD",
+        "path": "/api/repos/bc8b8d82b0ab/api/line-count/root.ts?oldRef=HEAD&newRef=HEAD",
         "authenticated": false
       },
       "response": {
@@ -336,7 +472,7 @@
       "name": "repo_blob",
       "request": {
         "method": "GET",
-        "path": "/api/repos/3a5870957cff/api/blob/root.ts?ref=HEAD",
+        "path": "/api/repos/bc8b8d82b0ab/api/blob/root.ts?ref=HEAD",
         "authenticated": false
       },
       "response": {
@@ -349,7 +485,7 @@
       "name": "repo_generated_status",
       "request": {
         "method": "GET",
-        "path": "/api/repos/3a5870957cff/api/generated-status/root.ts",
+        "path": "/api/repos/bc8b8d82b0ab/api/generated-status/root.ts",
         "authenticated": false
       },
       "response": {
@@ -367,7 +503,7 @@
       "name": "repo_fullfile",
       "request": {
         "method": "GET",
-        "path": "/api/repos/3a5870957cff/api/fullfile/root.ts?side=current",
+        "path": "/api/repos/bc8b8d82b0ab/api/fullfile/root.ts?side=current",
         "authenticated": false
       },
       "response": {
@@ -397,20 +533,20 @@
       "name": "repo_comments_empty",
       "request": {
         "method": "GET",
-        "path": "/api/repos/3a5870957cff/api/comments",
+        "path": "/api/repos/bc8b8d82b0ab/api/comments",
         "authenticated": false
       },
       "response": {
         "status": 404,
         "contentType": "text/html; charset=utf-8",
-        "body": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot GET /api/repos/3a5870957cff/api/comments</pre>\n</body>\n</html>\n"
+        "body": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot GET /api/repos/bc8b8d82b0ab/api/comments</pre>\n</body>\n</html>\n"
       }
     },
     {
       "name": "create_comment",
       "request": {
         "method": "POST",
-        "path": "/api/repos/3a5870957cff/api/comments",
+        "path": "/api/repos/bc8b8d82b0ab/api/comments",
         "body": {
           "comments": [
             {
@@ -455,20 +591,20 @@
       "name": "repo_comments_saved",
       "request": {
         "method": "GET",
-        "path": "/api/repos/3a5870957cff/api/comments",
+        "path": "/api/repos/bc8b8d82b0ab/api/comments",
         "authenticated": false
       },
       "response": {
         "status": 404,
         "contentType": "text/html; charset=utf-8",
-        "body": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot GET /api/repos/3a5870957cff/api/comments</pre>\n</body>\n</html>\n"
+        "body": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot GET /api/repos/bc8b8d82b0ab/api/comments</pre>\n</body>\n</html>\n"
       }
     },
     {
       "name": "comment_import",
       "request": {
         "method": "POST",
-        "path": "/api/repos/3a5870957cff/api/comment-imports",
+        "path": "/api/repos/bc8b8d82b0ab/api/comment-imports",
         "body": [
           {
             "id": "fixture-import",
@@ -530,6 +666,37 @@
       }
     },
     {
+      "name": "btw_threads_empty",
+      "request": {
+        "method": "GET",
+        "path": "/api/btw/threads",
+        "authenticated": false
+      },
+      "response": {
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "body": {
+          "threads": []
+        }
+      }
+    },
+    {
+      "name": "btw_ask_validation",
+      "request": {
+        "method": "POST",
+        "path": "/api/btw/ask",
+        "body": {},
+        "authenticated": false
+      },
+      "response": {
+        "status": 400,
+        "contentType": "application/json; charset=utf-8",
+        "body": {
+          "error": "question is required"
+        }
+      }
+    },
+    {
       "name": "ui_state_empty",
       "request": {
         "method": "GET",
@@ -555,7 +722,7 @@
           "key": "fixture",
           "revision": 0,
           "value": {
-            "selectedRepo": "3a5870957cff"
+            "selectedRepo": "bc8b8d82b0ab"
           }
         },
         "authenticated": false
@@ -604,7 +771,7 @@
       "name": "comments_json",
       "request": {
         "method": "GET",
-        "path": "/api/repos/3a5870957cff/api/comments-json",
+        "path": "/api/repos/bc8b8d82b0ab/api/comments-json",
         "authenticated": false
       },
       "response": {
@@ -620,7 +787,7 @@
       "name": "comments_output",
       "request": {
         "method": "GET",
-        "path": "/api/repos/3a5870957cff/api/comments-output",
+        "path": "/api/repos/bc8b8d82b0ab/api/comments-output",
         "authenticated": false
       },
       "response": {
@@ -679,18 +846,18 @@
         "contentType": "application/json; charset=utf-8",
         "body": {
           "questionSet": {
-            "id": "6b76f1ae-4f5b-4e1f-8746-a75b25393ed9",
+            "id": "810b7e96-c2f7-4a39-ab74-e43f5b437dd7",
             "name": "fixture questions",
             "questions": [
               {
                 "id": 1,
-                "questionSetId": "6b76f1ae-4f5b-4e1f-8746-a75b25393ed9",
+                "questionSetId": "810b7e96-c2f7-4a39-ab74-e43f5b437dd7",
                 "body": "What changed?",
                 "position": 0
               },
               {
                 "id": 2,
-                "questionSetId": "6b76f1ae-4f5b-4e1f-8746-a75b25393ed9",
+                "questionSetId": "810b7e96-c2f7-4a39-ab74-e43f5b437dd7",
                 "body": "What should be tested?",
                 "position": 1
               }
@@ -712,18 +879,18 @@
         "body": {
           "questionSets": [
             {
-              "id": "6b76f1ae-4f5b-4e1f-8746-a75b25393ed9",
+              "id": "810b7e96-c2f7-4a39-ab74-e43f5b437dd7",
               "name": "fixture questions",
               "questions": [
                 {
                   "id": 1,
-                  "questionSetId": "6b76f1ae-4f5b-4e1f-8746-a75b25393ed9",
+                  "questionSetId": "810b7e96-c2f7-4a39-ab74-e43f5b437dd7",
                   "body": "What changed?",
                   "position": 0
                 },
                 {
                   "id": 2,
-                  "questionSetId": "6b76f1ae-4f5b-4e1f-8746-a75b25393ed9",
+                  "questionSetId": "810b7e96-c2f7-4a39-ab74-e43f5b437dd7",
                   "body": "What should be tested?",
                   "position": 1
                 }
@@ -737,7 +904,7 @@
       "name": "ask_question_set_get",
       "request": {
         "method": "GET",
-        "path": "/api/ask/question-sets/6b76f1ae-4f5b-4e1f-8746-a75b25393ed9",
+        "path": "/api/ask/question-sets/810b7e96-c2f7-4a39-ab74-e43f5b437dd7",
         "authenticated": false
       },
       "response": {
@@ -745,18 +912,18 @@
         "contentType": "application/json; charset=utf-8",
         "body": {
           "questionSet": {
-            "id": "6b76f1ae-4f5b-4e1f-8746-a75b25393ed9",
+            "id": "810b7e96-c2f7-4a39-ab74-e43f5b437dd7",
             "name": "fixture questions",
             "questions": [
               {
                 "id": 1,
-                "questionSetId": "6b76f1ae-4f5b-4e1f-8746-a75b25393ed9",
+                "questionSetId": "810b7e96-c2f7-4a39-ab74-e43f5b437dd7",
                 "body": "What changed?",
                 "position": 0
               },
               {
                 "id": 2,
-                "questionSetId": "6b76f1ae-4f5b-4e1f-8746-a75b25393ed9",
+                "questionSetId": "810b7e96-c2f7-4a39-ab74-e43f5b437dd7",
                 "body": "What should be tested?",
                 "position": 1
               }
@@ -769,7 +936,7 @@
       "name": "ask_question_set_update",
       "request": {
         "method": "PUT",
-        "path": "/api/ask/question-sets/6b76f1ae-4f5b-4e1f-8746-a75b25393ed9",
+        "path": "/api/ask/question-sets/810b7e96-c2f7-4a39-ab74-e43f5b437dd7",
         "body": {
           "name": "fixture questions",
           "questions": [
@@ -784,18 +951,18 @@
         "contentType": "application/json; charset=utf-8",
         "body": {
           "questionSet": {
-            "id": "6b76f1ae-4f5b-4e1f-8746-a75b25393ed9",
+            "id": "810b7e96-c2f7-4a39-ab74-e43f5b437dd7",
             "name": "fixture questions",
             "questions": [
               {
                 "id": 3,
-                "questionSetId": "6b76f1ae-4f5b-4e1f-8746-a75b25393ed9",
+                "questionSetId": "810b7e96-c2f7-4a39-ab74-e43f5b437dd7",
                 "body": "What changed?",
                 "position": 0
               },
               {
                 "id": 4,
-                "questionSetId": "6b76f1ae-4f5b-4e1f-8746-a75b25393ed9",
+                "questionSetId": "810b7e96-c2f7-4a39-ab74-e43f5b437dd7",
                 "body": "What risks remain?",
                 "position": 1
               }
@@ -808,7 +975,7 @@
       "name": "ask_question_set_delete",
       "request": {
         "method": "DELETE",
-        "path": "/api/ask/question-sets/6b76f1ae-4f5b-4e1f-8746-a75b25393ed9",
+        "path": "/api/ask/question-sets/810b7e96-c2f7-4a39-ab74-e43f5b437dd7",
         "authenticated": false
       },
       "response": {
@@ -823,7 +990,7 @@
         "method": "POST",
         "path": "/api/queue",
         "body": {
-          "workspacePath": "/var/folders/hf/t1wlqzj97dj71scmsxlb9w7c0000gn/T/cmux-localreview-parity-JGrDC3/workspace",
+          "workspacePath": "/var/folders/hf/t1wlqzj97dj71scmsxlb9w7c0000gn/T/cmux-localreview-parity-qaVlDm/workspace",
           "title": "parity local review",
           "topic": "fixture-topic"
         },
@@ -834,7 +1001,7 @@
         "contentType": "application/json; charset=utf-8",
         "body": {
           "item": {
-            "id": "295ee61d-691f-484d-8dbc-a7ed3c966f5a",
+            "id": "129e5a84-dc20-4a80-a09b-bcb83ec1c148",
             "title": "parity local review",
             "body": "",
             "workspacePath": "<fixture-root>/workspace",
@@ -852,14 +1019,14 @@
             "acpState": "unavailable",
             "acpLastError": null,
             "acpUpdatedAt": null,
-            "snapshotManifestPath": "<fixture-root>/daemon-data/artifacts/snapshots/ffde7513-dd9e-48c6-bc0d-ebd69f857b1c/manifest.json",
+            "snapshotManifestPath": "<fixture-root>/daemon-data/artifacts/snapshots/2bf42e64-a668-44f6-9ef3-a7de45031402/manifest.json",
             "snapshotManifest": {
               "version": 1,
-              "id": "ffde7513-dd9e-48c6-bc0d-ebd69f857b1c",
+              "id": "2bf42e64-a668-44f6-9ef3-a7de45031402",
               "workspacePath": "<fixture-root>/workspace",
               "provenance": {
                 "version": 1,
-                "capturedAt": "2026-07-28T15:51:25.564Z",
+                "capturedAt": "2026-07-28T15:53:40.254Z",
                 "workspacePath": "<fixture-root>/workspace",
                 "caller": {
                   "cwd": "/Users/avestabarzegar/agentmax/cmux-localreview",
@@ -876,10 +1043,10 @@
                 {
                   "workspaceRelativePath": ".",
                   "sourcePath": "<fixture-root>/workspace",
-                  "baseSha": "8083f8d3697d967a6a4b336b9c1ff7bab48c590c",
-                  "snapshotSha": "49852251513f74c20c9b5063d0ff097fd31da937",
-                  "bundle": "workspace-644cc8968a.bundle",
-                  "bundleSha256": "bef34db209b738bad5fe91af90bb44808dd6e1f31adba11057ef8fb9cf1af4c0"
+                  "baseSha": "979d6c2f206bdef9d0cee1faaae40c3a931f71b8",
+                  "snapshotSha": "38543e14c1fd81a9f5ecb0060c20467864a8d31a",
+                  "bundle": "workspace-d168cb13c4.bundle",
+                  "bundleSha256": "e36293d06decefffc28ae7467bb75308767acdf25dd986deb7b9cb011bd0ff9e"
                 }
               ]
             },
@@ -887,7 +1054,7 @@
             "baseRef": null,
             "provenance": {
               "version": 1,
-              "capturedAt": "2026-07-28T15:51:25.564Z",
+              "capturedAt": "2026-07-28T15:53:40.254Z",
               "workspacePath": "<fixture-root>/workspace",
               "caller": {
                 "cwd": "/Users/avestabarzegar/agentmax/cmux-localreview",
@@ -900,7 +1067,7 @@
                 "error": "connect ENOENT /Users/avestabarzegar/.local/state/cmux/cmux.sock"
               }
             },
-            "sourceFingerprint": "76f64aa342d322e22cefe24b4a1add4043803edb9bbb3090c105706d2713c0f7",
+            "sourceFingerprint": "f793bc68bb6f5bac81c88cef947f748c44564dcd89c3b6bdb93c50469a444dd1",
             "supersedesId": null,
             "identityKey": "local:<fixture-root>/workspace:fixture-topic",
             "reviewTopic": "fixture-topic",
@@ -925,7 +1092,7 @@
         "body": {
           "items": [
             {
-              "id": "295ee61d-691f-484d-8dbc-a7ed3c966f5a",
+              "id": "129e5a84-dc20-4a80-a09b-bcb83ec1c148",
               "title": "parity local review",
               "body": "",
               "workspacePath": "<fixture-root>/workspace",
@@ -943,14 +1110,14 @@
               "acpState": "unavailable",
               "acpLastError": null,
               "acpUpdatedAt": null,
-              "snapshotManifestPath": "<fixture-root>/daemon-data/artifacts/snapshots/ffde7513-dd9e-48c6-bc0d-ebd69f857b1c/manifest.json",
+              "snapshotManifestPath": "<fixture-root>/daemon-data/artifacts/snapshots/2bf42e64-a668-44f6-9ef3-a7de45031402/manifest.json",
               "snapshotManifest": {
                 "version": 1,
-                "id": "ffde7513-dd9e-48c6-bc0d-ebd69f857b1c",
+                "id": "2bf42e64-a668-44f6-9ef3-a7de45031402",
                 "workspacePath": "<fixture-root>/workspace",
                 "provenance": {
                   "version": 1,
-                  "capturedAt": "2026-07-28T15:51:25.564Z",
+                  "capturedAt": "2026-07-28T15:53:40.254Z",
                   "workspacePath": "<fixture-root>/workspace",
                   "caller": {
                     "cwd": "/Users/avestabarzegar/agentmax/cmux-localreview",
@@ -967,10 +1134,10 @@
                   {
                     "workspaceRelativePath": ".",
                     "sourcePath": "<fixture-root>/workspace",
-                    "baseSha": "8083f8d3697d967a6a4b336b9c1ff7bab48c590c",
-                    "snapshotSha": "49852251513f74c20c9b5063d0ff097fd31da937",
-                    "bundle": "workspace-644cc8968a.bundle",
-                    "bundleSha256": "bef34db209b738bad5fe91af90bb44808dd6e1f31adba11057ef8fb9cf1af4c0"
+                    "baseSha": "979d6c2f206bdef9d0cee1faaae40c3a931f71b8",
+                    "snapshotSha": "38543e14c1fd81a9f5ecb0060c20467864a8d31a",
+                    "bundle": "workspace-d168cb13c4.bundle",
+                    "bundleSha256": "e36293d06decefffc28ae7467bb75308767acdf25dd986deb7b9cb011bd0ff9e"
                   }
                 ]
               },
@@ -978,7 +1145,7 @@
               "baseRef": null,
               "provenance": {
                 "version": 1,
-                "capturedAt": "2026-07-28T15:51:25.564Z",
+                "capturedAt": "2026-07-28T15:53:40.254Z",
                 "workspacePath": "<fixture-root>/workspace",
                 "caller": {
                   "cwd": "/Users/avestabarzegar/agentmax/cmux-localreview",
@@ -991,7 +1158,7 @@
                   "error": "connect ENOENT /Users/avestabarzegar/.local/state/cmux/cmux.sock"
                 }
               },
-              "sourceFingerprint": "76f64aa342d322e22cefe24b4a1add4043803edb9bbb3090c105706d2713c0f7",
+              "sourceFingerprint": "f793bc68bb6f5bac81c88cef947f748c44564dcd89c3b6bdb93c50469a444dd1",
               "supersedesId": null,
               "identityKey": "local:<fixture-root>/workspace:fixture-topic",
               "reviewTopic": "fixture-topic",
@@ -1007,7 +1174,7 @@
       "name": "queue_detail",
       "request": {
         "method": "GET",
-        "path": "/api/queue/295ee61d-691f-484d-8dbc-a7ed3c966f5a",
+        "path": "/api/queue/129e5a84-dc20-4a80-a09b-bcb83ec1c148",
         "authenticated": true
       },
       "response": {
@@ -1015,7 +1182,7 @@
         "contentType": "application/json; charset=utf-8",
         "body": {
           "item": {
-            "id": "295ee61d-691f-484d-8dbc-a7ed3c966f5a",
+            "id": "129e5a84-dc20-4a80-a09b-bcb83ec1c148",
             "title": "parity local review",
             "body": "",
             "workspacePath": "<fixture-root>/workspace",
@@ -1033,14 +1200,14 @@
             "acpState": "unavailable",
             "acpLastError": null,
             "acpUpdatedAt": null,
-            "snapshotManifestPath": "<fixture-root>/daemon-data/artifacts/snapshots/ffde7513-dd9e-48c6-bc0d-ebd69f857b1c/manifest.json",
+            "snapshotManifestPath": "<fixture-root>/daemon-data/artifacts/snapshots/2bf42e64-a668-44f6-9ef3-a7de45031402/manifest.json",
             "snapshotManifest": {
               "version": 1,
-              "id": "ffde7513-dd9e-48c6-bc0d-ebd69f857b1c",
+              "id": "2bf42e64-a668-44f6-9ef3-a7de45031402",
               "workspacePath": "<fixture-root>/workspace",
               "provenance": {
                 "version": 1,
-                "capturedAt": "2026-07-28T15:51:25.564Z",
+                "capturedAt": "2026-07-28T15:53:40.254Z",
                 "workspacePath": "<fixture-root>/workspace",
                 "caller": {
                   "cwd": "/Users/avestabarzegar/agentmax/cmux-localreview",
@@ -1057,10 +1224,10 @@
                 {
                   "workspaceRelativePath": ".",
                   "sourcePath": "<fixture-root>/workspace",
-                  "baseSha": "8083f8d3697d967a6a4b336b9c1ff7bab48c590c",
-                  "snapshotSha": "49852251513f74c20c9b5063d0ff097fd31da937",
-                  "bundle": "workspace-644cc8968a.bundle",
-                  "bundleSha256": "bef34db209b738bad5fe91af90bb44808dd6e1f31adba11057ef8fb9cf1af4c0"
+                  "baseSha": "979d6c2f206bdef9d0cee1faaae40c3a931f71b8",
+                  "snapshotSha": "38543e14c1fd81a9f5ecb0060c20467864a8d31a",
+                  "bundle": "workspace-d168cb13c4.bundle",
+                  "bundleSha256": "e36293d06decefffc28ae7467bb75308767acdf25dd986deb7b9cb011bd0ff9e"
                 }
               ]
             },
@@ -1068,7 +1235,7 @@
             "baseRef": null,
             "provenance": {
               "version": 1,
-              "capturedAt": "2026-07-28T15:51:25.564Z",
+              "capturedAt": "2026-07-28T15:53:40.254Z",
               "workspacePath": "<fixture-root>/workspace",
               "caller": {
                 "cwd": "/Users/avestabarzegar/agentmax/cmux-localreview",
@@ -1081,7 +1248,7 @@
                 "error": "connect ENOENT /Users/avestabarzegar/.local/state/cmux/cmux.sock"
               }
             },
-            "sourceFingerprint": "76f64aa342d322e22cefe24b4a1add4043803edb9bbb3090c105706d2713c0f7",
+            "sourceFingerprint": "f793bc68bb6f5bac81c88cef947f748c44564dcd89c3b6bdb93c50469a444dd1",
             "supersedesId": null,
             "identityKey": "local:<fixture-root>/workspace:fixture-topic",
             "reviewTopic": "fixture-topic",
@@ -1098,7 +1265,7 @@
       "name": "queue_reorder",
       "request": {
         "method": "POST",
-        "path": "/api/queue/295ee61d-691f-484d-8dbc-a7ed3c966f5a/reorder",
+        "path": "/api/queue/129e5a84-dc20-4a80-a09b-bcb83ec1c148/reorder",
         "body": {
           "position": 0
         },
@@ -1109,7 +1276,7 @@
         "contentType": "application/json; charset=utf-8",
         "body": {
           "item": {
-            "id": "295ee61d-691f-484d-8dbc-a7ed3c966f5a",
+            "id": "129e5a84-dc20-4a80-a09b-bcb83ec1c148",
             "title": "parity local review",
             "body": "",
             "workspacePath": "<fixture-root>/workspace",
@@ -1127,14 +1294,14 @@
             "acpState": "unavailable",
             "acpLastError": null,
             "acpUpdatedAt": null,
-            "snapshotManifestPath": "<fixture-root>/daemon-data/artifacts/snapshots/ffde7513-dd9e-48c6-bc0d-ebd69f857b1c/manifest.json",
+            "snapshotManifestPath": "<fixture-root>/daemon-data/artifacts/snapshots/2bf42e64-a668-44f6-9ef3-a7de45031402/manifest.json",
             "snapshotManifest": {
               "version": 1,
-              "id": "ffde7513-dd9e-48c6-bc0d-ebd69f857b1c",
+              "id": "2bf42e64-a668-44f6-9ef3-a7de45031402",
               "workspacePath": "<fixture-root>/workspace",
               "provenance": {
                 "version": 1,
-                "capturedAt": "2026-07-28T15:51:25.564Z",
+                "capturedAt": "2026-07-28T15:53:40.254Z",
                 "workspacePath": "<fixture-root>/workspace",
                 "caller": {
                   "cwd": "/Users/avestabarzegar/agentmax/cmux-localreview",
@@ -1151,10 +1318,10 @@
                 {
                   "workspaceRelativePath": ".",
                   "sourcePath": "<fixture-root>/workspace",
-                  "baseSha": "8083f8d3697d967a6a4b336b9c1ff7bab48c590c",
-                  "snapshotSha": "49852251513f74c20c9b5063d0ff097fd31da937",
-                  "bundle": "workspace-644cc8968a.bundle",
-                  "bundleSha256": "bef34db209b738bad5fe91af90bb44808dd6e1f31adba11057ef8fb9cf1af4c0"
+                  "baseSha": "979d6c2f206bdef9d0cee1faaae40c3a931f71b8",
+                  "snapshotSha": "38543e14c1fd81a9f5ecb0060c20467864a8d31a",
+                  "bundle": "workspace-d168cb13c4.bundle",
+                  "bundleSha256": "e36293d06decefffc28ae7467bb75308767acdf25dd986deb7b9cb011bd0ff9e"
                 }
               ]
             },
@@ -1162,7 +1329,7 @@
             "baseRef": null,
             "provenance": {
               "version": 1,
-              "capturedAt": "2026-07-28T15:51:25.564Z",
+              "capturedAt": "2026-07-28T15:53:40.254Z",
               "workspacePath": "<fixture-root>/workspace",
               "caller": {
                 "cwd": "/Users/avestabarzegar/agentmax/cmux-localreview",
@@ -1175,7 +1342,7 @@
                 "error": "connect ENOENT /Users/avestabarzegar/.local/state/cmux/cmux.sock"
               }
             },
-            "sourceFingerprint": "76f64aa342d322e22cefe24b4a1add4043803edb9bbb3090c105706d2713c0f7",
+            "sourceFingerprint": "f793bc68bb6f5bac81c88cef947f748c44564dcd89c3b6bdb93c50469a444dd1",
             "supersedesId": null,
             "identityKey": "local:<fixture-root>/workspace:fixture-topic",
             "reviewTopic": "fixture-topic",
@@ -1190,7 +1357,7 @@
       "name": "queue_add_feedback",
       "request": {
         "method": "POST",
-        "path": "/api/queue/295ee61d-691f-484d-8dbc-a7ed3c966f5a/feedback",
+        "path": "/api/queue/129e5a84-dc20-4a80-a09b-bcb83ec1c148/feedback",
         "body": {
           "body": "Fixture feedback",
           "path": "root.ts",
@@ -1221,7 +1388,7 @@
       "name": "queue_feedback_prompt",
       "request": {
         "method": "GET",
-        "path": "/api/queue/295ee61d-691f-484d-8dbc-a7ed3c966f5a/feedback/prompt",
+        "path": "/api/queue/129e5a84-dc20-4a80-a09b-bcb83ec1c148/feedback/prompt",
         "authenticated": true
       },
       "response": {
@@ -1234,25 +1401,25 @@
       "name": "queue_reproduce",
       "request": {
         "method": "GET",
-        "path": "/api/queue/295ee61d-691f-484d-8dbc-a7ed3c966f5a/reproduce",
+        "path": "/api/queue/129e5a84-dc20-4a80-a09b-bcb83ec1c148/reproduce",
         "authenticated": true
       },
       "response": {
         "status": 200,
         "contentType": "application/json; charset=utf-8",
         "body": {
-          "itemId": "295ee61d-691f-484d-8dbc-a7ed3c966f5a",
+          "itemId": "129e5a84-dc20-4a80-a09b-bcb83ec1c148",
           "workspacePath": "<fixture-root>/workspace",
           "snapshot": {
-            "id": "ffde7513-dd9e-48c6-bc0d-ebd69f857b1c",
-            "manifestPath": "<fixture-root>/daemon-data/artifacts/snapshots/ffde7513-dd9e-48c6-bc0d-ebd69f857b1c/manifest.json",
+            "id": "2bf42e64-a668-44f6-9ef3-a7de45031402",
+            "manifestPath": "<fixture-root>/daemon-data/artifacts/snapshots/2bf42e64-a668-44f6-9ef3-a7de45031402/manifest.json",
             "repositories": 1
           },
           "existingAcp": null,
           "copilotSessionId": null,
           "commands": {
-            "reproduceSnapshot": "localreview-reproduce \"<fixture-root>/daemon-data/artifacts/snapshots/ffde7513-dd9e-48c6-bc0d-ebd69f857b1c/manifest.json\" <empty-destination>",
-            "reproduceCopilot": "localreview-reproduce-copilot 295ee61d-691f-484d-8dbc-a7ed3c966f5a <empty-destination>",
+            "reproduceSnapshot": "localreview-reproduce \"<fixture-root>/daemon-data/artifacts/snapshots/2bf42e64-a668-44f6-9ef3-a7de45031402/manifest.json\" <empty-destination>",
+            "reproduceCopilot": "localreview-reproduce-copilot 129e5a84-dc20-4a80-a09b-bcb83ec1c148 <empty-destination>",
             "freshAcp": "cd <empty-destination> && copilot --acp --port 4123"
           },
           "notes": [
@@ -1266,9 +1433,9 @@
       "name": "queue_export",
       "request": {
         "method": "POST",
-        "path": "/api/queue/295ee61d-691f-484d-8dbc-a7ed3c966f5a/export",
+        "path": "/api/queue/129e5a84-dc20-4a80-a09b-bcb83ec1c148/export",
         "body": {
-          "destination": "/var/folders/hf/t1wlqzj97dj71scmsxlb9w7c0000gn/T/cmux-localreview-parity-JGrDC3/review-package"
+          "destination": "/var/folders/hf/t1wlqzj97dj71scmsxlb9w7c0000gn/T/cmux-localreview-parity-qaVlDm/review-package"
         },
         "authenticated": true
       },
@@ -1284,7 +1451,7 @@
       "name": "queue_open",
       "request": {
         "method": "POST",
-        "path": "/api/queue/295ee61d-691f-484d-8dbc-a7ed3c966f5a/open",
+        "path": "/api/queue/129e5a84-dc20-4a80-a09b-bcb83ec1c148/open",
         "authenticated": true
       },
       "response": {
@@ -1292,7 +1459,7 @@
         "contentType": "application/json; charset=utf-8",
         "body": {
           "item": {
-            "id": "295ee61d-691f-484d-8dbc-a7ed3c966f5a",
+            "id": "129e5a84-dc20-4a80-a09b-bcb83ec1c148",
             "title": "parity local review",
             "body": "",
             "workspacePath": "<fixture-root>/workspace",
@@ -1310,14 +1477,14 @@
             "acpState": "unavailable",
             "acpLastError": null,
             "acpUpdatedAt": null,
-            "snapshotManifestPath": "<fixture-root>/daemon-data/artifacts/snapshots/ffde7513-dd9e-48c6-bc0d-ebd69f857b1c/manifest.json",
+            "snapshotManifestPath": "<fixture-root>/daemon-data/artifacts/snapshots/2bf42e64-a668-44f6-9ef3-a7de45031402/manifest.json",
             "snapshotManifest": {
               "version": 1,
-              "id": "ffde7513-dd9e-48c6-bc0d-ebd69f857b1c",
+              "id": "2bf42e64-a668-44f6-9ef3-a7de45031402",
               "workspacePath": "<fixture-root>/workspace",
               "provenance": {
                 "version": 1,
-                "capturedAt": "2026-07-28T15:51:25.564Z",
+                "capturedAt": "2026-07-28T15:53:40.254Z",
                 "workspacePath": "<fixture-root>/workspace",
                 "caller": {
                   "cwd": "/Users/avestabarzegar/agentmax/cmux-localreview",
@@ -1334,10 +1501,10 @@
                 {
                   "workspaceRelativePath": ".",
                   "sourcePath": "<fixture-root>/workspace",
-                  "baseSha": "8083f8d3697d967a6a4b336b9c1ff7bab48c590c",
-                  "snapshotSha": "49852251513f74c20c9b5063d0ff097fd31da937",
-                  "bundle": "workspace-644cc8968a.bundle",
-                  "bundleSha256": "bef34db209b738bad5fe91af90bb44808dd6e1f31adba11057ef8fb9cf1af4c0"
+                  "baseSha": "979d6c2f206bdef9d0cee1faaae40c3a931f71b8",
+                  "snapshotSha": "38543e14c1fd81a9f5ecb0060c20467864a8d31a",
+                  "bundle": "workspace-d168cb13c4.bundle",
+                  "bundleSha256": "e36293d06decefffc28ae7467bb75308767acdf25dd986deb7b9cb011bd0ff9e"
                 }
               ]
             },
@@ -1345,7 +1512,7 @@
             "baseRef": null,
             "provenance": {
               "version": 1,
-              "capturedAt": "2026-07-28T15:51:25.564Z",
+              "capturedAt": "2026-07-28T15:53:40.254Z",
               "workspacePath": "<fixture-root>/workspace",
               "caller": {
                 "cwd": "/Users/avestabarzegar/agentmax/cmux-localreview",
@@ -1358,7 +1525,7 @@
                 "error": "connect ENOENT /Users/avestabarzegar/.local/state/cmux/cmux.sock"
               }
             },
-            "sourceFingerprint": "76f64aa342d322e22cefe24b4a1add4043803edb9bbb3090c105706d2713c0f7",
+            "sourceFingerprint": "f793bc68bb6f5bac81c88cef947f748c44564dcd89c3b6bdb93c50469a444dd1",
             "supersedesId": null,
             "identityKey": "local:<fixture-root>/workspace:fixture-topic",
             "reviewTopic": "fixture-topic",
@@ -1367,14 +1534,14 @@
             "decisionBody": null
           },
           "sourceWorkspacePath": "<fixture-root>/workspace",
-          "workspacePath": "<fixture-root>/daemon-data/review-workspaces/295ee61d-691f-484d-8dbc-a7ed3c966f5a",
+          "workspacePath": "<fixture-root>/daemon-data/review-workspaces/129e5a84-dc20-4a80-a09b-bcb83ec1c148",
           "repos": [
             {
-              "id": "55508f3fe31c",
+              "id": "811fdd478cb4",
               "path": "."
             }
           ],
-          "reviewUrl": "/review?queueItem=295ee61d-691f-484d-8dbc-a7ed3c966f5a"
+          "reviewUrl": "/review?queueItem=129e5a84-dc20-4a80-a09b-bcb83ec1c148"
         }
       }
     },
@@ -1382,7 +1549,7 @@
       "name": "queue_complete",
       "request": {
         "method": "POST",
-        "path": "/api/queue/295ee61d-691f-484d-8dbc-a7ed3c966f5a/decision",
+        "path": "/api/queue/129e5a84-dc20-4a80-a09b-bcb83ec1c148/decision",
         "body": {
           "decision": "completed",
           "body": "Fixture done"
@@ -1394,7 +1561,7 @@
         "contentType": "application/json; charset=utf-8",
         "body": {
           "item": {
-            "id": "295ee61d-691f-484d-8dbc-a7ed3c966f5a",
+            "id": "129e5a84-dc20-4a80-a09b-bcb83ec1c148",
             "title": "parity local review",
             "body": "",
             "workspacePath": "<fixture-root>/workspace",
@@ -1412,14 +1579,14 @@
             "acpState": "unavailable",
             "acpLastError": null,
             "acpUpdatedAt": null,
-            "snapshotManifestPath": "<fixture-root>/daemon-data/artifacts/snapshots/ffde7513-dd9e-48c6-bc0d-ebd69f857b1c/manifest.json",
+            "snapshotManifestPath": "<fixture-root>/daemon-data/artifacts/snapshots/2bf42e64-a668-44f6-9ef3-a7de45031402/manifest.json",
             "snapshotManifest": {
               "version": 1,
-              "id": "ffde7513-dd9e-48c6-bc0d-ebd69f857b1c",
+              "id": "2bf42e64-a668-44f6-9ef3-a7de45031402",
               "workspacePath": "<fixture-root>/workspace",
               "provenance": {
                 "version": 1,
-                "capturedAt": "2026-07-28T15:51:25.564Z",
+                "capturedAt": "2026-07-28T15:53:40.254Z",
                 "workspacePath": "<fixture-root>/workspace",
                 "caller": {
                   "cwd": "/Users/avestabarzegar/agentmax/cmux-localreview",
@@ -1436,10 +1603,10 @@
                 {
                   "workspaceRelativePath": ".",
                   "sourcePath": "<fixture-root>/workspace",
-                  "baseSha": "8083f8d3697d967a6a4b336b9c1ff7bab48c590c",
-                  "snapshotSha": "49852251513f74c20c9b5063d0ff097fd31da937",
-                  "bundle": "workspace-644cc8968a.bundle",
-                  "bundleSha256": "bef34db209b738bad5fe91af90bb44808dd6e1f31adba11057ef8fb9cf1af4c0"
+                  "baseSha": "979d6c2f206bdef9d0cee1faaae40c3a931f71b8",
+                  "snapshotSha": "38543e14c1fd81a9f5ecb0060c20467864a8d31a",
+                  "bundle": "workspace-d168cb13c4.bundle",
+                  "bundleSha256": "e36293d06decefffc28ae7467bb75308767acdf25dd986deb7b9cb011bd0ff9e"
                 }
               ]
             },
@@ -1447,7 +1614,7 @@
             "baseRef": null,
             "provenance": {
               "version": 1,
-              "capturedAt": "2026-07-28T15:51:25.564Z",
+              "capturedAt": "2026-07-28T15:53:40.254Z",
               "workspacePath": "<fixture-root>/workspace",
               "caller": {
                 "cwd": "/Users/avestabarzegar/agentmax/cmux-localreview",
@@ -1460,7 +1627,7 @@
                 "error": "connect ENOENT /Users/avestabarzegar/.local/state/cmux/cmux.sock"
               }
             },
-            "sourceFingerprint": "76f64aa342d322e22cefe24b4a1add4043803edb9bbb3090c105706d2713c0f7",
+            "sourceFingerprint": "f793bc68bb6f5bac81c88cef947f748c44564dcd89c3b6bdb93c50469a444dd1",
             "supersedesId": null,
             "identityKey": "local:<fixture-root>/workspace:fixture-topic",
             "reviewTopic": "fixture-topic",
@@ -1475,7 +1642,7 @@
       "name": "queue_requeue",
       "request": {
         "method": "POST",
-        "path": "/api/queue/295ee61d-691f-484d-8dbc-a7ed3c966f5a/requeue",
+        "path": "/api/queue/129e5a84-dc20-4a80-a09b-bcb83ec1c148/requeue",
         "authenticated": true
       },
       "response": {
@@ -1483,7 +1650,7 @@
         "contentType": "application/json; charset=utf-8",
         "body": {
           "item": {
-            "id": "295ee61d-691f-484d-8dbc-a7ed3c966f5a",
+            "id": "129e5a84-dc20-4a80-a09b-bcb83ec1c148",
             "title": "parity local review",
             "body": "",
             "workspacePath": "<fixture-root>/workspace",
@@ -1501,14 +1668,14 @@
             "acpState": "unavailable",
             "acpLastError": null,
             "acpUpdatedAt": null,
-            "snapshotManifestPath": "<fixture-root>/daemon-data/artifacts/snapshots/ffde7513-dd9e-48c6-bc0d-ebd69f857b1c/manifest.json",
+            "snapshotManifestPath": "<fixture-root>/daemon-data/artifacts/snapshots/2bf42e64-a668-44f6-9ef3-a7de45031402/manifest.json",
             "snapshotManifest": {
               "version": 1,
-              "id": "ffde7513-dd9e-48c6-bc0d-ebd69f857b1c",
+              "id": "2bf42e64-a668-44f6-9ef3-a7de45031402",
               "workspacePath": "<fixture-root>/workspace",
               "provenance": {
                 "version": 1,
-                "capturedAt": "2026-07-28T15:51:25.564Z",
+                "capturedAt": "2026-07-28T15:53:40.254Z",
                 "workspacePath": "<fixture-root>/workspace",
                 "caller": {
                   "cwd": "/Users/avestabarzegar/agentmax/cmux-localreview",
@@ -1525,10 +1692,10 @@
                 {
                   "workspaceRelativePath": ".",
                   "sourcePath": "<fixture-root>/workspace",
-                  "baseSha": "8083f8d3697d967a6a4b336b9c1ff7bab48c590c",
-                  "snapshotSha": "49852251513f74c20c9b5063d0ff097fd31da937",
-                  "bundle": "workspace-644cc8968a.bundle",
-                  "bundleSha256": "bef34db209b738bad5fe91af90bb44808dd6e1f31adba11057ef8fb9cf1af4c0"
+                  "baseSha": "979d6c2f206bdef9d0cee1faaae40c3a931f71b8",
+                  "snapshotSha": "38543e14c1fd81a9f5ecb0060c20467864a8d31a",
+                  "bundle": "workspace-d168cb13c4.bundle",
+                  "bundleSha256": "e36293d06decefffc28ae7467bb75308767acdf25dd986deb7b9cb011bd0ff9e"
                 }
               ]
             },
@@ -1536,7 +1703,7 @@
             "baseRef": null,
             "provenance": {
               "version": 1,
-              "capturedAt": "2026-07-28T15:51:25.564Z",
+              "capturedAt": "2026-07-28T15:53:40.254Z",
               "workspacePath": "<fixture-root>/workspace",
               "caller": {
                 "cwd": "/Users/avestabarzegar/agentmax/cmux-localreview",
@@ -1549,7 +1716,7 @@
                 "error": "connect ENOENT /Users/avestabarzegar/.local/state/cmux/cmux.sock"
               }
             },
-            "sourceFingerprint": "76f64aa342d322e22cefe24b4a1add4043803edb9bbb3090c105706d2713c0f7",
+            "sourceFingerprint": "f793bc68bb6f5bac81c88cef947f748c44564dcd89c3b6bdb93c50469a444dd1",
             "supersedesId": null,
             "identityKey": "local:<fixture-root>/workspace:fixture-topic",
             "reviewTopic": "fixture-topic",
@@ -1560,13 +1727,13 @@
           "decisions": [
             {
               "id": 1,
-              "queueItemId": "295ee61d-691f-484d-8dbc-a7ed3c966f5a",
+              "queueItemId": "129e5a84-dc20-4a80-a09b-bcb83ec1c148",
               "status": "completed",
               "body": "Fixture done"
             },
             {
               "id": 2,
-              "queueItemId": "295ee61d-691f-484d-8dbc-a7ed3c966f5a",
+              "queueItemId": "129e5a84-dc20-4a80-a09b-bcb83ec1c148",
               "status": "requeued",
               "body": "Requeued by reviewer."
             }
@@ -1578,7 +1745,7 @@
       "name": "queue_delete",
       "request": {
         "method": "DELETE",
-        "path": "/api/queue/295ee61d-691f-484d-8dbc-a7ed3c966f5a",
+        "path": "/api/queue/129e5a84-dc20-4a80-a09b-bcb83ec1c148",
         "body": {
           "reason": "fixture cleanup"
         },
@@ -1589,7 +1756,7 @@
         "contentType": "application/json; charset=utf-8",
         "body": {
           "item": {
-            "id": "295ee61d-691f-484d-8dbc-a7ed3c966f5a",
+            "id": "129e5a84-dc20-4a80-a09b-bcb83ec1c148",
             "title": "parity local review",
             "body": "",
             "workspacePath": "<fixture-root>/workspace",
@@ -1607,14 +1774,14 @@
             "acpState": "unavailable",
             "acpLastError": null,
             "acpUpdatedAt": null,
-            "snapshotManifestPath": "<fixture-root>/daemon-data/artifacts/snapshots/ffde7513-dd9e-48c6-bc0d-ebd69f857b1c/manifest.json",
+            "snapshotManifestPath": "<fixture-root>/daemon-data/artifacts/snapshots/2bf42e64-a668-44f6-9ef3-a7de45031402/manifest.json",
             "snapshotManifest": {
               "version": 1,
-              "id": "ffde7513-dd9e-48c6-bc0d-ebd69f857b1c",
+              "id": "2bf42e64-a668-44f6-9ef3-a7de45031402",
               "workspacePath": "<fixture-root>/workspace",
               "provenance": {
                 "version": 1,
-                "capturedAt": "2026-07-28T15:51:25.564Z",
+                "capturedAt": "2026-07-28T15:53:40.254Z",
                 "workspacePath": "<fixture-root>/workspace",
                 "caller": {
                   "cwd": "/Users/avestabarzegar/agentmax/cmux-localreview",
@@ -1631,10 +1798,10 @@
                 {
                   "workspaceRelativePath": ".",
                   "sourcePath": "<fixture-root>/workspace",
-                  "baseSha": "8083f8d3697d967a6a4b336b9c1ff7bab48c590c",
-                  "snapshotSha": "49852251513f74c20c9b5063d0ff097fd31da937",
-                  "bundle": "workspace-644cc8968a.bundle",
-                  "bundleSha256": "bef34db209b738bad5fe91af90bb44808dd6e1f31adba11057ef8fb9cf1af4c0"
+                  "baseSha": "979d6c2f206bdef9d0cee1faaae40c3a931f71b8",
+                  "snapshotSha": "38543e14c1fd81a9f5ecb0060c20467864a8d31a",
+                  "bundle": "workspace-d168cb13c4.bundle",
+                  "bundleSha256": "e36293d06decefffc28ae7467bb75308767acdf25dd986deb7b9cb011bd0ff9e"
                 }
               ]
             },
@@ -1642,7 +1809,7 @@
             "baseRef": null,
             "provenance": {
               "version": 1,
-              "capturedAt": "2026-07-28T15:51:25.564Z",
+              "capturedAt": "2026-07-28T15:53:40.254Z",
               "workspacePath": "<fixture-root>/workspace",
               "caller": {
                 "cwd": "/Users/avestabarzegar/agentmax/cmux-localreview",
@@ -1655,11 +1822,11 @@
                 "error": "connect ENOENT /Users/avestabarzegar/.local/state/cmux/cmux.sock"
               }
             },
-            "sourceFingerprint": "76f64aa342d322e22cefe24b4a1add4043803edb9bbb3090c105706d2713c0f7",
+            "sourceFingerprint": "f793bc68bb6f5bac81c88cef947f748c44564dcd89c3b6bdb93c50469a444dd1",
             "supersedesId": null,
             "identityKey": "local:<fixture-root>/workspace:fixture-topic",
             "reviewTopic": "fixture-topic",
-            "removedAt": 1785253885903,
+            "removedAt": 1785254020575,
             "removedReason": "fixture cleanup",
             "decisionBody": null
           }
@@ -1679,7 +1846,7 @@
         "body": {
           "items": [
             {
-              "id": "295ee61d-691f-484d-8dbc-a7ed3c966f5a",
+              "id": "129e5a84-dc20-4a80-a09b-bcb83ec1c148",
               "title": "parity local review",
               "body": "",
               "workspacePath": "<fixture-root>/workspace",
@@ -1697,14 +1864,14 @@
               "acpState": "unavailable",
               "acpLastError": null,
               "acpUpdatedAt": null,
-              "snapshotManifestPath": "<fixture-root>/daemon-data/artifacts/snapshots/ffde7513-dd9e-48c6-bc0d-ebd69f857b1c/manifest.json",
+              "snapshotManifestPath": "<fixture-root>/daemon-data/artifacts/snapshots/2bf42e64-a668-44f6-9ef3-a7de45031402/manifest.json",
               "snapshotManifest": {
                 "version": 1,
-                "id": "ffde7513-dd9e-48c6-bc0d-ebd69f857b1c",
+                "id": "2bf42e64-a668-44f6-9ef3-a7de45031402",
                 "workspacePath": "<fixture-root>/workspace",
                 "provenance": {
                   "version": 1,
-                  "capturedAt": "2026-07-28T15:51:25.564Z",
+                  "capturedAt": "2026-07-28T15:53:40.254Z",
                   "workspacePath": "<fixture-root>/workspace",
                   "caller": {
                     "cwd": "/Users/avestabarzegar/agentmax/cmux-localreview",
@@ -1721,10 +1888,10 @@
                   {
                     "workspaceRelativePath": ".",
                     "sourcePath": "<fixture-root>/workspace",
-                    "baseSha": "8083f8d3697d967a6a4b336b9c1ff7bab48c590c",
-                    "snapshotSha": "49852251513f74c20c9b5063d0ff097fd31da937",
-                    "bundle": "workspace-644cc8968a.bundle",
-                    "bundleSha256": "bef34db209b738bad5fe91af90bb44808dd6e1f31adba11057ef8fb9cf1af4c0"
+                    "baseSha": "979d6c2f206bdef9d0cee1faaae40c3a931f71b8",
+                    "snapshotSha": "38543e14c1fd81a9f5ecb0060c20467864a8d31a",
+                    "bundle": "workspace-d168cb13c4.bundle",
+                    "bundleSha256": "e36293d06decefffc28ae7467bb75308767acdf25dd986deb7b9cb011bd0ff9e"
                   }
                 ]
               },
@@ -1732,7 +1899,7 @@
               "baseRef": null,
               "provenance": {
                 "version": 1,
-                "capturedAt": "2026-07-28T15:51:25.564Z",
+                "capturedAt": "2026-07-28T15:53:40.254Z",
                 "workspacePath": "<fixture-root>/workspace",
                 "caller": {
                   "cwd": "/Users/avestabarzegar/agentmax/cmux-localreview",
@@ -1745,11 +1912,11 @@
                   "error": "connect ENOENT /Users/avestabarzegar/.local/state/cmux/cmux.sock"
                 }
               },
-              "sourceFingerprint": "76f64aa342d322e22cefe24b4a1add4043803edb9bbb3090c105706d2713c0f7",
+              "sourceFingerprint": "f793bc68bb6f5bac81c88cef947f748c44564dcd89c3b6bdb93c50469a444dd1",
               "supersedesId": null,
               "identityKey": "local:<fixture-root>/workspace:fixture-topic",
               "reviewTopic": "fixture-topic",
-              "removedAt": 1785253885903,
+              "removedAt": 1785254020575,
               "removedReason": "fixture cleanup",
               "decisionBody": null
             }
@@ -1763,7 +1930,7 @@
         "method": "POST",
         "path": "/api/queue/watch",
         "body": {
-          "workspacePath": "/var/folders/hf/t1wlqzj97dj71scmsxlb9w7c0000gn/T/cmux-localreview-parity-JGrDC3/workspace",
+          "workspacePath": "/var/folders/hf/t1wlqzj97dj71scmsxlb9w7c0000gn/T/cmux-localreview-parity-qaVlDm/workspace",
           "pollIntervalMs": 1000
         },
         "authenticated": true
@@ -1784,7 +1951,7 @@
         "method": "POST",
         "path": "/api/queue/watch",
         "body": {
-          "workspacePath": "/var/folders/hf/t1wlqzj97dj71scmsxlb9w7c0000gn/T/cmux-localreview-parity-JGrDC3/workspace",
+          "workspacePath": "/var/folders/hf/t1wlqzj97dj71scmsxlb9w7c0000gn/T/cmux-localreview-parity-qaVlDm/workspace",
           "enabled": false
         },
         "authenticated": true
@@ -1804,7 +1971,7 @@
         "method": "POST",
         "path": "/api/queue/hook",
         "body": {
-          "workspacePath": "/var/folders/hf/t1wlqzj97dj71scmsxlb9w7c0000gn/T/cmux-localreview-parity-JGrDC3/workspace"
+          "workspacePath": "/var/folders/hf/t1wlqzj97dj71scmsxlb9w7c0000gn/T/cmux-localreview-parity-qaVlDm/workspace"
         },
         "authenticated": true
       },
@@ -1814,7 +1981,7 @@
         "body": {
           "created": false,
           "item": {
-            "id": "9efb9aca-4c93-450e-8f53-3a9bc28b70c0",
+            "id": "089d6598-df39-488d-b250-39c092659afa",
             "title": "Review <fixture-root>/workspace",
             "body": "",
             "workspacePath": "<fixture-root>/workspace",
@@ -1832,14 +1999,14 @@
             "acpState": "unavailable",
             "acpLastError": null,
             "acpUpdatedAt": null,
-            "snapshotManifestPath": "<fixture-root>/daemon-data/artifacts/snapshots/bafebf06-97ec-4032-abf1-5a23adc6efd7/manifest.json",
+            "snapshotManifestPath": "<fixture-root>/daemon-data/artifacts/snapshots/9923e169-716d-499f-af28-4e71f636ef95/manifest.json",
             "snapshotManifest": {
               "version": 1,
-              "id": "bafebf06-97ec-4032-abf1-5a23adc6efd7",
+              "id": "9923e169-716d-499f-af28-4e71f636ef95",
               "workspacePath": "<fixture-root>/workspace",
               "provenance": {
                 "version": 1,
-                "capturedAt": "2026-07-28T15:51:25.974Z",
+                "capturedAt": "2026-07-28T15:53:40.646Z",
                 "workspacePath": "<fixture-root>/workspace",
                 "caller": {
                   "cwd": "/Users/avestabarzegar/agentmax/cmux-localreview",
@@ -1854,7 +2021,7 @@
                 "supplied": {
                   "submission": {
                     "version": 1,
-                    "capturedAt": "2026-07-28T15:51:25.905Z",
+                    "capturedAt": "2026-07-28T15:53:40.576Z",
                     "workspacePath": "<fixture-root>/workspace",
                     "caller": {
                       "cwd": "/Users/avestabarzegar/agentmax/cmux-localreview",
@@ -1869,7 +2036,7 @@
                   },
                   "autoQueue": {
                     "mechanism": "git-poll",
-                    "detectedAt": "2026-07-28T15:51:25.974Z",
+                    "detectedAt": "2026-07-28T15:53:40.645Z",
                     "previousFingerprint": null
                   }
                 }
@@ -1878,10 +2045,10 @@
                 {
                   "workspaceRelativePath": ".",
                   "sourcePath": "<fixture-root>/workspace",
-                  "baseSha": "8083f8d3697d967a6a4b336b9c1ff7bab48c590c",
-                  "snapshotSha": "000c9878e2ec2f1de489782352a8120b942a3690",
-                  "bundle": "workspace-644cc8968a.bundle",
-                  "bundleSha256": "0e2f998d2930398f910fd54884737b9a1e343aa2635c9d693c7da4f402153cdb"
+                  "baseSha": "979d6c2f206bdef9d0cee1faaae40c3a931f71b8",
+                  "snapshotSha": "943c4dab67d4174f28e68ee145326d126a29cbd4",
+                  "bundle": "workspace-d168cb13c4.bundle",
+                  "bundleSha256": "8dd5e22ebbd16cdcbb2606af3c59fd0e076ce4d7ea51b191f945dd26ebe22757"
                 }
               ]
             },
@@ -1889,7 +2056,7 @@
             "baseRef": null,
             "provenance": {
               "version": 1,
-              "capturedAt": "2026-07-28T15:51:25.974Z",
+              "capturedAt": "2026-07-28T15:53:40.646Z",
               "workspacePath": "<fixture-root>/workspace",
               "caller": {
                 "cwd": "/Users/avestabarzegar/agentmax/cmux-localreview",
@@ -1904,7 +2071,7 @@
               "supplied": {
                 "submission": {
                   "version": 1,
-                  "capturedAt": "2026-07-28T15:51:25.905Z",
+                  "capturedAt": "2026-07-28T15:53:40.576Z",
                   "workspacePath": "<fixture-root>/workspace",
                   "caller": {
                     "cwd": "/Users/avestabarzegar/agentmax/cmux-localreview",
@@ -1919,14 +2086,14 @@
                 },
                 "autoQueue": {
                   "mechanism": "git-poll",
-                  "detectedAt": "2026-07-28T15:51:25.974Z",
+                  "detectedAt": "2026-07-28T15:53:40.645Z",
                   "previousFingerprint": null
                 }
               }
             },
-            "sourceFingerprint": "76f64aa342d322e22cefe24b4a1add4043803edb9bbb3090c105706d2713c0f7",
+            "sourceFingerprint": "f793bc68bb6f5bac81c88cef947f748c44564dcd89c3b6bdb93c50469a444dd1",
             "supersedesId": null,
-            "identityKey": "local:<fixture-root>/workspace:review /var/folders/hf/t1wlqzj97dj71scmsxlb9w7c0000gn/t/cmux-localreview-parity-jgrdc3/workspace",
+            "identityKey": "local:<fixture-root>/workspace:review /var/folders/hf/t1wlqzj97dj71scmsxlb9w7c0000gn/t/cmux-localreview-parity-qavldm/workspace",
             "reviewTopic": null,
             "removedAt": null,
             "removedReason": null,
@@ -1943,7 +2110,7 @@
         "body": {
           "id": "fixture-agent",
           "provider": "copilot",
-          "workspacePath": "/var/folders/hf/t1wlqzj97dj71scmsxlb9w7c0000gn/T/cmux-localreview-parity-JGrDC3/workspace",
+          "workspacePath": "/var/folders/hf/t1wlqzj97dj71scmsxlb9w7c0000gn/T/cmux-localreview-parity-qaVlDm/workspace",
           "surfaceId": "fixture-surface"
         },
         "authenticated": true
@@ -1961,7 +2128,7 @@
             "status": "connected",
             "metadata": {
               "surfaceId": "fixture-surface",
-              "lastSeenAt": 1785253887493,
+              "lastSeenAt": 1785254022161,
               "reconnectAttempts": 0
             }
           }
@@ -1989,7 +2156,7 @@
               "status": "connected",
               "metadata": {
                 "surfaceId": "fixture-surface",
-                "lastSeenAt": 1785253887493,
+                "lastSeenAt": 1785254022161,
                 "reconnectAttempts": 0
               }
             }
@@ -2020,7 +2187,7 @@
             "status": "connected",
             "metadata": {
               "surfaceId": "fixture-surface",
-              "lastSeenAt": 1785253887495,
+              "lastSeenAt": 1785254022162,
               "reconnectAttempts": 0
             }
           }
@@ -2050,7 +2217,7 @@
             "status": "connected",
             "metadata": {
               "surfaceId": "fixture-surface",
-              "lastSeenAt": 1785253887498,
+              "lastSeenAt": 1785254022165,
               "reconnectAttempts": 0
             }
           }

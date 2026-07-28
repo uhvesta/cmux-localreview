@@ -14,6 +14,8 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
 import { startGlobalDaemon } from "../src/global-daemon.ts";
+import { GitHubAuthService } from "../src/server/githubAuth.ts";
+import type { SecretStore } from "../src/server/secretStore.ts";
 
 type Fixture = {
   name: string;
@@ -50,13 +52,39 @@ function scrub(value: unknown): unknown {
   return value;
 }
 
+function memorySecretStore(): SecretStore {
+  const values = new Map<string, string>();
+  const key = (service: string, account: string) => `${service}\0${account}`;
+  return {
+    get: async (service, account) => values.get(key(service, account)),
+    set: async (service, account, value) => { values.set(key(service, account), value); },
+    remove: async (service, account) => { values.delete(key(service, account)); },
+  };
+}
+
+/** Hermetic GitHub device-flow fixture; no token leaves this process. */
+const githubFixtureFetch = (async (input: RequestInfo | URL) => {
+  const url = String(input);
+  if (url.endsWith("/login/device/code")) {
+    return new Response(JSON.stringify({ device_code: "fixture-device", user_code: "ABCD-1234", verification_uri: "https://github.com/login/device", expires_in: 900, interval: 1 }), { status: 200 });
+  }
+  if (url.endsWith("/login/oauth/access_token")) {
+    return new Response(JSON.stringify({ access_token: "fixture-app-token", expires_in: 3600 }), { status: 200 });
+  }
+  if (url.endsWith("/user")) return new Response(JSON.stringify({ login: "fixture-reviewer" }), { status: 200 });
+  return new Response(JSON.stringify({ message: "unexpected fixture URL" }), { status: 404 });
+}) as typeof fetch;
+
 async function main(): Promise<void> {
   makeRepo(workspace, "root.ts", "export const root = 1;\n");
   makeRepo(join(workspace, "nested"), "nested.ts", "export const nested = 2;\n");
   writeFileSync(join(workspace, "root.ts"), "export const root = 3;\n");
   writeFileSync(join(workspace, "untracked.md"), "fixture\n");
   process.env.CMUX_LOCALREVIEW_DATA_DIR = join(root, "daemon-data");
-  const daemon = await startGlobalDaemon({ token, open: false });
+  const githubAuth = new GitHubAuthService(
+    memorySecretStore(), githubFixtureFetch, async () => undefined, join(root, "github-apps.json"),
+  );
+  const daemon = await startGlobalDaemon({ token, open: false, githubAuthService: githubAuth });
   const base = `http://127.0.0.1:${daemon.discovery.port}`;
   const fixtures: Fixture[] = [];
   const request = async (name: string, path: string, init: RequestInit = {}, authenticated = true) => {
@@ -82,7 +110,18 @@ async function main(): Promise<void> {
   try {
     await request("health", "/health", {}, false);
     await request("unauthenticated_queue", "/api/queue", {}, false);
+    await request("browser_session_exchange", "/api/browser/session", { method: "POST", body: JSON.stringify({}) });
     await request("github_auth_status", "/api/github/auth/status");
+    await request("github_auth_configure", "/api/github/auth/configure", {
+      method: "POST", body: JSON.stringify({ capability: "read", clientId: "Iv1.fixtureRead" }),
+    });
+    await request("github_auth_device_start", "/api/github/auth/read/start", { method: "POST", body: JSON.stringify({}) });
+    await request("github_auth_device_poll", "/api/github/auth/read/poll", { method: "POST", body: JSON.stringify({}) });
+    await request("github_auth_authenticated_status", "/api/github/auth/status");
+    await request("github_auth_disconnect", "/api/github/auth/read", { method: "DELETE" });
+    await request("local_pr_requires_read_auth", "/api/local-review/pr", {
+      method: "POST", body: JSON.stringify({ remoteUrl: "https://github.com/fixture/repository/pull/1" }),
+    });
     await request("workspaces_empty", "/api/workspaces");
     await request("queue_empty", "/api/queue");
     await request("federation_nodes_empty", "/api/federation/nodes");
@@ -106,6 +145,8 @@ async function main(): Promise<void> {
     }, false);
     await request("sessions", "/api/sessions", {}, false);
     await request("review_history", "/api/review-history/comments", {}, false);
+    await request("btw_threads_empty", "/api/btw/threads", {}, false);
+    await request("btw_ask_validation", "/api/btw/ask", { method: "POST", body: JSON.stringify({}) }, false);
     await request("ui_state_empty", "/api/ui-state?key=fixture", {}, false);
     await request("ui_state_put", "/api/ui-state", { method: "PUT", body: JSON.stringify({ key: "fixture", revision: 0, value: { selectedRepo: repo.id } }) }, false);
     await request("export_prompt", "/api/export/prompt", {}, false);

@@ -18,6 +18,11 @@ Done:
   local queue lifecycle, agent routing, and federation lifecycle.
 - Extended the corpus to 59 contracts with diff query variants, line counts,
   blobs, generated-file detection, full-file projection, and comment import.
+- Extended it again to 68 contracts with a hermetic GitHub App device-flow
+  configure/start/poll/status/logout sequence, browser-session exchange,
+  read-only PR auth rejection, and `/btw` validation/list behavior. The
+  fixture auth service uses an in-memory secret store and synthetic responses;
+  no credential is captured or written to disk.
 - Fixed the Go developer build contract by generating a real Go module vendor
   tree alongside the existing `vendor/difit` and `vendor/cmux-hub` UI sources;
   plain `go build ./...` and `go test ./...` now work without a hidden
