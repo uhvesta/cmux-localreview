@@ -190,3 +190,36 @@ func TestQueueControlPlaneHTTPContract(t *testing.T) {
 		t.Fatalf("reproduce=%d %s", response.StatusCode, body)
 	}
 }
+
+func TestQueueHomeReadModelsAreAvailableBeforeWorkspaceActivation(t *testing.T) {
+	dir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d, err := Start(ctx, Options{DataDir: dir, UIDir: filepath.Join(dir, "missing-ui")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	contents, err := os.ReadFile(filepath.Join(dir, "daemon.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var discovered discovery
+	if err := json.Unmarshal(contents, &discovered); err != nil {
+		t.Fatal(err)
+	}
+	base := "http://127.0.0.1:" + fmt.Sprint(d.Port())
+	for _, path := range []string{"/api/workspaces", "/api/federation/queue", "/api/federation/nodes"} {
+		req, _ := http.NewRequest(http.MethodGet, base+path, nil)
+		req.Header.Set("Authorization", "Bearer "+discovered.Token)
+		response, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(response.Body)
+		response.Body.Close()
+		if err != nil || response.StatusCode != http.StatusOK || !strings.Contains(string(body), "nodes") && path != "/api/workspaces" {
+			t.Fatalf("%s status=%d body=%s err=%v", path, response.StatusCode, body, err)
+		}
+	}
+}

@@ -166,6 +166,46 @@ func shellQuote(value string) string {
 // explicitly; they never fall back to a Node process behind the caller.
 func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api")
+	// Queue Home is intentionally useful before a review workspace is open.
+	// These read models let the retained React landing page render against the
+	// Go daemon while workspace/diff activation is ported separately.
+	if path == "/workspaces" && r.Method == http.MethodGet {
+		rows, err := d.db.Query(`SELECT root_path,label,last_opened_at,active FROM workspace_registry ORDER BY active DESC,last_opened_at DESC`)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		defer rows.Close()
+		workspaces := []map[string]any{}
+		var active any
+		for rows.Next() {
+			var path string
+			var label sql.NullString
+			var opened int64
+			var isActive bool
+			if err := rows.Scan(&path, &label, &opened, &isActive); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			workspaces = append(workspaces, map[string]any{"workspacePath": path, "label": nullableString(label), "lastOpenedAt": opened, "active": isActive})
+			if isActive {
+				active = path
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"workspaces": workspaces, "activeWorkspace": active})
+		return
+	}
+	if path == "/federation/queue" && r.Method == http.MethodGet {
+		// The local view never fabricates remote data. Federation transport is
+		// ported separately; an empty aggregate keeps Queue Home available and
+		// communicates exactly that no remote queues are connected yet.
+		writeJSON(w, http.StatusOK, map[string]any{"nodes": []any{}})
+		return
+	}
+	if path == "/federation/nodes" && r.Method == http.MethodGet {
+		writeJSON(w, http.StatusOK, map[string]any{"nodes": []any{}})
+		return
+	}
 	if path == "/agents" {
 		switch r.Method {
 		case http.MethodGet:
@@ -406,6 +446,13 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "Go daemon API migration in progress: this route is not implemented"})
+}
+
+func nullableString(value sql.NullString) any {
+	if !value.Valid {
+		return nil
+	}
+	return value.String
 }
 
 func staticHandler(uiDir string) http.Handler {
