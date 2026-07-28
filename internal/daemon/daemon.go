@@ -1878,6 +1878,43 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"item": item})
 		return
 	}
+	// Publish a non-blocking GitHub COMMENT review without changing the local
+	// lifecycle state. This is useful for a reviewer who wants to publish
+	// collected inline feedback while keeping the queue item open.
+	if len(parts) == 3 && parts[0] == "queue" && r.Method == http.MethodPost && parts[2] == "publish-comment" {
+		var input struct {
+			Body string `json:"body"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid publish-comment input"})
+			return
+		}
+		item, err := queueStore.Get(d.db, parts[1])
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if item == nil || item.RemovedAt != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "Unknown or removed queue item"})
+			return
+		}
+		if item.Kind != "remote" || item.RemoteURL == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "GitHub comments can only be published for a remote pull-request queue item.", "code": "github_review_publish_not_remote", "localDecisionSaved": false})
+			return
+		}
+		remoteReview, publishErr := d.publishRemoteReview(r.Context(), item, githubreview.Comment, input.Body)
+		if publishErr != nil {
+			status, code := http.StatusBadGateway, "github_review_publish_failed"
+			var stale *githubreview.StaleHeadError
+			if errors.As(publishErr, &stale) {
+				status, code = http.StatusConflict, "github_review_publish_stale_head"
+			}
+			writeJSON(w, status, map[string]any{"error": publishErr.Error(), "code": code, "published": false, "localDecisionSaved": false, "item": item})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"item": item, "remoteReview": remoteReview, "published": true, "localDecisionSaved": false})
+		return
+	}
 	if len(parts) == 3 && parts[0] == "queue" && r.Method == http.MethodPost && parts[2] == "decision" {
 		var input struct {
 			Decision string `json:"decision"`

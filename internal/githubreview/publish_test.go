@@ -78,3 +78,20 @@ func TestPublishRejectsUnsafeInlinePathBeforeWrite(t *testing.T) {
 		t.Fatalf("err=%v writes=%d", err, writes)
 	}
 }
+
+func TestPublishCommentUsesCommentEventAndKeepsInlineSide(t *testing.T) {
+	var body string
+	client := Client{HTTP: transport(func(r *http.Request) (*http.Response, error) {
+		if r.Method == http.MethodGet {
+			return response(200, prJSON(fixturePR().HeadSHA, "open")), nil
+		}
+		encoded, _ := io.ReadAll(r.Body)
+		body = string(encoded)
+		return response(200, `{"id":8}`), nil
+	})}
+	file, side, line := "internal/parser.go", "old", 4
+	result, err := client.Publish(context.Background(), fixturePR(), Comment, "", []Feedback{{Body: "Please preserve old behavior", Path: &file, Side: &side, Line: &line}}, "read", "write")
+	if err != nil || result.ReviewID != 8 || !strings.Contains(body, `"event":"COMMENT"`) || !strings.Contains(body, `"side":"LEFT"`) {
+		t.Fatalf("result=%+v err=%v body=%s", result, err, body)
+	}
+}
