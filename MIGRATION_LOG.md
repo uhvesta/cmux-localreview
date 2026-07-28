@@ -172,3 +172,26 @@ Not yet claimed:
   loop.
 - `/btw`, remote PR lifecycle, federation transport, complete UI wiring, and
   packaged Electron checks remain unfinished.
+
+## 2026-07-28 — Phase 3 browser pass 1 (native web daemon)
+
+Validated manually in the local browser against a fresh `localreviewd` and a
+disposable Git workspace:
+
+- Opened Queue Home with the daemon capability in the URL fragment. The UI
+  exchanged it for its local browser session; no manual-token recovery panel
+  appeared.
+- Submitted a local snapshot through Queue Home with an absolute workspace
+  path and stable topic, then opened that workspace explicitly from the queue.
+- Confirmed the actual split diff rendered the staged base and uncommitted
+  target content.
+- Changed a tracked file while the reviewer was open, observed **Changes
+  detected — click to reload**, clicked it, and confirmed the rendered target
+  line updated from `const after = 2` to `const after = 3`.
+
+Not yet claimed:
+
+- This is the first of the two required clean Phase-3 passes. It covers the
+  web Queue Home/reviewer/watch loop only; comments, `/ask` with real OAuth,
+  `/btw`, queue decisions, remote PR UI, device flow, Electron, restart, and
+  memory checks remain in the validation matrix.
