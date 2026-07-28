@@ -111,6 +111,14 @@ func TestQueueOpenNextAndReorderOnlyActionableItems(t *testing.T) {
 	if err != nil || opened.ID != b.ID || opened.Status != InReview {
 		t.Fatalf("open next=%#v err=%v", opened, err)
 	}
+	reopened, err := Open(db, b.ID)
+	if err != nil || reopened.ID != b.ID || reopened.Status != InReview {
+		t.Fatalf("idempotent open=%#v err=%v", reopened, err)
+	}
+	decisions, err := DecisionsForItem(db, b.ID)
+	if err != nil || len(decisions) != 0 {
+		t.Fatalf("idempotent open must not add history: %#v err=%v", decisions, err)
+	}
 	if _, err = Decide(db, b.ID, Approved, ""); err != nil {
 		t.Fatal(err)
 	}

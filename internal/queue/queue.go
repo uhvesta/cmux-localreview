@@ -255,6 +255,17 @@ func Enqueue(db *sql.DB, in EnqueueInput) (*Item, bool, error) {
 	return item, true, err
 }
 func Open(db *sql.DB, itemID string) (*Item, error) {
+	item, err := Get(db, itemID)
+	if err != nil || item == nil {
+		return item, err
+	}
+	// Queue Home may be reopened after a browser or daemon restart. Opening an
+	// item already being reviewed is intentionally idempotent: it must not
+	// manufacture another decision/history entry or strand the reviewer behind
+	// an invalid lifecycle transition.
+	if item.Status == InReview {
+		return item, nil
+	}
 	return transition(db, itemID, Queued, InReview, "", false)
 }
 func OpenNext(db *sql.DB) (*Item, error) {
