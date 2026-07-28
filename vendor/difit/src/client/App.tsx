@@ -352,6 +352,32 @@ function App() {
     void operation.catch((error) => console.error('Failed to resolve comment:', error));
   }, [getCommentApiUrl, removeThread]);
 
+  const handleClearAllReviewComments = useCallback(() => {
+    if (threads.length === 0) return;
+    if (!window.confirm(`Delete all ${threads.length} formal review comment${threads.length === 1 ? '' : 's'}? Inline /ask conversations are kept.`)) {
+      return;
+    }
+
+    // Clear immediately for the reviewer, then make each deletion explicit
+    // on the daemon.  Relying only on the later whole-snapshot sync left this
+    // menu action vulnerable to a refresh or another tab winning the race.
+    const threadIds = threads.map((thread) => thread.id);
+    clearAllComments();
+    const operation = commentWriteChainRef.current.catch(() => undefined).then(async () => {
+      for (const threadId of threadIds) {
+        const response = await fetch(
+          getCommentApiUrl(`/api/comments/${encodeURIComponent(threadId)}`),
+          { method: 'DELETE' },
+        );
+        const result = (await response.json().catch(() => ({}))) as { version?: number };
+        if (!response.ok) throw new Error(`Failed to delete review comments: ${response.status}`);
+        if (typeof result.version === 'number') serverCommentVersionRef.current = result.version;
+      }
+    });
+    commentWriteChainRef.current = operation.catch(() => undefined);
+    void operation.catch((error) => console.error('Failed to delete all review comments:', error));
+  }, [clearAllComments, getCommentApiUrl, threads]);
+
   // Viewed files management
   const {
     viewedFiles,
@@ -1409,7 +1435,7 @@ function App() {
                   commentsCount={threads.length}
                   isCopiedAll={isCopiedAll}
                   onCopyAll={handleCopyAllComments}
-                  onDeleteAll={clearAllComments}
+                  onDeleteAll={handleClearAllReviewComments}
                   onViewAll={() => setIsCommentsListOpen(true)}
                 />
               )}
@@ -1685,7 +1711,7 @@ function App() {
               commentsCount={threads.length}
               isCopiedAll={isCopiedAll}
               onCopyAll={handleCopyAllComments}
-              onDeleteAll={clearAllComments}
+              onDeleteAll={handleClearAllReviewComments}
               onViewAll={() => setIsCommentsListOpen(true)}
               direction="up"
               compact

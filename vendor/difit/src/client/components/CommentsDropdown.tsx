@@ -130,9 +130,10 @@ export function CommentsDropdown({
           <button
             onClick={handleDeleteAll}
             className="w-full text-left px-3 py-2 text-xs flex items-center gap-2 text-github-text-primary hover:bg-github-bg-tertiary transition-colors"
+            title="Delete every formal review comment. Inline /ask conversations are kept."
           >
             <Eraser size={12} />
-            Cleanup All Prompt
+            Delete all review comments
           </button>
         </div>
       )}

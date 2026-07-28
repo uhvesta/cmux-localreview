@@ -204,16 +204,16 @@ describe('App Component - Clear Comments Functionality', () => {
     mockFetch(mockDiffResponse);
   });
 
-  describe('Cleanup All Prompt Button', () => {
+  describe('Delete all review comments button', () => {
     it('should not show delete button when no comments exist', async () => {
       mockComments = [];
 
       renderApp();
 
       await waitFor(() => {
-        // Cleanup All Prompt should not be visible without comments (dropdown doesn't exist)
+        // The delete action is not visible without formal review comments.
         expect(screen.queryByText('Copy All Prompt')).not.toBeInTheDocument();
-        expect(screen.queryByText('Cleanup All Prompt')).not.toBeInTheDocument();
+        expect(screen.queryByText('Delete all review comments')).not.toBeInTheDocument();
       });
     });
 
@@ -231,17 +231,18 @@ describe('App Component - Clear Comments Functionality', () => {
       });
 
       await waitFor(() => {
-        expect(screen.getByText('Cleanup All Prompt')).toBeInTheDocument();
+        expect(screen.getByText('Delete all review comments')).toBeInTheDocument();
       });
     });
 
-    it('should call clearAllComments immediately when delete button is clicked', async () => {
+    it('should call clearAllComments after confirming the delete action', async () => {
       mockComments = [
         createMockThread({ id: '1', filePath: 'test.ts', line: 10, body: 'Comment 1' }),
         createMockThread({ id: '2', filePath: 'test.ts', line: 20, body: 'Comment 2' }),
       ];
 
       renderApp();
+      mockConfirm.mockReturnValue(true);
 
       await waitFor(() => {
         // First, open the dropdown
@@ -250,11 +251,18 @@ describe('App Component - Clear Comments Functionality', () => {
       });
 
       await waitFor(() => {
-        const deleteButton = screen.getByText('Cleanup All Prompt');
+        const deleteButton = screen.getByText('Delete all review comments');
         fireEvent.click(deleteButton);
       });
 
       expect(mockClearAllComments).toHaveBeenCalled();
+      await waitFor(() => {
+        const deleteCalls = vi.mocked(global.fetch).mock.calls.filter(([url]) =>
+          String(url).startsWith('/api/comments/1?'),
+        );
+        expect(deleteCalls).toHaveLength(1);
+        expect((deleteCalls[0]?.[1] as RequestInit).method).toBe('DELETE');
+      });
     });
   });
 
@@ -525,59 +533,20 @@ describe('App Component - Comment sync', () => {
     mockFetch(mockDiffResponse);
   });
 
-  it('syncs an empty comment list after the last comment is resolved', async () => {
+  it('does not upload browser-cached comments during daemon bootstrap', async () => {
     mockComments = [
       createMockThread({ id: 'test-1', filePath: 'test.ts', line: 10, body: 'Test comment' }),
     ];
 
     const mockGlobalFetch = vi.mocked(global.fetch);
-    const { rerender } = renderApp();
+    renderApp();
 
     await waitFor(() => {
-      const commentCalls = mockGlobalFetch.mock.calls.filter(([url]) =>
-        String(url).startsWith('/api/comments?'),
-      );
-      expect(commentCalls).toHaveLength(1);
-
-      const [url, request] = commentCalls[0] as [string, RequestInit];
-      expect(url).toBe('/api/comments?base=HEAD%5E&target=HEAD');
-      expect(request.method).toBe('POST');
-      expect(JSON.parse(String(request.body))).toEqual({
-        threads: [
-          expect.objectContaining({
-            id: 'test-1',
-            filePath: 'test.ts',
-            position: { side: 'new', line: 10 },
-            messages: [
-              expect.objectContaining({
-                id: 'test-1',
-                body: 'Test comment',
-                author: 'User',
-              }),
-            ],
-          }),
-        ],
-      });
+      expect(mockReplaceThreads).toHaveBeenCalled();
     });
-
-    mockComments = [];
-    rerender(
-      <HotkeysProvider initiallyActiveScopes={['navigation']}>
-        <App />
-      </HotkeysProvider>,
-    );
-
-    await waitFor(() => {
-      const commentCalls = mockGlobalFetch.mock.calls.filter(([url]) =>
-        String(url).startsWith('/api/comments?'),
-      );
-      expect(commentCalls).toHaveLength(2);
-
-      const [url, request] = commentCalls[1] as [string, RequestInit];
-      expect(url).toBe('/api/comments?base=HEAD%5E&target=HEAD');
-      expect(request.method).toBe('POST');
-      expect(JSON.parse(String(request.body))).toEqual({ threads: [] });
-    });
+    expect(mockGlobalFetch.mock.calls.some(([url, request]) =>
+      String(url).startsWith('/api/comments?') && (request as RequestInit | undefined)?.method === 'POST',
+    )).toBe(false);
   });
 
   it('sends an empty comment list on unload when no comments remain', async () => {
