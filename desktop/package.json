@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "LOCALREVIEWD_PATH=../bazel-bin/cmd/localreviewd/localreviewd_/localreviewd electron .",
     "check": "node --check main.mjs",
+    "verify:sidecar": "sh ../scripts/verify-electron-sidecar-lifecycle.sh",
     "package": "electron-builder",
     "package:dir": "electron-builder --dir"
   },

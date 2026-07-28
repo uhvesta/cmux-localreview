@@ -63,6 +63,10 @@ jobs:
         run: bazel build //cmd/localreviewd:localreviewd
       - name: Install desktop packaging dependencies
         run: npm --prefix desktop install --no-audit --no-fund
+      - name: Verify Electron sidecar lifecycle
+        run: |
+          npm --prefix desktop run check
+          npm --prefix desktop run verify:sidecar
       - name: Package desktop application
         run: npm --prefix desktop run package -- ${{ matrix.electron_args }}
       - name: Upload desktop release payload

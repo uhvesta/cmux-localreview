@@ -15,6 +15,20 @@ npm install
 LOCALREVIEWD_PATH="$(pwd)/../bazel-bin/cmd/localreviewd/localreviewd_/localreviewd" npm run dev
 ```
 
+Before a desktop release, run the display-free sidecar check after building the
+daemon. It verifies the cold-start health handshake, the <50 MB idle-RSS
+target, shutdown/restart with the same SQLite profile, and orphan cleanup via
+`--parent-pid`:
+
+```sh
+npm run verify:sidecar
+```
+
+It deliberately does not claim a full GUI acceptance pass. Follow it with the
+Phase-3 Electron checklist in [CLI workflows](../docs/CLI-WORKFLOWS.md#desktop-shell-optional):
+open the packaged app, complete one durable review action, quit, relaunch, and
+confirm that saved state is present while the previous sidecar PID is gone.
+
 On quit, Electron sends the sidecar `SIGTERM` and escalates to `SIGKILL` only
 after three seconds. Packaging places the release `localreviewd` beside the
 Electron resources through electron-builder’s `extraResources` rule.

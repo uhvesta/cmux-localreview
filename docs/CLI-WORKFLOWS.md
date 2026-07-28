@@ -90,6 +90,20 @@ platform-specific.
 browser UI receives the daemon capability only in a URL fragment and trades it
 for the same local HttpOnly cookie described above.
 
+Run the repeatable sidecar lifecycle check before a desktop release. It uses
+the native daemon (not a mock or Electron renderer) to verify cold health,
+idle RSS below 50 MB, clean restart using the same data directory, and parent
+watchdog cleanup after a simulated shell crash:
+
+```sh
+cd desktop
+npm run verify:sidecar
+```
+
+This does not replace a real Electron UI pass: after packaging, open the app,
+make one durable review change, quit, relaunch, and verify that it remains
+while the prior sidecar PID is absent from `ps`.
+
 ## Install Copilot project skills
 
 Run this once per project, then again after upgrading localreview:

@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 
 let daemon;
 let reviewWindow;
+let opening;
 let quitting = false;
 const desktopDirectory = dirname(fileURLToPath(import.meta.url));
 const checkoutDirectory = resolve(desktopDirectory, "..");
@@ -70,7 +71,7 @@ function focusReviewWindow() {
   return true;
 }
 
-async function openReviewWindow() {
+async function startReviewWindow() {
   if (focusReviewWindow()) return;
   const dataDir = dataDirectory();
   const binary = daemonPath();
@@ -102,11 +103,26 @@ async function openReviewWindow() {
   await reviewWindow.loadURL(`${daemonOrigin}/queue#daemonToken=${encodeURIComponent(discovered.token)}`);
 }
 
+// Electron can deliver a second-instance event while its first window is still
+// waiting for the Go sidecar. Share that startup rather than spawning another
+// daemon against the same profile/SQLite database.
+async function openReviewWindow() {
+  if (focusReviewWindow()) return;
+  if (opening) return opening;
+  opening = startReviewWindow();
+  try {
+    await opening;
+  } finally {
+    opening = undefined;
+  }
+}
+
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 }
 app.on("second-instance", () => { void openReviewWindow(); });
 app.whenReady().then(openReviewWindow).catch(async (error) => {
+  stopDaemon();
   await dialog.showMessageBox({ type: "error", title: "cmux local review", message: "Could not start localreviewd", detail: String(error) });
   app.quit();
 });
