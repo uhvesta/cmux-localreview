@@ -40,6 +40,9 @@ go_library(
 
 go_test(
     name = "webassets_test",
-    srcs = ["webassets_test.go"],
+    srcs = [
+        "webassets_test.go",
+        "webassets_bazel_test.go",
+    ],
     embed = [":webassets"],
 )
