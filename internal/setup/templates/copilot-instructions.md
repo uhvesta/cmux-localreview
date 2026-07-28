@@ -2,7 +2,7 @@
 
 Use `/localreview-submit` to capture an immutable local review snapshot. It
 must use the installed native `localreview` command, never historical
-`bun src/*`, ACP, cmux keystrokes, or terminal injection.
+the retired TypeScript runtime, ACP, cmux keystrokes, or terminal injection.
 
 Formal review feedback is distinct from `/ask` side-chat: do not export or
 deliver exploratory `/ask` messages unless the reviewer explicitly converts an

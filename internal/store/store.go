@@ -109,7 +109,7 @@ func migrate(db *sql.DB) error {
 }
 
 // legacyMigrations contains every append-only migration after v1 from
-// src/server/db.ts. Keep SQL here rather than inferring it from the final
+// the retired TypeScript database implementation. Keep SQL here rather than inferring it from the final
 // schema: ALTER TABLE order, constraints, and indexes are observable to
 // existing installations.
 var legacyMigrations = map[int][]string{

@@ -89,7 +89,6 @@ not copy or regenerate either JSON corpus.
    commander
    express
    open
-   prism-svelte
    simple-git
    ws
    @types/bun
@@ -97,17 +96,19 @@ not copy or regenerate either JSON corpus.
    @types/ws
    ```
 
-   `prism-svelte` requires an additional renderer action before removal:
-   replace or remove the lazy `svelte` language-loader branch and its local
-   declaration in `vendor/difit/src/types/prism-components.d.ts`; otherwise a
-   source-only prune would break the retained UI. Do not remove a dependency
-   merely because it does not appear in a server path.
+   Keep `prism-svelte`: the retained renderer's `languageLoader.ts` lazy-loads
+   it for `.svelte` files. Do not remove a dependency merely because it does
+   not appear in a server path.
 
 5. Re-resolve `bun.lock` using the package manager after the manifest changes;
    do not hand-edit its transitive graph. Preserve dependencies imported by the
    retained React/Vite renderer and desktop packaging. Update vendoring
    provenance/documentation so it no longer claims that retired server/CLI
    source is retained.
+
+   Also remove `scripts/legacy-bin.mjs` from `scripts/BUILD.bazel`'s
+   `exports_files` list. The strict absence gate scans build metadata, so this
+   is a required cutover edit rather than a cosmetic cleanup.
 
 6. Update `README.md`, `SPEC.md`, `HANDOFF.md` (or retire the latter),
    `vendor/difit/VENDOR.md`, and CLI help documentation to describe the

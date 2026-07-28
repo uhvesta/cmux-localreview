@@ -59,10 +59,11 @@ reviewable cutover rather than a sequence of half-native states.
    retired direct dependencies: `@github/copilot-sdk`, both `@zed-industries`
    ACP packages, `@parcel/watcher`, `commander`, `express`, `open`,
    `simple-git`, `ws`, `@types/bun`, `@types/express`, and `@types/ws`.
-   `prism-svelte` has no renderer import and is retired too. Remove the root
-   `bin` map and scripts that invoke legacy tests or `tsconfig.cli`; keep only
-   Vite/React/UI-test scripts. Re-resolve the lockfile rather than editing it
-   by hand.
+   Keep `prism-svelte`: the retained renderer lazy-loads it for `.svelte`
+   files. Remove the root `bin` map and scripts that invoke legacy tests or
+   `tsconfig.cli`; replace `vendor-difit-build` with a direct Vite build and
+   retain a renderer-only typecheck/test command. Re-resolve the lockfile
+   rather than editing it by hand.
 4. From a fresh dependency installation, run the strict absence gate, UI
    clean-install build, Go/Bazel suite, release-archive gate, and the two
    complete clean-profile browser/Electron passes. A missing token or remote

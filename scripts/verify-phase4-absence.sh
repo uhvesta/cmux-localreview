@@ -131,6 +131,11 @@ fi
 # the check, as are the immutable JSON captures themselves.
 scan_roots=(cmd internal scripts desktop release .github package.json bun.lock)
 scan_excludes=(
+  # These gates intentionally contain the legacy names they diagnose. They
+  # are verifier source, not a shipped dependency edge.
+  --glob '!scripts/verify-phase4-absence.sh'
+  --glob '!scripts/verify-native-runtime-boundary.sh'
+  --glob '!scripts/verify-ui-clean-install.sh'
   --glob '!internal/daemon/parity_corpus_test.go'
   --glob '!testdata/**'
   --glob '!docs/**'
@@ -149,12 +154,38 @@ fi
 
 # These packages are server/CLI/ACP dependencies of the retired root runtime.
 # React/Vite build dependencies are intentionally not named here.
-if rg -n '"(@github/copilot-sdk|@zed-industries/agent-client-protocol|@zed-industries/claude-code-acp|@parcel/watcher|commander|express|open|simple-git|ws|@types/bun|@types/express|@types/ws|prism-svelte)"[[:space:]]*:' package.json; then
+# `prism-svelte` deliberately survives: the retained React renderer lazy-loads
+# it for .svelte files (see vendor/difit/src/client/utils/languageLoader.ts).
+# Treating it as a server dependency made the strict gate reject a valid UI.
+if rg -n '"(@github/copilot-sdk|@zed-industries/agent-client-protocol|@zed-industries/claude-code-acp|@parcel/watcher|commander|express|open|simple-git|ws|@types/bun|@types/express|@types/ws)"[[:space:]]*:' package.json; then
   fail 'retired root package dependency remains'
 fi
 
 if rg -n '"(cmux-localreview|global-daemon|queue-submit|localreview-submit|localreview-reproduce|localreview-open|localreview-demo|localreview-setup|localreview-github-app|localreview-remote|localreview-remote-daemon)"[[:space:]]*:[[:space:]]*"\./scripts/' package.json; then
   fail 'obsolete npm/bin compatibility entry remains'
+fi
+
+# The root manifest remains the renderer build/test entry point.  Assert the
+# replacement shape explicitly so a Phase-4 patch cannot delete the old CLI
+# and silently leave a server command (or no UI typecheck) behind.  jq is a
+# required host tool for the release installer checks and keeps this resilient
+# to package.json formatting changes.
+command -v jq >/dev/null || fail 'jq is required to inspect the retained UI package scripts'
+if ! jq -e '
+  (.scripts["vendor-difit-build"] // "") | test("(^|[[:space:]])vite[[:space:]]+build([[:space:]]|$)")
+' package.json >/dev/null; then
+  fail 'retained UI build script must invoke Vite directly'
+fi
+if ! jq -e '
+  (.scripts.typecheck // "") | test("vendor/difit/tsconfig\\.json")
+' package.json >/dev/null; then
+  fail 'retained UI typecheck script must check vendor/difit/tsconfig.json'
+fi
+if jq -e '
+  (.scripts // {}) | has("vendor-difit-server") or
+  ((.test // "") | test("legacy-bin|bun[[:space:]]+test"))
+' package.json >/dev/null; then
+  fail 'retired server or legacy test script remains'
 fi
 
 require_archived_corpus
