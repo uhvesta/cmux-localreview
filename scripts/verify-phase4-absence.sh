@@ -35,6 +35,10 @@ legacy_paths=(
   scripts/verify-parity-fixtures.sh
   scripts/legacy-bin.mjs
   scripts/legacy-bin.test.mjs
+  vendor/difit/src/cli
+  vendor/difit/src/server
+  vendor/difit/tsconfig.cli.json
+  tsconfig.json
 )
 
 require_archived_corpus() {
@@ -58,6 +62,15 @@ require_renderer_isolation() {
   if rg -n 'vendor/cmux-hub/(cmux|logger|review-watcher|review)|cmux-hub/(cmux|logger|review-watcher|review)' \
     vendor/difit/src/client --glob '*.{ts,tsx,js,jsx}'; then
     fail 'retained renderer imports a server-only cmux-hub TypeScript module'
+  fi
+
+  # Vite's root is vendor/difit/src/client. The adjacent upstream CLI and
+  # Express server are frozen runtime baggage, not a renderer dependency.
+  # This import check makes their Phase-4 deletion a verified operation rather
+  # than an assumption based on directory names.
+  if rg -n '(from[[:space:]]+|import[[:space:]]*\()[[:punct:]]*(@/|\.\.?/)(cli|server)/' \
+    vendor/difit/src/client --glob '*.{ts,tsx,js,jsx}'; then
+    fail 'retained renderer imports a vendored CLI or server module'
   fi
 }
 
@@ -101,6 +114,17 @@ if compgen -G 'vendor/cmux-hub/*.ts' >/dev/null; then
   exit 1
 fi
 
+# The only surviving application TypeScript after Phase 4 is the Vite
+# renderer. These source groups implement a second, vendored Node CLI/server
+# and must not remain merely because they sit inside the UI checkout.
+for path in vendor/difit/src/cli vendor/difit/src/server vendor/difit/tsconfig.cli.json tsconfig.json; do
+  test ! -e "$path" || fail "retired vendored/root TypeScript runtime remains: $path"
+done
+
+if rg -n 'tsconfig\.cli|src/(cli|server)' vendor/difit/tsconfig.json package.json; then
+  fail 'retained UI build config still references a retired CLI/server tree'
+fi
+
 # Preserve the archived JSON provenance and its Go integrity test. Everything
 # else in the shipped source/runtime surface must be clear of frozen-server,
 # ACP, and JS Copilot SDK references. Historical prose is deliberately outside
@@ -125,7 +149,7 @@ fi
 
 # These packages are server/CLI/ACP dependencies of the retired root runtime.
 # React/Vite build dependencies are intentionally not named here.
-if rg -n '"(@github/copilot-sdk|@zed-industries/agent-client-protocol|@zed-industries/claude-code-acp|@parcel/watcher|commander|express|open|simple-git|ws|@types/bun|@types/express|@types/ws)"[[:space:]]*:' package.json; then
+if rg -n '"(@github/copilot-sdk|@zed-industries/agent-client-protocol|@zed-industries/claude-code-acp|@parcel/watcher|commander|express|open|simple-git|ws|@types/bun|@types/express|@types/ws|prism-svelte)"[[:space:]]*:' package.json; then
   fail 'retired root package dependency remains'
 fi
 

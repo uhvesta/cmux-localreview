@@ -16,6 +16,8 @@ commit.
 | Compatibility package runtime | `scripts/legacy-bin.mjs`, `scripts/legacy-bin.test.mjs`, root `package.json` `bin` redirects | It makes legacy npm entry points fail with migration guidance during Phases 1–3. | Delete redirects and old `bin` entries; preserve native installer wrappers. |
 | Root server/CLI dependencies | Root `package.json` entries for Express, Commander, `simple-git`, `open`, watcher/WS, JS Copilot SDK, ACP packages, and their server-only type/test dependencies | They support only the frozen Bun server/CLI/test harness. | Prune after proving `//ui:dist` and Electron package from a clean install. Keep only React/Vite build inputs and any UI-only test dependencies. |
 | Server-only vendored TS | `vendor/cmux-hub/{cmux,logger,review-watcher,review}.ts` | Imported solely by frozen server behavior. | Delete `.ts` modules after confirming React imports none. Keep licensing/provenance records as needed. |
+| Vendored difit server/CLI | `vendor/difit/src/{server,cli}/` and `vendor/difit/tsconfig.cli.json` | These are an older Express/simple-git server and Commander CLI that happen to live beside the retained React renderer. Vite starts at `src/client`; it does not import either tree. | Delete both source trees and the CLI TypeScript config. Remove the `tsconfig.cli.json` project reference from `vendor/difit/tsconfig.json` and the root script that invokes it. Preserve `vendor/difit/src/{client,types,utils}` because the renderer imports the latter two. |
+| Root TypeScript server config | root `tsconfig.json` | It type-checks only `src/**` and declares Bun globals; it does not type-check the retained renderer. | Delete it with `src/` and remove `@types/bun`. The retained renderer is type-checked directly through `vendor/difit/tsconfig.json`. |
 
 ## Preserve after deletion
 
@@ -25,6 +27,7 @@ commit.
 | `testdata/parity/ts-final/remote-pr.json` | `TestFrozenRemotePullRequestLifecycleParity` | Immutable remote PR lifecycle oracle. |
 | `internal/daemon/parity_corpus_test.go` | Go/Bazel release tests | Pins corpus SHA-256/provenance. Its historical `generatedBy` strings are intentional. |
 | `scripts/verify-frozen-parity-corpus.sh`, `scripts/verify-go-parity-matrix.sh` | Native release gate | Verify/replay the archive without Bun, Node, `src/`, or capture scripts. |
+| `vendor/difit/src/{client,types,utils}`, `vendor/difit/{vite.config.ts,tsconfig.json,postcss.config.js}` | Vite/React build | The renderer entry graph uses only these source groups. The retained TypeScript is build-time UI code, not a server/CLI runtime. |
 
 ## Gate behavior
 
@@ -39,6 +42,32 @@ parity-matrix gates. It never launches Bun/Node or imports `src/`; it is safe
 to use as the final stop-line test immediately before a reviewed deletion
 commit. It is not a replacement for the two clean browser/Electron Phase-3
 passes recorded in `MIGRATION_LOG.md`.
+
+## Exact deletion commit order
+
+This order is intentionally concrete so Phase 4 can be performed as one
+reviewable cutover rather than a sequence of half-native states.
+
+1. From a clean checkout, run the Phase-3 exit evidence and the native
+   pre-delete gate. Do not mutate the frozen parity JSON after this point.
+2. Remove `src/`, the three capture scripts, legacy bin script/test, the four
+   `vendor/cmux-hub/*.ts` modules, and the vendored difit `src/server` and
+   `src/cli` trees. Delete root `tsconfig.json` and
+   `vendor/difit/tsconfig.cli.json`; remove the latter from the renderer
+   `tsconfig.json` project references.
+3. Prune root `package.json`/`bun.lock` in the same commit. The following are
+   retired direct dependencies: `@github/copilot-sdk`, both `@zed-industries`
+   ACP packages, `@parcel/watcher`, `commander`, `express`, `open`,
+   `simple-git`, `ws`, `@types/bun`, `@types/express`, and `@types/ws`.
+   `prism-svelte` has no renderer import and is retired too. Remove the root
+   `bin` map and scripts that invoke legacy tests or `tsconfig.cli`; keep only
+   Vite/React/UI-test scripts. Re-resolve the lockfile rather than editing it
+   by hand.
+4. From a fresh dependency installation, run the strict absence gate, UI
+   clean-install build, Go/Bazel suite, release-archive gate, and the two
+   complete clean-profile browser/Electron passes. A missing token or remote
+   service must exercise the UI's recovery path rather than turn this into a
+   skipped workflow.
 
 The strict form fails if any retired path/module remains, if root package
 dependencies still name the retired JS server/ACP runtime, or if a non-exempt
