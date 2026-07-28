@@ -675,8 +675,9 @@ describe('App Component - Diff Mode Persistence', () => {
     fireEvent.click(refreshButton);
 
     await waitFor(() => {
-      // 4 calls: initial /api/diff, /api/revisions, initial /api/comments sync, and refresh /api/diff
-      expect(mockGlobalFetch).toHaveBeenCalledTimes(4);
+      // 6 calls: the normal four diff calls plus the read-only /ask model
+      // defaults and saved review-plan lookup. Neither can start Copilot.
+      expect(mockGlobalFetch).toHaveBeenCalledTimes(6);
     });
 
     await waitFor(() => {

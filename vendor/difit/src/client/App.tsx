@@ -31,6 +31,7 @@ import { HelpModal } from './components/HelpModal';
 import { Logo } from './components/Logo';
 import { ReloadButton } from './components/ReloadButton';
 import { RevisionDetailModal } from './components/RevisionDetailModal';
+import { ReviewPlanPanel, type ReviewPlanHunk, type ReviewPlanRecord, type ReviewPlanView } from './components/ReviewPlanPanel';
 import { SettingsModal } from './components/SettingsModal';
 import { SparkleAnimation } from './components/SparkleAnimation';
 import { WordHighlightProvider } from './contexts/WordHighlightContext';
@@ -46,6 +47,7 @@ import { useViewport } from './hooks/useViewport';
 import { fetchClientSettings, saveClientSettings } from './services/userSettings';
 import { hasMultipleCommentAuthors } from './utils/commentAuthors';
 import { copyTextToClipboard } from './utils/clipboard';
+import { daemonFetch } from './services/daemonAuth';
 import { getFileElementId } from './utils/domUtils';
 import { findCommentPosition } from './utils/navigation/positionHelpers';
 import { resolveEventSourceUrl } from './utils/eventSourceUrl';
@@ -71,6 +73,23 @@ interface ReviewUiState {
   fullFileOpenFor?: string[];
   lastFilePath?: string;
   scrollTop?: number;
+}
+
+interface AskDefaults {
+  model?: string | null;
+  reasoningEffort?: string | null;
+  contextTier?: string | null;
+}
+interface AskModel { id: string; name?: string; }
+
+interface ReviewPlanApiPlan extends ReviewPlanRecord {
+  request?: { hunks?: ReviewPlanHunk[] };
+}
+
+interface ReviewPlanApiResponse {
+  state?: 'empty' | 'ready' | 'error' | 'stale';
+  plan?: ReviewPlanApiPlan;
+  stalePlan?: ReviewPlanApiPlan;
 }
 
 function getReviewUiStateKey(): string {
@@ -180,6 +199,16 @@ function App() {
     () => new Set(initialReviewUiState.collapsedFiles),
   );
   const [lastFilePath, setLastFilePath] = useState(initialReviewUiState.lastFilePath ?? '');
+  const [reviewPlanView, setReviewPlanView] = useState<ReviewPlanView>('canonical');
+  const [reviewPlan, setReviewPlan] = useState<ReviewPlanApiPlan | null>(null);
+  const [staleReviewPlan, setStaleReviewPlan] = useState(false);
+  const [reviewPlanLoading, setReviewPlanLoading] = useState(false);
+  const [reviewPlanGenerating, setReviewPlanGenerating] = useState(false);
+  const [reviewPlanError, setReviewPlanError] = useState<string | null>(null);
+  const [askDefaults, setAskDefaults] = useState<AskDefaults | null>(null);
+  const [askModels, setAskModels] = useState<AskModel[]>([]);
+  const [reviewPlanModel, setReviewPlanModel] = useState('');
+  const [activePlanHunkID, setActivePlanHunkID] = useState<string | null>(null);
   const collapsedInitializedRef = useRef(false);
   const diffScrollContainerRef = useRef<HTMLElement | null>(null);
 
@@ -787,6 +816,66 @@ function App() {
     [setCursorPosition],
   );
 
+  const reviewPlanHunks = useMemo(() => {
+    if (!staleReviewPlan && reviewPlan?.request?.hunks?.length) return reviewPlan.request.hunks;
+    return diffData?.files.flatMap((file) => file.chunks.map((chunk, chunkIndex) => ({
+      id: `canonical:${file.path}:${chunkIndex}`, path: file.path, header: chunk.header,
+      oldStart: chunk.oldStart, newStart: chunk.newStart,
+    }))) ?? [];
+  }, [diffData, reviewPlan, staleReviewPlan]);
+
+  const openReviewPlanHunk = useCallback((hunkID: string) => {
+    if (!diffData) return;
+    const hunk = reviewPlanHunks.find((candidate) => candidate.id === hunkID);
+    if (!hunk) return;
+    const fileIndex = diffData.files.findIndex((file) => file.path === hunk.path);
+    if (fileIndex < 0) return;
+    const file = diffData.files[fileIndex];
+    if (!file) return;
+    const chunkIndex = file.chunks.findIndex((chunk) => chunk.header === hunk.header
+      && (hunk.oldStart === undefined || chunk.oldStart === hunk.oldStart)
+      && (hunk.newStart === undefined || chunk.newStart === hunk.newStart));
+    if (chunkIndex < 0) return;
+    setActivePlanHunkID(hunkID);
+    ensureFilesRenderedUpTo(file.path);
+    scrollFileIntoDiffContainer(file.path);
+    setCursorPosition({ fileIndex, chunkIndex, lineIndex: 0, side: 'right' });
+  }, [diffData, ensureFilesRenderedUpTo, reviewPlanHunks, scrollFileIntoDiffContainer, setCursorPosition]);
+
+  const moveReviewPlanHunk = useCallback((direction: -1 | 1) => {
+    if (!reviewPlanHunks.length) return;
+    const current = activePlanHunkID ? reviewPlanHunks.findIndex((hunk) => hunk.id === activePlanHunkID) : -1;
+    const next = current < 0
+      ? (direction > 0 ? 0 : reviewPlanHunks.length - 1)
+      : (current + direction + reviewPlanHunks.length) % reviewPlanHunks.length;
+    const nextHunk = reviewPlanHunks[next];
+    if (nextHunk) openReviewPlanHunk(nextHunk.id);
+  }, [activePlanHunkID, openReviewPlanHunk, reviewPlanHunks]);
+
+  const handleGenerateReviewPlan = useCallback(async () => {
+    if (!diffData || !reviewPlanModel) {
+      setReviewPlanError('Choose a Copilot model for this review plan, or configure one in /ask.');
+      return;
+    }
+    const body: Record<string, unknown> = { model: reviewPlanModel, ignoreWhitespace, refresh: Boolean(reviewPlan || staleReviewPlan) };
+    if (askDefaults?.reasoningEffort) body.reasoningEffort = askDefaults.reasoningEffort;
+    if (askDefaults?.contextTier) body.contextTier = askDefaults.contextTier;
+    if (diffData.baseCommitish) body.base = diffData.baseCommitish;
+    if (diffData.targetCommitish) body.target = diffData.targetCommitish;
+    setReviewPlanGenerating(true); setReviewPlanError(null);
+    try {
+      const response = await fetch(resolveApiUrl('/api/hunk-review-plan'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error || 'Copilot could not generate a review plan.');
+      }
+      const payload = await response.json() as ReviewPlanApiResponse;
+      setReviewPlan(payload.plan ?? null); setStaleReviewPlan(false); setReviewPlanView('plan');
+    } catch (err) {
+      setReviewPlanError(err instanceof Error ? err.message : 'Copilot could not generate a review plan.');
+    } finally { setReviewPlanGenerating(false); }
+  }, [askDefaults, diffData, ignoreWhitespace, reviewPlan, reviewPlanModel, staleReviewPlan]);
+
   const handleCommentTriggerHandled = useCallback(() => {
     setCommentTrigger(null);
   }, [setCommentTrigger]);
@@ -892,6 +981,55 @@ function App() {
   useEffect(() => {
     void fetchDiffData();
   }, [fetchDiffData]);
+
+  // A review plan is an optional, immutable annotation of this exact diff.
+  // These reads intentionally have no SDK side effect; generating is handled
+  // only by handleGenerateReviewPlan below.
+  useEffect(() => {
+    let cancelled = false;
+    void daemonFetch('/api/ask/models')
+      .then(async (response) => {
+        if (!response.ok) return null;
+        const data = await response.json() as { workspaceDefaults?: AskDefaults; models?: AskModel[] };
+        return { defaults: data.workspaceDefaults ?? null, models: Array.isArray(data.models) ? data.models : [] };
+      })
+      .then((value) => {
+        if (cancelled) return;
+        setAskDefaults(value?.defaults ?? null);
+        setAskModels(value?.models ?? []);
+        setReviewPlanModel((current) => current || value?.defaults?.model || value?.models[0]?.id || '');
+      })
+      .catch(() => { if (!cancelled) { setAskDefaults(null); setAskModels([]); } });
+    return () => { cancelled = true; };
+  }, []);
+
+  const readReviewPlan = useCallback(async () => {
+    if (!diffData || !reviewPlanModel) {
+      setReviewPlan(null); setStaleReviewPlan(false); setReviewPlanLoading(false);
+      return;
+    }
+    const params = new URLSearchParams({
+      model: reviewPlanModel,
+      ignoreWhitespace: String(ignoreWhitespace),
+    });
+    if (askDefaults?.reasoningEffort) params.set('reasoningEffort', askDefaults.reasoningEffort);
+    if (askDefaults?.contextTier) params.set('contextTier', askDefaults.contextTier);
+    if (diffData.baseCommitish) params.set('base', diffData.baseCommitish);
+    if (diffData.targetCommitish) params.set('target', diffData.targetCommitish);
+    setReviewPlanLoading(true); setReviewPlanError(null);
+    try {
+      const response = await fetch(`${resolveApiUrl('/api/hunk-review-plan')}?${params}`);
+      if (!response.ok) throw new Error('Could not load the saved Copilot review plan.');
+      const payload = await response.json() as ReviewPlanApiResponse;
+      setReviewPlan(payload.state === 'stale' ? payload.stalePlan ?? null : payload.plan ?? null);
+      setStaleReviewPlan(payload.state === 'stale');
+    } catch (err) {
+      setReviewPlan(null); setStaleReviewPlan(false);
+      setReviewPlanError(err instanceof Error ? err.message : 'Could not load the saved Copilot review plan.');
+    } finally { setReviewPlanLoading(false); }
+  }, [askDefaults, diffData, ignoreWhitespace, reviewPlanModel]);
+
+  useEffect(() => { void readReviewPlan(); }, [readReviewPlan]);
 
   useEffect(() => {
     return () => {
@@ -1611,6 +1749,25 @@ function App() {
             }}
             className={`flex-1 overflow-y-auto ${showMobileCommentsBar ? 'pb-16' : ''}`}
           >
+            <div className="mx-4 mt-4">
+              <ReviewPlanPanel
+                view={reviewPlanView}
+                onViewChange={setReviewPlanView}
+                models={askModels}
+                model={reviewPlanModel}
+                onModelChange={(model) => { setReviewPlanModel(model); setActivePlanHunkID(null); }}
+                hunks={reviewPlanHunks}
+                record={reviewPlan ?? (reviewPlanError ? { state: 'error', error: reviewPlanError } : null)}
+                stale={staleReviewPlan}
+                loading={reviewPlanLoading}
+                generating={reviewPlanGenerating}
+                onGenerate={() => void handleGenerateReviewPlan()}
+                activeHunkId={activePlanHunkID}
+                onOpenHunk={openReviewPlanHunk}
+                onPreviousHunk={() => moveReviewPlanHunk(-1)}
+                onNextHunk={() => moveReviewPlanHunk(1)}
+              />
+            </div>
             {diffData.files.map((file, fileIndex) => {
               const fileThreads = threadsByFile.get(file.path) ?? EMPTY_COMMENT_THREADS;
               const mergedChunks =
