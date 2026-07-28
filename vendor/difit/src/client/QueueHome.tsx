@@ -53,9 +53,9 @@ interface GitHubCapabilityStatus {
   message?: string;
 }
 interface GitHubAuthStatus {
-  // Device OAuth is the safe default: a GitHub OAuth App needs a registered
-  // callback URL, while a local machine may not reserve the optional loopback
-  // callback port. Keep this a string so older daemons still render safely.
+  // Browser OAuth is the default through a stable registered callback; device
+  // code remains the explicit SSH/headless fallback. Keep this a string so
+  // older daemons still render safely.
   provider: string;
   capabilities: Record<GitHubCapability, GitHubCapabilityStatus>;
 }
@@ -136,7 +136,7 @@ export function QueueHome() {
   const [githubCapability, setGithubCapability] = useState<GitHubCapability>('read');
   const [githubClientId, setGithubClientId] = useState('');
   const [githubAction, setGithubAction] = useState<GitHubCapability | null>(null);
-  const [githubFlow, setGithubFlow] = useState<'loopback' | 'device'>('device');
+  const [githubFlow, setGithubFlow] = useState<'loopback' | 'device'>('loopback');
   const [deviceCode, setDeviceCode] = useState<{ capability: GitHubCapability; userCode: string; verificationUri: string } | null>(null);
   const [loopbackLogin, setLoopbackLogin] = useState<{ capability: GitHubCapability; authorizationUrl: string } | null>(null);
   const [showHistory, setShowHistory] = useState(true);
@@ -384,7 +384,7 @@ export function QueueHome() {
       <button type="submit" disabled={!daemonToken.trim()} style={buttonStyle}>Connect</button>
     </form>}
     {githubAuth && <section aria-label="GitHub App connections" style={{ margin: '0 0 18px', padding: 12, border: '1px solid rgba(127,127,127,0.42)', borderRadius: 8 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}><div><strong>GitHub App connections</strong><p style={{ margin: '4px 0 0', fontSize: 12, opacity: 0.74 }}>Separate, least-privilege App grants. Device OAuth is the default; browser OAuth is available only for a registered loopback callback. The daemon keeps tokens and client secrets in the system secret store, never in this page.</p></div><button onClick={() => void refreshGitHubAuth()} disabled={githubAuthLoading} style={buttonStyle}>{githubAuthLoading ? 'Checking…' : 'Refresh status'}</button></div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}><div><strong>GitHub App connections</strong><p style={{ margin: '4px 0 0', fontSize: 12, opacity: 0.74 }}>Separate, least-privilege App grants. Browser OAuth is the default through a registered loopback callback; device code is the SSH/headless fallback. The daemon keeps tokens and client secrets in the system secret store, never in this page.</p></div><button onClick={() => void refreshGitHubAuth()} disabled={githubAuthLoading} style={buttonStyle}>{githubAuthLoading ? 'Checking…' : 'Refresh status'}</button></div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(225px, 1fr))', gap: 9, marginTop: 10 }}>
         {(Object.keys(capabilityLabels) as GitHubCapability[]).map((capability) => {
           const status = githubAuth.capabilities[capability];
@@ -402,8 +402,8 @@ export function QueueHome() {
       <label style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 11, fontSize: 12 }}>
         Authorization method
         <select value={githubFlow} onChange={(event) => setGithubFlow(event.target.value as 'loopback' | 'device')} style={{ ...buttonStyle, padding: '5px 7px' }} aria-label="GitHub authorization method">
-          <option value="device">Device code (recommended)</option>
-          <option value="loopback">Browser OAuth (registered callback required)</option>
+          <option value="loopback">Browser OAuth (recommended; registered callback required)</option>
+          <option value="device">Device code (SSH/headless fallback)</option>
         </select>
       </label>
       <form onSubmit={configureGitHubApp} style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginTop: 11 }} aria-label="Configure GitHub App client ID">

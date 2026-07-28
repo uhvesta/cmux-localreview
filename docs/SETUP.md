@@ -104,10 +104,10 @@ The native daemon has three separate capabilities:
 Create the appropriate dedicated GitHub **OAuth App** client registrations and
 configure their public client IDs. `localreview github-app` is a retained
 compatibility command name; it configures OAuth clients rather than GitHub App
-installations. The default device flow does not need a loopback callback. The
-opt-in loopback flow requires the registered
+installations. The default browser loopback flow requires the registered
 `http://127.0.0.1:8787/oauth/callback` URI and an OAuth client secret supplied
-through stdin, never argv or shell history.
+through stdin, never argv or shell history. Use `--device` for a headless or
+SSH-only host.
 
 ```sh
 localreview github-app guide

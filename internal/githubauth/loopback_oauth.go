@@ -54,11 +54,11 @@ func (s *ServiceClient) SetClientSecret(c Capability, secret string) error {
 	return s.Secrets.Set(Service, clientSecretAccount(c), secret)
 }
 
-// StartLoopback is an opt-in browser flow. GitHub OAuth App registrations need
-// a pre-registered redirect URI, so the callback is deliberately stable rather
-// than an ephemeral :0 port. The operator must register exactly
-// http://127.0.0.1:8787/oauth/callback before selecting this flow; otherwise
-// use the default device flow.
+// StartLoopback is the primary browser flow. GitHub OAuth App registrations
+// need a pre-registered redirect URI, so the callback is deliberately stable
+// rather than an ephemeral :0 port. The operator must register exactly
+// http://127.0.0.1:8787/oauth/callback; use the device fallback only for a
+// headless or SSH-only machine.
 func (s *ServiceClient) StartLoopback(ctx context.Context, c Capability) (*LoopbackFlow, error) {
 	id, err := s.clientID(c)
 	if err != nil {

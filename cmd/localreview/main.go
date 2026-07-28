@@ -399,8 +399,8 @@ func authCommand(args []string) error {
 		capability := flags.String("capability", "copilot", "GitHub App capability: read, write, or copilot")
 		clientID := flags.String("client-id", "", "public GitHub App client ID to configure before login")
 		clientSecretStdin := flags.Bool("client-secret-stdin", false, "read the OAuth client secret from stdin and store it in the OS secret store")
-		device := flags.Bool("device", false, "use the default device OAuth flow")
-		loopback := flags.Bool("loopback", false, "use browser OAuth with registered http://127.0.0.1:8787/oauth/callback")
+		device := flags.Bool("device", false, "use device OAuth for a headless or SSH-only machine")
+		loopback := flags.Bool("loopback", false, "use the default browser OAuth callback http://127.0.0.1:8787/oauth/callback")
 		noWait := flags.Bool("no-wait", false, "print authorization instructions without polling")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
@@ -430,9 +430,9 @@ func authCommand(args []string) error {
 				return err
 			}
 		}
-		flow := "device"
-		if *loopback {
-			flow = "loopback"
+		flow := "loopback"
+		if *device {
+			flow = "device"
 		}
 		_, response, err := daemonCall(http.MethodPost, "/github/auth/"+*capability+"/start", map[string]string{"flow": flow})
 		if err != nil {
@@ -494,8 +494,8 @@ func githubAppCommand(args []string) error {
 		fmt.Fprintln(os.Stdout, "Create dedicated GitHub OAuth Apps for cmux-localreview capabilities: read, write, and copilot.")
 		fmt.Fprintln(os.Stdout, "Use minimum permissions for each capability. Configure each app with a loopback callback and device flow, then run:")
 		fmt.Fprintln(os.Stdout, "  localreview github-app configure --capability copilot --client-id <client-id>")
-		fmt.Fprintln(os.Stdout, "  localreview github-app connect --capability copilot  # device flow (default)")
-		fmt.Fprintln(os.Stdout, "  localreview github-app connect --capability copilot --loopback  # requires registered http://127.0.0.1:8787/oauth/callback")
+		fmt.Fprintln(os.Stdout, "  localreview github-app connect --capability copilot  # browser loopback (default; register http://127.0.0.1:8787/oauth/callback)")
+		fmt.Fprintln(os.Stdout, "  localreview github-app connect --capability copilot --device  # SSH/headless fallback")
 		fmt.Fprintln(os.Stdout, "Tokens and optional client secrets stay in the OS secret store; they are never printed by this CLI.")
 		return nil
 	}
@@ -542,8 +542,8 @@ func githubAppCommand(args []string) error {
 	case "connect":
 		flags := flag.NewFlagSet("github-app connect", flag.ContinueOnError)
 		capability := flags.String("capability", "", "GitHub App capability: read, write, or copilot")
-		device := flags.Bool("device", false, "use the default device OAuth flow")
-		loopback := flags.Bool("loopback", false, "use registered browser OAuth callback http://127.0.0.1:8787/oauth/callback")
+		device := flags.Bool("device", false, "use device OAuth for a headless or SSH-only machine")
+		loopback := flags.Bool("loopback", false, "use the default registered browser OAuth callback http://127.0.0.1:8787/oauth/callback")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -554,10 +554,10 @@ func githubAppCommand(args []string) error {
 			return errors.New("choose only one of --device or --loopback")
 		}
 		loginArgs := []string{"login", "--capability", *capability}
-		if *loopback {
-			loginArgs = append(loginArgs, "--loopback")
-		} else if *device {
+		if *device {
 			loginArgs = append(loginArgs, "--device")
+		} else if *loopback {
+			loginArgs = append(loginArgs, "--loopback")
 		}
 		return authCommand(loginArgs)
 	default:

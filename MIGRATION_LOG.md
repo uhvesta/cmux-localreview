@@ -430,3 +430,27 @@ Not yet claimed:
 - This is still fixture-backed validation. A real authenticated SDK session,
   all inline click targets, and the renderer-level Electron checklist remain
   required in each of the two clean Phase-3 passes.
+
+## 2026-07-28 — Restored loopback OAuth as the primary native flow
+
+Done:
+
+- Restored the migration-spec auth contract after auditing the implementation:
+  browser OAuth through the stable, registered
+  `http://127.0.0.1:8787/oauth/callback` is again the default for CLI and
+  Queue Home. Device OAuth is explicitly retained for SSH/headless use.
+- Kept the security hardening that motivated the earlier change: the callback
+  is fixed and documented, client secrets are required only in the daemon's
+  secret store, and neither secrets nor tokens reach browser JavaScript.
+
+Validated:
+
+- GitHub auth API, daemon HTTP contract, CLI tests, TypeScript check, and the
+  native `/btw` component smoke pass. The daemon contract verifies default
+  loopback start plus explicit device fallback without exposing a client secret.
+
+Not yet claimed:
+
+- A real OAuth App registration and user authorization have not been created
+  during this fixture validation; that live authorization remains a Phase-3
+  workflow check.

@@ -60,10 +60,9 @@ var parityMatrix = map[string]parityDisposition{
 	"browser_session_exchange": {Execute: true},
 	"github_auth_status":       {Execute: true},
 	"github_auth_configure":    {Execute: true},
-	// The native daemon defaults to device OAuth. The frozen device payload
-	// therefore exercises the supported default rather than an implicit
-	// loopback callback.
-	"github_auth_device_start":         {Execute: true, DeviceFlow: true, Reason: "Native defaults to device OAuth."},
+	// The native daemon defaults to registered loopback OAuth; this frozen row
+	// explicitly exercises the SSH/headless device fallback.
+	"github_auth_device_start":         {Execute: true, DeviceFlow: true, Reason: "Native device-flow fallback."},
 	"github_auth_device_poll":          {Execute: true},
 	"github_auth_authenticated_status": {Execute: true},
 	"github_auth_disconnect":           {Execute: true},

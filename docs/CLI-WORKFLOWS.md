@@ -203,11 +203,9 @@ localreview auth status
 localreview auth logout copilot
 ```
 
-The default flow is the state-verified GitHub device flow. It is reliable on
-both desktop and headless hosts and does not need a redirect callback.
-`--loopback` is an opt-in browser flow only for an OAuth App that has registered
-exactly `http://127.0.0.1:8787/oauth/callback`; it requires the configured
-OAuth client secret. Tokens
+The default flow is state-verified browser OAuth through the registered stable
+callback `http://127.0.0.1:8787/oauth/callback`; it requires the configured
+OAuth client secret. Use `--device` for an SSH/headless host. Tokens
 and client secrets are stored only through the OS secret store and never
 returned to the browser or CLI output. When credentials or the Copilot SDK are
 unavailable, the picker reports an unauthenticated/fallback state instead of
@@ -221,7 +219,7 @@ the native CLI retains its setup vocabulary as a thin, secure alias:
 localreview github-app guide
 localreview github-app configure --capability copilot --client-id "$COPILOT_APP_CLIENT_ID"
 localreview github-app connect --capability copilot       # device flow (default)
-localreview github-app connect --capability copilot --loopback
+localreview github-app connect --capability copilot
 localreview github-app status
 localreview github-app disconnect --capability copilot
 ```
