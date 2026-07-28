@@ -120,6 +120,10 @@ func TestShellQuoteCLI(t *testing.T) {
 func TestOpenPullRequestUsesReadOnlyEndpointAndNeverQueues(t *testing.T) {
 	requests := make([]string, 0, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			_, _ = io.WriteString(w, `{"ok":true,"pid":1234,"version":"test"}`)
+			return
+		}
 		requests = append(requests, r.Method+" "+r.URL.Path)
 		if r.URL.Path != "/api/local-review/pr" {
 			http.Error(w, "queue insertion is forbidden for --pr", http.StatusInternalServerError)

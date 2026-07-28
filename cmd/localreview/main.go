@@ -215,11 +215,105 @@ func discovered() (discovery, error) {
 	return value, nil
 }
 
+// daemonExecutable resolves the native sidecar without assuming a developer
+// checkout or a globally installed binary. Release archives put both binaries
+// next to each other; PATH remains useful for contributor builds.
+func daemonExecutable() (string, error) {
+	self, selfErr := os.Executable()
+	if selfErr == nil {
+		name := "localreviewd"
+		if runtime.GOOS == "windows" {
+			name += ".exe"
+		}
+		candidate := filepath.Join(filepath.Dir(self), name)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate, nil
+		}
+	}
+	path, err := exec.LookPath("localreviewd")
+	if err != nil {
+		return "", errors.New("localreviewd is not running and its native binary was not found beside localreview or on PATH")
+	}
+	return path, nil
+}
+
+// readyDaemon is the CLI's lifecycle boundary. Commands never touch SQLite
+// directly: when the daemon is absent or stale, they start exactly one native
+// loopback daemon and wait for its owner-only discovery record to become
+// healthy. This gives release installs the promised `localreview open` / submit
+// first-run behavior without reusing a process whose identity cannot be
+// verified.
+func readyDaemon() (discovery, error) {
+	if current, err := discovered(); err == nil {
+		if health, healthErr := healthFor(current); healthErr == nil && (current.PID <= 0 || health.PID == current.PID) {
+			return current, nil
+		}
+	}
+	dir, err := dataDir()
+	if err != nil {
+		return discovery{}, err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return discovery{}, err
+	}
+	lockPath := filepath.Join(dir, "daemon-start.lock")
+	lock, lockErr := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if lockErr != nil {
+		if !errors.Is(lockErr, os.ErrExist) {
+			return discovery{}, lockErr
+		}
+		// Another CLI invocation owns startup. Wait for its authenticated
+		// discovery record instead of racing it with another daemon.
+		deadline := time.Now().Add(8 * time.Second)
+		for time.Now().Before(deadline) {
+			if current, readErr := discovered(); readErr == nil {
+				if health, healthErr := healthFor(current); healthErr == nil && (current.PID <= 0 || health.PID == current.PID) {
+					return current, nil
+				}
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		return discovery{}, errors.New("another localreview command is starting localreviewd but it did not become healthy within 8 seconds")
+	}
+	_ = lock.Close()
+	defer os.Remove(lockPath)
+	// A stale discovery record must never be treated as authority. It is safe to
+	// replace only this exact daemon-owned record after its health check failed.
+	_ = os.Remove(filepath.Join(dir, "daemon.json"))
+	binary, err := daemonExecutable()
+	if err != nil {
+		return discovery{}, err
+	}
+	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		return discovery{}, err
+	}
+	command := exec.Command(binary, "--port", "0")
+	command.Env = append(os.Environ(), "CMUX_LOCALREVIEW_DATA_DIR="+dir)
+	command.Stdout = devNull
+	command.Stderr = devNull
+	if err := command.Start(); err != nil {
+		_ = devNull.Close()
+		return discovery{}, fmt.Errorf("start localreviewd: %w", err)
+	}
+	_ = devNull.Close()
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		if current, readErr := discovered(); readErr == nil {
+			if health, healthErr := healthFor(current); healthErr == nil && (current.PID <= 0 || health.PID == current.PID) {
+				return current, nil
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return discovery{}, errors.New("started localreviewd but it did not become healthy within 8 seconds; run `localreview daemon status` for diagnostics")
+}
+
 // daemonCall is the only HTTP boundary used by native CLI subcommands. The
 // daemon capability is read from its owner-only discovery record and never
 // printed or stored by the CLI.
 func daemonCall(method, apiPath string, body any) (int, json.RawMessage, error) {
-	d, err := discovered()
+	d, err := readyDaemon()
 	if err != nil {
 		return 0, nil, err
 	}
@@ -528,7 +622,7 @@ func submit(args []string) error {
 	if err != nil {
 		return err
 	}
-	d, err := discovered()
+	d, err := readyDaemon()
 	if err != nil {
 		return err
 	}
@@ -678,7 +772,7 @@ func openHome(args []string) error {
 	if flags.NArg() > 1 || (*queueItem != "" && flags.NArg() != 0) || (*pullRequest != "" && (flags.NArg() != 0 || *queueItem != "")) {
 		return errors.New("usage: localreview open [--no-open] [--queue-item ID | --pr URL] [workspace-path]")
 	}
-	d, err := discovered()
+	d, err := readyDaemon()
 	if err != nil {
 		return err
 	}
