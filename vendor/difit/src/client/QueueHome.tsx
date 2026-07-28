@@ -309,7 +309,11 @@ export function QueueHome() {
     if (!workspacePath) { setError('Enter the local workspace path to snapshot.'); return; }
     setSubmittingLocal(true); setError(null);
     try {
-      const response = await daemonFetch('/api/queue', {
+      // Local Queue Home submission is an immutable capture, not a bare
+      // queue-row insert.  The generic /api/queue route remains available for
+      // imported/remote metadata, but using it here would make the
+      // “Snapshotting…” UI label misleading and leave no reproducible bundle.
+      const response = await daemonFetch('/api/queue/hook', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ workspacePath, title: localTitle.trim() || undefined, topic: localTopic.trim() || undefined }),
       });
