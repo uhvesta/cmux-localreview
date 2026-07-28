@@ -46,11 +46,12 @@ type frozenParityFixture struct {
 // of the parity gate: every frozen fixture must either be replayed below or
 // carry one concrete, reviewable reason that it cannot be replayed yet.
 type parityDisposition struct {
-	Execute               bool
-	Reason                string
-	ForceDaemonCapability bool
-	DeviceFlow            bool
-	NativeAskSettings     bool
+	Execute                 bool
+	Reason                  string
+	ForceDaemonCapability   bool
+	DeviceFlow              bool
+	NativeAskSettings       bool
+	NativeCommentCollection bool
 }
 
 var parityMatrix = map[string]parityDisposition{
@@ -87,10 +88,13 @@ var parityMatrix = map[string]parityDisposition{
 	"new_session":                 {Execute: true, ForceDaemonCapability: true, Reason: "Native capability boundary is intentionally stricter than frozen TS."},
 	"sessions":                    {Execute: true, ForceDaemonCapability: true, Reason: "Native capability boundary is intentionally stricter than frozen TS."},
 
-	"repo_revisions":      {Execute: true, ForceDaemonCapability: true, Reason: "Replayed with the daemon capability: native reviewer reads are deliberately capability-protected."},
-	"repo_comments_empty": {Reason: "Legacy difit comment-empty 404 semantics are intentionally replaced by durable native comment collections; dedicated comment tests cover the native contract."},
+	"repo_revisions": {Execute: true, ForceDaemonCapability: true, Reason: "Replayed with the daemon capability: native reviewer reads are deliberately capability-protected."},
+	// The frozen endpoint returned an Express HTML 404 for both reads. Native
+	// serves a durable collection instead; replay the same URL and assert its
+	// real empty/saved thread semantics instead of preserving the dead route.
+	"repo_comments_empty": {Execute: true, ForceDaemonCapability: true, NativeCommentCollection: true},
 	"create_comment":      {Execute: true, ForceDaemonCapability: true, Reason: "Frozen difit short comment shape is translated at the native boundary into a durable formal thread."},
-	"repo_comments_saved": {Reason: "Frozen request uses legacy difit comment schema; native durable-thread migration is covered by daemon comment tests until an adapter fixture is added."},
+	"repo_comments_saved": {Execute: true, ForceDaemonCapability: true, NativeCommentCollection: true},
 	// Import accepts the original compact difit row and stores it as a durable
 	// formal thread. The response is intentionally still byte-compatible with
 	// the frozen capture, so replay it instead of relying only on unit coverage.
@@ -191,7 +195,7 @@ func TestFrozenTypeScriptParityMatrix(t *testing.T) {
 		"health", "unauthenticated_queue", "browser_session_exchange",
 		"github_auth_status", "github_auth_configure", "github_auth_device_start", "github_auth_device_poll", "github_auth_authenticated_status", "github_auth_disconnect",
 		"local_pr_requires_read_auth", "workspaces_empty", "queue_empty", "federation_nodes_empty", "open_workspace", "repos",
-		"repo_diff", "repo_diff_ignore_whitespace", "repo_revisions", "repo_line_count", "repo_blob", "repo_generated_status", "repo_fullfile", "create_comment", "comment_import",
+		"repo_diff", "repo_diff_ignore_whitespace", "repo_revisions", "repo_line_count", "repo_blob", "repo_generated_status", "repo_fullfile", "repo_comments_empty", "create_comment", "repo_comments_saved", "comment_import",
 		"sessions", "review_history", "ui_state_empty", "ui_state_put", "export_prompt", "new_session", "comments_json", "comments_output",
 		"ask_models", "ask_conversations_empty", "ask_question_set_create", "ask_question_sets", "ask_question_set_get", "ask_question_set_update", "ask_question_set_delete", "ask_conversation_create", "ask_conversation_get", "ask_inline_conversation_reuses_context", "ask_conversation_model", "ask_conversation_settings", "ask_conversation_cancel_idle", "ask_conversation_fresh", "ask_conversation_history",
 		"queue_create_local", "queue_list_with_item", "queue_detail", "queue_reorder", "queue_add_feedback", "queue_feedback_prompt", "queue_export", "queue_open", "queue_complete", "queue_requeue", "queue_delete", "queue_history",
@@ -202,6 +206,8 @@ func TestFrozenTypeScriptParityMatrix(t *testing.T) {
 		response := replayFrozenFixture(t, d, fixture, disposition, state)
 		if disposition.NativeAskSettings {
 			assertNativeAskSettingsFixture(t, fixture, response)
+		} else if disposition.NativeCommentCollection {
+			assertNativeCommentCollectionFixture(t, fixture, response)
 		} else {
 			assertFrozenFixtureResponse(t, fixture, response)
 		}
@@ -428,6 +434,58 @@ func assertNativeAskSettingsFixture(t *testing.T, fixture frozenParityFixture, a
 	}
 	if *response.Conversation.ReasoningEffort != wantReasoning || *response.Conversation.ContextTier != wantTier {
 		t.Fatalf("%s: native picker settings got=(%q,%q) want=(%q,%q)", fixture.Name, *response.Conversation.ReasoningEffort, *response.Conversation.ContextTier, wantReasoning, wantTier)
+	}
+}
+
+// assertNativeCommentCollectionFixture documents the one intentional change
+// from the frozen server: a GET that used to be an Express 404 is now the
+// durable comment collection. This is deliberately stricter than a generic
+// "native differs" waiver: both frozen reads must reach the same route, have
+// JSON semantics, and prove the empty-to-saved thread lifecycle created by the
+// frozen legacy POST row immediately before the saved read.
+func assertNativeCommentCollectionFixture(t *testing.T, fixture frozenParityFixture, actual *httptest.ResponseRecorder) {
+	t.Helper()
+	if actual.Code != http.StatusOK {
+		t.Fatalf("%s: native durable collection status got=%d want=%d body=%s", fixture.Name, actual.Code, http.StatusOK, actual.Body.String())
+	}
+	if got := actual.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
+		t.Fatalf("%s: native durable collection content type got=%q", fixture.Name, got)
+	}
+	var payload struct {
+		Version int `json:"version"`
+		Threads []struct {
+			ID       string `json:"id"`
+			FilePath string `json:"filePath"`
+			Position struct {
+				Side string `json:"side"`
+				Line int    `json:"line"`
+			} `json:"position"`
+			Messages []struct {
+				ID   string `json:"id"`
+				Body string `json:"body"`
+			} `json:"messages"`
+			Channel  string `json:"channel"`
+			Orphaned bool   `json:"orphaned"`
+		} `json:"threads"`
+	}
+	if err := json.Unmarshal(actual.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("%s: invalid native durable collection JSON: %v", fixture.Name, err)
+	}
+	switch fixture.Name {
+	case "repo_comments_empty":
+		if payload.Version != 0 || len(payload.Threads) != 0 {
+			t.Fatalf("empty durable collection got version=%d threads=%#v", payload.Version, payload.Threads)
+		}
+	case "repo_comments_saved":
+		if payload.Version < 1 || len(payload.Threads) != 1 {
+			t.Fatalf("saved durable collection got version=%d threads=%#v", payload.Version, payload.Threads)
+		}
+		thread := payload.Threads[0]
+		if thread.ID != "fixture-comment" || thread.FilePath != "root.ts" || thread.Position.Side != "new" || thread.Position.Line != 1 || thread.Channel != "formal" || thread.Orphaned || len(thread.Messages) != 1 || thread.Messages[0].ID != "fixture-comment" || thread.Messages[0].Body != "Fixture comment" {
+			t.Fatalf("saved durable thread does not preserve frozen legacy comment: %#v", thread)
+		}
+	default:
+		t.Fatalf("unexpected durable comment adapter fixture %q", fixture.Name)
 	}
 }
 

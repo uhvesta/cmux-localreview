@@ -85,7 +85,10 @@ also replay with a deliberate native adapter: the historical route discarded
 explicit thinking/context selections after a model change, while the native
 route must preserve them. The SDK-backed model-list row also replays with a
 hermetic SDK facade and advertises the four supported thinking levels to the
-native picker. Deletion is **not** ready: the matrix still contains
+native picker. Legacy comment-read rows now replay as a narrow durable-comment
+adapter: the historical HTML 404 is rejected in favor of a real JSON
+collection, including the empty-to-saved formal-thread lifecycle. Deletion is
+**not** ready: the matrix still contains
 other explicit compatibility exceptions and the required two complete
 Phase-3 browser/Electron passes have not been recorded. Do not remove `src/`
 or package dependencies based only on this preparation work.

@@ -37,6 +37,16 @@ deliberately factual: a green unit test does not imply end-to-end parity.
   `xhigh` thinking levels for its supported picker contract, preventing a
   successful SDK refresh from hiding the UI's Thinking control.
 
+## 2026-07-28 — Native durable-comment read parity
+
+- Made frozen `repo_comments_empty` and `repo_comments_saved` rows executable
+  through a narrow matrix adapter. The frozen server returned an HTML 404 for
+  both; the native daemon must return a capability-protected JSON collection.
+- The adapter validates a real empty collection, then the formal durable
+  thread produced by the frozen legacy POST shape (`fixture-comment`, file,
+  position, message, channel, and attached status). It does not preserve or
+  waive the obsolete 404 behavior.
+
 ## 2026-07-28 — Phase 0 started: frozen HTTP fixture corpus
 
 Done:
