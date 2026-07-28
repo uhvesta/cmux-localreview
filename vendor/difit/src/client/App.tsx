@@ -1009,6 +1009,9 @@ function App() {
   // only by handleGenerateReviewPlan below.
   useEffect(() => {
     let cancelled = false;
+    // Model discovery is daemon-wide. Unlike reviewer/diff endpoints it must
+    // not inherit this repository's `/api/repos/<id>` base, or the panel has
+    // no model to select and cannot show its actionable Copilot recovery UI.
     void daemonFetch('/api/ask/models')
       .then(async (response) => {
         if (!response.ok) return null;

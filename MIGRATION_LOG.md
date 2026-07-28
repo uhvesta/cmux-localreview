@@ -745,3 +745,50 @@ Not yet claimed:
 - This proves the transport against a real loopback SSH server and production
   daemons. A user-visible Queue Home click-through against a separate SSH host
   remains part of each complete Phase-3 browser/Electron pass.
+
+## 2026-07-28 — Packaged Electron review-plan and restart acceptance slice
+
+Done:
+
+- Rebuilt and package-verified the host-native arm64 Electron application, then
+  launched that packaged `.app` against a fresh, isolated Electron profile and
+  daemon data directory. It used the bundled `localreviewd`, not a checkout
+  sidecar.
+- Activated a disposable multi-repository workspace through the packaged
+  sidecar. The live reviewer enumerated `repo-alpha` and nested
+  `services/repo-beta`, each with its independent changed file.
+- Exercised Queue Home submission/opening through the live capability/session
+  boundary. The queued item became `in_review`; after two Electron quits and
+  relaunches the same queue item and both repository summaries remained
+  available, while the prior sidecar PID had exited.
+- Measured idle sidecar RSS across the restart sequence: 26,128 KiB, 23,648
+  KiB, 23,888 KiB, then 21,040 KiB. Each sample is below the 50 MiB target and
+  this short sequence shows no upward restart trend.
+- Exercised the review-plan read/generate API through the packaged sidecar
+  with no Copilot credential. Global `/api/ask/models` returned the deliberate
+  `auto` fallback plus its actionable OAuth/restart guidance. An explicit
+  review-plan generation persisted a visible `error` record explaining that
+  the dedicated Copilot GitHub App is not connected, rather than sending a
+  prompt on review open or leaving the reviewer in an unbounded loading state.
+- Documented in the renderer that model discovery is daemon-wide and must keep
+  using `daemonFetch('/api/ask/models')`, never a repository-scoped API base.
+  This preserves the fallback model and recoverable review-plan state.
+
+Validated:
+
+- `npm --prefix desktop run package:dir`
+- `npm --prefix desktop run verify:package -- desktop/dist/mac-arm64/CMUX\ Local\ Review.app`
+- `bash scripts/verify-release-archives.sh`
+- `bash scripts/verify-native-installer.sh bazel-bin/release/localreview_darwin_arm64.tar.gz bazel-bin/release/checksums.txt`
+- Live packaged sidecar session/API requests for Queue Home, workspace/repo
+  discovery, `/api/ask/models`, immutable review-plan generation failure, and
+  two restart/persistence cycles.
+
+Not yet claimed:
+
+- macOS was locked while the isolated packaged window was running, so the
+  Computer Use accessibility session could not drive or inspect the renderer.
+  This is not represented as a click-through Electron UI pass. No live OAuth
+  login, Copilot SDK completion/stream/cancel, model switch, or authenticated
+  review-plan generation was attempted because the fresh profile intentionally
+  had no GitHub/Copilot credential.
