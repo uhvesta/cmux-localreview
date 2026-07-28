@@ -408,7 +408,14 @@ func AppendPendingMessage(ctx context.Context, db *sql.DB, id int64, fragment st
 // intentionally idempotent: cancellation/error races are normal in a
 // streaming UI and must not make a later reload replay a completed turn.
 func SettlePendingMessage(ctx context.Context, db *sql.DB, id int64, fallback string) (*Message, bool, error) {
-	result, err := db.ExecContext(ctx, `UPDATE ask_messages SET pending=0,body=CASE WHEN body='' THEN ? ELSE body END WHERE id=? AND role=? AND pending=1`, fallback, id, RoleAssistant)
+	// An aborted turn may already contain useful streamed text. Keep that text,
+	// but make its terminal state explicit so a restored transcript never looks
+	// like Copilot silently stopped mid-sentence. Other terminal fallbacks keep
+	// their historical behaviour: they replace only an empty response.
+	result, err := db.ExecContext(ctx, `UPDATE ask_messages SET pending=0,body=CASE
+		WHEN body='' THEN ?
+		WHEN ?='Response cancelled before it completed.' AND instr(body, '_Response cancelled before it completed._')=0 THEN body||char(10)||char(10)||'_Response cancelled before it completed._'
+		ELSE body END WHERE id=? AND role=? AND pending=1`, fallback, fallback, id, RoleAssistant)
 	if err != nil {
 		return nil, false, err
 	}

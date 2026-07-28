@@ -197,6 +197,26 @@ func TestAskMessageAndCancelAreDurableWithoutSDKNetwork(t *testing.T) {
 	}
 }
 
+func TestAskCancelMarksPartialResponsesTerminal(t *testing.T) {
+	d := askRouteDaemon(t)
+	conversation, err := ask.CreateConversation(context.Background(), d.db, ask.CreateConversationInput{Model: "gpt-5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := ask.InsertMessage(context.Background(), d.db, conversation.ID, ask.RoleAssistant, "A partial streamed answer", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelled := askRequest(t, d, http.MethodPost, "/ask/conversations/"+conversation.ID+"/cancel", ``)
+	if cancelled.Code != http.StatusOK {
+		t.Fatalf("cancel status=%d body=%s", cancelled.Code, cancelled.Body.String())
+	}
+	stored, err := ask.GetMessage(context.Background(), d.db, message.ID)
+	if err != nil || stored.Pending || stored.Body != "A partial streamed answer\n\n_Response cancelled before it completed._" {
+		t.Fatalf("stored=%#v err=%v", stored, err)
+	}
+}
+
 func TestInlineConversationPersistsInitialAnchor(t *testing.T) {
 	d := askRouteDaemon(t)
 	response := askRequest(t, d, http.MethodPost, "/ask/inline-conversations", `{"model":"gpt-5","context":{"repoId":"repo-1","filePath":"lib/check.go","workspacePath":"nested/lib/check.go","side":"current","startLine":4,"endLine":5,"selectedCode":"return valid"}}`)

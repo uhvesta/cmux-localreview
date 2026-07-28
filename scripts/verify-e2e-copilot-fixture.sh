@@ -86,7 +86,8 @@ grep -q 'event: done' "$data/stream.txt"
 transcript=$(api_get "ask/conversations/$conversation_id")
 jq -e '.messages | length == 2 and .[1].pending == false and (.[1].body | contains("claude-sonnet-4.6"))' <<<"$transcript" >/dev/null
 
-# Cancellation uses a different turn and must leave a settled durable answer.
+# Cancellation uses a different turn and must leave a settled durable answer
+# with an explicit terminal marker when a partial stream was already visible.
 cancel_conversation=$(api_post ask/conversations '{"model":"gpt-5-mini"}')
 cancel_id=$(jq -r .conversation.id <<<"$cancel_conversation")
 api_post "ask/conversations/$cancel_id/messages" '{"body":"Cancel this visibly streaming fixture response before it finishes."}' >/dev/null
@@ -94,7 +95,7 @@ sleep .12
 api_post "ask/conversations/$cancel_id/cancel" '{}' >/dev/null
 sleep .1
 cancelled=$(api_get "ask/conversations/$cancel_id")
-jq -e '.messages | length == 2 and .[1].pending == false and (.[1].body | length > 0)' <<<"$cancelled" >/dev/null
+jq -e '.messages | length == 2 and .[1].pending == false and (.[1].body | contains("_Response cancelled before it completed._"))' <<<"$cancelled" >/dev/null
 
 # /btw owns a deliberately separate durable SDK thread but uses the same
 # runtime contract; this catches accidental removal of that native path.

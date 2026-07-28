@@ -22,13 +22,15 @@ type fakeBackend struct {
 	models  []copilotsdk.ModelInfo
 	session *fakeSession
 	opens   int
+	configs []copilot.SessionConfig
 }
 
 func (backend *fakeBackend) ListModels(context.Context) ([]copilotsdk.ModelInfo, error) {
 	return backend.models, nil
 }
-func (backend *fakeBackend) OpenSession(context.Context, copilot.SessionConfig) (Session, error) {
+func (backend *fakeBackend) OpenSession(_ context.Context, config copilot.SessionConfig) (Session, error) {
 	backend.opens++
+	backend.configs = append(backend.configs, config)
 	return backend.session, nil
 }
 
@@ -142,6 +144,36 @@ func TestTurnClaimAndCancelNeverAffectNextTurn(t *testing.T) {
 	if backend.session.aborts != 1 {
 		t.Fatalf("aborts=%d", backend.session.aborts)
 	}
+}
+
+func TestResetIdleSessionUsesUpdatedModelOnNextExplicitTurn(t *testing.T) {
+	backend := &fakeBackend{session: &fakeSession{}}
+	runtime := New(backend)
+	first := copilot.SessionConfig{ID: "conversation-1", Model: "gpt-5", WorkingDirectory: "/workspace", Streaming: true}
+	if _, err := runtime.Send(context.Background(), "conversation-1", first, "first", func(Delta) {}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.ResetSession("conversation-1"); err != nil {
+		t.Fatal(err)
+	}
+	second := first
+	second.Model = "claude-sonnet-4.6"
+	if _, err := runtime.Send(context.Background(), "conversation-1", second, "second", func(Delta) {}); err != nil {
+		t.Fatal(err)
+	}
+	if backend.opens != 2 || len(backend.configs) != 2 || backend.configs[1].Model != "claude-sonnet-4.6" {
+		t.Fatalf("opens=%d configs=%#v", backend.opens, backend.configs)
+	}
+
+	gate := make(chan struct{})
+	backend.session.gate = gate
+	go func() { _, _ = runtime.Send(context.Background(), "conversation-1", second, "busy", func(Delta) {}) }()
+	for !runtime.IsBusy("conversation-1") {
+	}
+	if err := runtime.ResetSession("conversation-1"); !errors.Is(err, ErrTurnInProgress) {
+		t.Fatalf("busy reset error=%v", err)
+	}
+	close(gate)
 }
 
 func TestRuntimePropagatesSDKStyleError(t *testing.T) {

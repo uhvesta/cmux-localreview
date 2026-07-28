@@ -131,6 +131,21 @@ func (runtime *Runtime) IsBusy(conversationID string) bool {
 	return ok
 }
 
+// ResetSession drops an idle SDK session after its persisted model, thinking,
+// or context settings change. The next explicit Send opens a fresh SDK session
+// with the new configuration; it never replays prior prompts. Resetting an
+// active turn would split a live conversation, so callers must ask the
+// reviewer to cancel or wait first.
+func (runtime *Runtime) ResetSession(conversationID string) error {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if _, busy := runtime.turns[conversationID]; busy {
+		return ErrTurnInProgress
+	}
+	delete(runtime.sessions, conversationID)
+	return nil
+}
+
 // Send claims one turn, opens the SDK session only when first needed, and
 // streams deltas through sink. A session remains available for later explicit
 // turns, preserving its model context without replaying prompt history.

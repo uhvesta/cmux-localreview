@@ -324,12 +324,23 @@ func (d *Daemon) handleAsk(w http.ResponseWriter, r *http.Request, path string) 
 					return true
 				}
 			}
-			result, err := d.db.ExecContext(ctx, `UPDATE ask_messages SET pending=0,body=CASE WHEN body='' THEN 'Response cancelled before it completed.' ELSE body END WHERE conversation_id=? AND pending=1`, id)
+			messages, err := ask.ListMessages(ctx, d.db, id)
 			if err != nil {
 				askError(w, err)
 				return true
 			}
-			changed, _ := result.RowsAffected()
+			changed := int64(0)
+			for _, message := range messages {
+				if !message.Pending || message.Role != ask.RoleAssistant {
+					continue
+				}
+				if _, settled, settleErr := ask.SettlePendingMessage(ctx, d.db, message.ID, "Response cancelled before it completed."); settleErr != nil {
+					askError(w, settleErr)
+					return true
+				} else if settled {
+					changed++
+				}
+			}
 			if changed > 0 {
 				d.publishAskEvent(askruntime.Delta{Event: askruntime.EventDone, ConversationID: id, Aborted: true})
 			}
@@ -354,6 +365,15 @@ func (d *Daemon) handleAsk(w http.ResponseWriter, r *http.Request, path string) 
 			if json.NewDecoder(r.Body).Decode(&in) != nil {
 				askError(w, errors.New("invalid /ask settings"))
 				return true
+			}
+			d.askMu.Lock()
+			runtime := d.askRuntime
+			d.askMu.Unlock()
+			if runtime != nil {
+				if resetErr := runtime.ResetSession(id); resetErr != nil {
+					askError(w, errors.New("wait for Copilot to finish or cancel the current response before changing its model or context"))
+					return true
+				}
 			}
 			item, err := ask.UpdateConversation(ctx, d.db, id, ask.UpdateConversationInput{Model: in.Model, ReasoningEffort: in.ReasoningEffort, ContextTier: in.ContextTier})
 			if err != nil {
