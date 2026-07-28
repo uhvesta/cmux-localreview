@@ -210,6 +210,10 @@ export function ReviewControlPanel({ collapsed, onToggleCollapsed, refreshNonce 
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ position }),
   }), `Moved to position ${position}.`), [run]);
   const refreshRemote = useCallback((item: QueueItem) => run(`refresh:${item.id}`, () => daemonFetch(`/api/queue/${encodeURIComponent(item.id)}/refresh`, { method: 'POST' }), 'Remote PR refreshed.'), [run]);
+  const publishComment = useCallback((item: QueueItem) => run(`publish-comment:${item.id}`, () => daemonFetch(`/api/queue/${encodeURIComponent(item.id)}/publish-comment`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ body: feedbackBody.trim() || 'Reviewed with cmux-localreview.' }),
+  }), 'Published a non-blocking GitHub review comment.'), [feedbackBody, run]);
   const cleanupRemote = useCallback((item: QueueItem) => run(`cleanup:${item.id}`, () => daemonFetch(`/api/queue/${encodeURIComponent(item.id)}/cleanup`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ removeMirror: false }),
   }), 'Managed remote worktree removed; the mirror cache was retained.'), [run]);
@@ -285,7 +289,7 @@ export function ReviewControlPanel({ collapsed, onToggleCollapsed, refreshNonce 
               {selected.status !== 'in_review' && <button onClick={() => void requeue(selected)} style={buttonStyle} disabled={disabled}>Requeue</button>}
               <button onClick={() => void reorder(selected, Math.max(1, selected.position - 1))} style={buttonStyle} disabled={disabled || selected.position <= 1}>Move up</button>
               <button onClick={() => void reorder(selected, selected.position + 1)} style={buttonStyle} disabled={disabled}>Move down</button>
-              {selected.kind === 'remote' && <><button onClick={() => void refreshRemote(selected)} style={buttonStyle} disabled={disabled}>Refresh PR</button><button onClick={() => void cleanupRemote(selected)} style={buttonStyle} disabled={disabled}>Clean worktree</button></>}
+              {selected.kind === 'remote' && <><button onClick={() => void refreshRemote(selected)} style={buttonStyle} disabled={disabled}>Refresh PR</button><button onClick={() => void publishComment(selected)} style={buttonStyle} disabled={disabled}>Publish comment</button><button onClick={() => void cleanupRemote(selected)} style={buttonStyle} disabled={disabled}>Clean worktree</button></>}
               <button onClick={() => void exportPackage(selected)} style={buttonStyle} disabled={disabled || !selected.snapshotManifestPath}>Export</button>
             </div>
             <hr style={{ borderColor: 'rgba(127,127,127,0.25)', margin: '10px 0' }} />

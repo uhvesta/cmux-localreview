@@ -474,6 +474,21 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
       res.json({ item: getQueueItem(db, before.id), remoteReview, delivery });
     } catch (error) { res.status(502).json({ error: String(error), item: before }); }
   });
+  /**
+   * A COMMENT review has the same stale-head and inline-comment safeguards as
+   * approve/request-changes, but deliberately leaves local queue status
+   * alone. This makes feedback publication safe to test on a real PR.
+   */
+  api.post("/queue/:id/publish-comment", async (req, res) => {
+    const item = getQueueItem(db, req.params.id);
+    if (!item) { res.status(404).json({ error: "Unknown queue item" }); return; }
+    if (item.kind !== "remote") { res.status(400).json({ error: "Only remote PR queue items can publish GitHub comments" }); return; }
+    try {
+      const outgoing = { ...item, decisionBody: bodyString(req.body?.body) ?? null };
+      const remoteReview = await submitRemoteDecision(outgoing, "comment", feedbackForItem(db, item.id));
+      res.json({ item, remoteReview });
+    } catch (error) { res.status(502).json({ error: String(error), item }); }
+  });
   api.post("/queue/:id/export", (req, res) => {
     try {
       const item = getQueueItem(db, req.params.id);

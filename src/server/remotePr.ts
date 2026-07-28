@@ -223,7 +223,13 @@ async function assertReviewHeadIsCurrent(pr: RemotePullRequest, cwd?: string): P
  * tied to the resolved head SHA; if GitHub rejects an invalid/outdated line,
  * fall back to the portable `gh pr review` summary rather than losing a review.
  */
-export async function submitRemoteDecision(item: QueueItem, decision: "approved" | "changes_requested", feedback: { body: string; path: string | null; line: number | null }[]): Promise<RemoteReviewResult> {
+/**
+ * Publish either a formal decision or a non-blocking COMMENT review.  COMMENT
+ * is intentionally separate from the queue lifecycle: it is useful for a
+ * safe transport/authentication check and for publishing formal feedback
+ * without falsely approving or requesting changes on a pull request.
+ */
+export async function submitRemoteDecision(item: QueueItem, decision: "approved" | "changes_requested" | "comment", feedback: { body: string; path: string | null; line: number | null }[]): Promise<RemoteReviewResult> {
   if (!item.remoteUrl) throw new Error("Remote review is missing its PR URL");
   const pr = remotePullRequestFromQueueItem(item) ?? await resolveRemotePullRequest(item.remoteUrl, item.workspacePath);
   await assertReviewHeadIsCurrent(pr, item.workspacePath);
@@ -233,7 +239,7 @@ export async function submitRemoteDecision(item: QueueItem, decision: "approved"
   const body = reviewBody(item, feedback);
   const payload = {
     commit_id: pr.headSha,
-    event: decision === "approved" ? "APPROVE" : "REQUEST_CHANGES",
+    event: decision === "approved" ? "APPROVE" : decision === "changes_requested" ? "REQUEST_CHANGES" : "COMMENT",
     body,
     ...(inline.length ? { comments: inline } : {}),
   };
@@ -251,7 +257,7 @@ export async function submitRemoteDecision(item: QueueItem, decision: "approved"
     // reviewer summary plus one complete, non-duplicated comment list.
     const fallbackBody = [item.decisionBody, comments ? `Feedback:\n${comments}` : ""]
       .filter(Boolean).join("\n\n") || "Reviewed with cmux-localreview.";
-    const flag = decision === "approved" ? "--approve" : "--request-changes";
+    const flag = decision === "approved" ? "--approve" : decision === "changes_requested" ? "--request-changes" : "--comment";
     const fallback = await runCommand(["gh", "pr", "review", pr.url, flag, "--body", fallbackBody], item.workspacePath);
     if (fallback.exitCode !== 0) throw new Error(`GitHub review API failed (${api.stderr.trim() || api.stdout.trim()}); fallback failed: ${fallback.stderr.trim() || fallback.stdout.trim()}`);
     return { method: "gh-pr-review-fallback", inlineComments: 0 };
