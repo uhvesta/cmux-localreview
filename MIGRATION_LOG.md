@@ -599,3 +599,28 @@ Not yet claimed:
 
 - The frozen row's obsolete third-position/title details are deliberately not
   recreated; native idempotency is the stronger review-safety contract.
+
+## 2026-07-28 — Native federation lifecycle replay
+
+Done:
+
+- Made the frozen federation node create, status, disconnect, aggregate, and
+  delete lifecycle executable through the production native HTTP routes and
+  durable node store. The replay also proves node capabilities never appear in
+  browser JSON and that aggregating a disconnected node does not fetch or open
+  a tunnel.
+- Kept a disabled configured node visible in aggregate results. This is an
+  intentional safety improvement over the historical empty-list response: it
+  tells a reviewer why a configured remote contributes no queue items.
+
+Validated:
+
+- The frozen lifecycle runs before the remaining `/ask` streaming row in the
+  native parity matrix. Native loopback transport is separately covered by
+  `TestFederationNodeCRUDAndNativeLoopbackTransport`.
+
+Not yet claimed:
+
+- Neither replay uses an actual SSH host. Real SSH forwarding, tunnel health,
+  reconnect, and remote-daemon browser flows remain explicit Phase-3 manual
+  validation gates.
