@@ -137,3 +137,38 @@ Not yet claimed:
   behavior still need end-to-end wiring and browser validation.
 - Remote PR, federation, and the remaining frozen API surfaces are not yet
   production-complete in Go.
+
+## 2026-07-28 — Phase 1 agent/queue increment
+
+Done:
+
+- Connected explicit `/ask` POST turns to the daemon-owned Go SDK runtime.
+  Streaming deltas append only to their immutable pending assistant row and
+  are published over a per-conversation SSE endpoint; reads/reloads remain
+  database-only and cannot resend a prompt.
+- Added SDK cancellation, immediate idempotent settlement, an inline prompt
+  envelope containing workspace-relative path, repository path, side, range,
+  and selected code, plus a test proving durable transcript/no replay.
+- Ported the queue hook and durable watcher routes. They validate workspaces,
+  fingerprint every repository, capture immutable snapshots only after a
+  source change, resume after daemon restart, and supersede stale queue rounds.
+- Expanded the native CLI with `daemon run|status|stop`, `submit`, remote
+  daemon mode, GitHub App compatibility flow commands, and
+  `reproduce --copilot`. The latter creates a fresh SDK `/ask` setup only;
+  it explicitly does not resume historic ACP/agent state.
+
+Validated:
+
+- `go test ./...`
+- `bazel test //...` (15 targets)
+- `bash scripts/verify-parity-fixtures.sh`
+- A local daemon lifecycle smoke: status verified matching discovery/health
+  PID, then stop terminated the verified daemon and removed its discovery file.
+
+Not yet claimed:
+
+- The message transport has deterministic injected-runtime coverage but needs
+  a real GitHub OAuth credential and SDK completion in the browser validation
+  loop.
+- `/btw`, remote PR lifecycle, federation transport, complete UI wiring, and
+  packaged Electron checks remain unfinished.
