@@ -6,6 +6,7 @@ package gitdiff
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -175,8 +176,68 @@ func Parse(repo string, selection Selection) (Response, error) {
 		return Response{}, err
 	}
 	result.Files = ParseUnified(raw)
+	// Git's ordinary diff deliberately omits untracked files.  A review of a
+	// dirty workspace must not hide those files, though: reviewers need the
+	// same staged, unstaged, and untracked inventory that `git status` shows.
+	// Only working-tree selections include them; a staged or commit-to-commit
+	// comparison has no untracked-file meaning.
+	if target == "." || target == "working" {
+		untracked, untrackedErr := parseUntracked(repo)
+		if untrackedErr != nil {
+			return Response{}, untrackedErr
+		}
+		result.Files = append(result.Files, untracked...)
+	}
 	result.IsEmpty = len(result.Files) == 0
 	return result, nil
+}
+
+// parseUntracked projects Git's ignored-aware untracked inventory into the
+// same added-file shape returned by ParseUnified.  NUL-separated paths keep
+// spaces and newlines unambiguous.  This is intentionally separate from
+// ParseUnified: there is no Git unified-diff record for an untracked file.
+func parseUntracked(repo string) ([]File, error) {
+	raw, err := git(repo, "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return nil, err
+	}
+	if raw == "" {
+		return []File{}, nil
+	}
+	paths := strings.Split(raw, "\x00")
+	files := make([]File, 0, len(paths))
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		contents, err := os.ReadFile(repo + string(os.PathSeparator) + path)
+		if err != nil {
+			return nil, fmt.Errorf("read untracked %s: %w", path, err)
+		}
+		files = append(files, untrackedFile(path, contents))
+	}
+	return files, nil
+}
+
+func untrackedFile(path string, contents []byte) File {
+	text := strings.TrimSuffix(string(contents), "\n")
+	lines := []string{}
+	if text != "" {
+		lines = strings.Split(text, "\n")
+	}
+	chunk := Chunk{
+		Header:   fmt.Sprintf("@@ -0,0 +1,%d @@", len(lines)),
+		OldStart: 0,
+		OldLines: 0,
+		NewStart: 1,
+		NewLines: len(lines),
+		Lines:    make([]Line, 0, len(lines)),
+	}
+	for index, line := range lines {
+		lineNumber := index + 1
+		chunk.Lines = append(chunk.Lines, Line{Type: "add", Content: line, NewLineNumber: &lineNumber})
+	}
+	return File{Path: path, Status: "added", Additions: len(lines), Chunks: []Chunk{chunk}}
 }
 
 // ParseUnified parses Git's --no-ext-diff, --color=never unified output.

@@ -79,6 +79,32 @@ func TestParseDefaultPrefersDirtyWorkspace(t *testing.T) {
 		t.Fatalf("response=%+v", r)
 	}
 }
+
+func TestParseIncludesUntrackedFilesForWorkingTreeSelections(t *testing.T) {
+	d := repo(t)
+	if err := os.WriteFile(filepath.Join(d, "new file.go"), []byte("package fixture\n\nconst Added = true\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	working, err := Parse(d, Selection{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(working.Files) != 1 || working.Files[0].Path != "new file.go" || working.Files[0].Status != "added" || working.Files[0].Additions != 3 {
+		t.Fatalf("working untracked files = %#v", working.Files)
+	}
+	if len(working.Files[0].Chunks) != 1 || len(working.Files[0].Chunks[0].Lines) != 3 || working.Files[0].Chunks[0].Lines[2].NewLineNumber == nil || *working.Files[0].Chunks[0].Lines[2].NewLineNumber != 3 {
+		t.Fatalf("working untracked chunk = %#v", working.Files[0].Chunks)
+	}
+
+	staged, err := Parse(d, Selection{BaseCommitish: "HEAD", TargetCommitish: "staged"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(staged.Files) != 0 {
+		t.Fatalf("staged selection unexpectedly includes untracked files: %#v", staged.Files)
+	}
+}
 func TestParseAddedDeletedAndRenamed(t *testing.T) {
 	d := repo(t)
 	if err := os.WriteFile(filepath.Join(d, "new.txt"), []byte("new\n"), 0600); err != nil {
