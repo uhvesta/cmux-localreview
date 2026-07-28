@@ -175,6 +175,14 @@ var legacyMigrations = map[int][]string{
 	21: {
 		`CREATE TABLE ask_workspace_settings (workspace_path TEXT PRIMARY KEY, model TEXT, reasoning_effort TEXT, context_tier TEXT, updated_at INTEGER NOT NULL)`,
 	},
+	// v22 persists explicitly requested Copilot hunk-order guidance. Reads never
+	// create rows or invoke Copilot; the key captures the immutable review
+	// round, diff content, and model settings used to generate the result.
+	22: {
+		`CREATE TABLE hunk_review_plans (id TEXT PRIMARY KEY, review_session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, repo_id TEXT NOT NULL, diff_fingerprint TEXT NOT NULL, model TEXT NOT NULL, settings_key TEXT NOT NULL, prompt_version TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('ready','error')), request_json TEXT NOT NULL, result_json TEXT, error TEXT, generated_at INTEGER NOT NULL)`,
+		`CREATE INDEX idx_hunk_review_plans_lookup ON hunk_review_plans(review_session_id,repo_id,model,settings_key,diff_fingerprint,generated_at DESC)`,
+		`CREATE INDEX idx_hunk_review_plans_latest ON hunk_review_plans(review_session_id,repo_id,model,settings_key,generated_at DESC)`,
+	},
 }
 
 // currentSchema is intentionally explicit instead of an ORM model: database
@@ -209,6 +217,9 @@ var currentSchema = []string{
 	`CREATE TABLE ask_conversations (id TEXT PRIMARY KEY, queue_item_id TEXT, model TEXT, copilot_session_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, context_json TEXT, reasoning_effort TEXT, context_tier TEXT, review_session_id INTEGER REFERENCES sessions(id), archived_at INTEGER)`,
 	`CREATE INDEX idx_ask_conversations_session_state ON ask_conversations(review_session_id, archived_at, updated_at DESC)`,
 	`CREATE TABLE ask_workspace_settings (workspace_path TEXT PRIMARY KEY, model TEXT, reasoning_effort TEXT, context_tier TEXT, updated_at INTEGER NOT NULL)`,
+	`CREATE TABLE hunk_review_plans (id TEXT PRIMARY KEY, review_session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, repo_id TEXT NOT NULL, diff_fingerprint TEXT NOT NULL, model TEXT NOT NULL, settings_key TEXT NOT NULL, prompt_version TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('ready','error')), request_json TEXT NOT NULL, result_json TEXT, error TEXT, generated_at INTEGER NOT NULL)`,
+	`CREATE INDEX idx_hunk_review_plans_lookup ON hunk_review_plans(review_session_id,repo_id,model,settings_key,diff_fingerprint,generated_at DESC)`,
+	`CREATE INDEX idx_hunk_review_plans_latest ON hunk_review_plans(review_session_id,repo_id,model,settings_key,generated_at DESC)`,
 	`CREATE TABLE ask_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id TEXT NOT NULL REFERENCES ask_conversations(id) ON DELETE CASCADE, role TEXT NOT NULL CHECK(role IN ('user','assistant','system')), body TEXT NOT NULL, pending INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, location_json TEXT)`,
 	`CREATE INDEX idx_ask_messages_conversation ON ask_messages(conversation_id, id)`,
 	`CREATE TABLE question_sets (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`,

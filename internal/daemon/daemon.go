@@ -53,6 +53,10 @@ type Options struct {
 	// AskRuntimeFactory builds the official SDK runtime lazily on the first
 	// explicit prompt. It owns the dedicated Copilot credential boundary.
 	AskRuntimeFactory *AskRuntimeFactory
+	// HunkPlanGenerator is an optional deterministic embedding/test seam. Nil
+	// uses the same official SDK runtime as /ask, only after an explicit plan
+	// generation POST.
+	HunkPlanGenerator HunkPlanGenerator
 	// CmuxSocketPath is optional and is primarily useful for a controlled
 	// local cmux installation or deterministic integration tests.  An empty
 	// value follows cmux's standard discovery-file/fallback convention.
@@ -99,6 +103,8 @@ type Daemon struct {
 	askClose          func() error
 	askFactory        *AskRuntimeFactory
 	askWatchers       map[string]map[chan askruntime.Delta]struct{}
+	hunkPlanMu        sync.Mutex
+	hunkPlanGenerator HunkPlanGenerator
 	queueDeliveryMu   sync.Mutex
 	queueDeliveries   map[string]struct{}
 	cmuxSocketPath    string
@@ -1313,6 +1319,16 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 	// sibling routes (comments/blobs/revisions) are ported independently.
 	if strings.HasPrefix(path, "/repos/") {
 		parts := strings.Split(strings.Trim(path, "/"), "/")
+		if len(parts) >= 4 && parts[0] == "repos" && parts[2] == "api" && strings.HasPrefix(parts[3], "hunk-review-plan") {
+			review, repo, ok := d.reviewContext(parts[1])
+			if !ok {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "Unknown review repository"})
+				return
+			}
+			if d.hunkPlanHandler(w, r, review, repo) {
+				return
+			}
+		}
 		if len(parts) == 4 && parts[0] == "repos" && parts[2] == "api" && parts[3] == "comment-imports" && r.Method == http.MethodPost {
 			review, repo, ok := d.reviewContext(parts[1])
 			if !ok {
@@ -2375,7 +2391,7 @@ func Start(ctx context.Context, options Options) (*Daemon, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate federation credentials to system secret store: %w", err)
 	}
-	d := &Daemon{listener: listener, dataDir: dir, token: token, sessions: make(map[string]time.Time), watches: make(map[chan string]struct{}), queueWatches: make(map[string]context.CancelFunc), authFlows: make(map[githubauth.Capability]*githubauth.LoopbackFlow), askRuntime: options.AskRuntime, askFactory: askFactory, askWatchers: make(map[string]map[chan askruntime.Delta]struct{}), queueDeliveries: make(map[string]struct{}), cmuxSocketPath: options.CmuxSocketPath, federation: newFederationTransport(options.FederationDialer), federationSecrets: federationSecrets, db: db, github: github, ws: wshub.New(wshub.Options{Path: "/ws"})}
+	d := &Daemon{listener: listener, dataDir: dir, token: token, sessions: make(map[string]time.Time), watches: make(map[chan string]struct{}), queueWatches: make(map[string]context.CancelFunc), authFlows: make(map[githubauth.Capability]*githubauth.LoopbackFlow), askRuntime: options.AskRuntime, askFactory: askFactory, askWatchers: make(map[string]map[chan askruntime.Delta]struct{}), hunkPlanGenerator: options.HunkPlanGenerator, queueDeliveries: make(map[string]struct{}), cmuxSocketPath: options.CmuxSocketPath, federation: newFederationTransport(options.FederationDialer), federationSecrets: federationSecrets, db: db, github: github, ws: wshub.New(wshub.Options{Path: "/ws"})}
 	if err := d.restoreActiveWorkspace(); err != nil {
 		// Persisted active workspace state is best-effort at startup. An absent
 		// worktree must not prevent Queue Home from recovering it or opening a
