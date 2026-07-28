@@ -490,3 +490,22 @@ Not yet claimed:
 - A signed-in GitHub account still needs the interactive one-time registration
   and browser authorization pass before this is counted as a complete live
   Phase-3 OAuth validation.
+
+## 2026-07-28 — Fresh browser recovery pass
+
+Validated in the rebuilt E2E fixture through the browser:
+
+- Started unauthenticated at Queue Home and saw the recoverable local-daemon
+  connection form plus exact daemon recovery command; entered the fixture's
+  local capability and loaded the preserved queue item.
+- Opened that item from Queue Home and confirmed its workspace path, file
+  hierarchy, and diff render rather than a blank/error screen.
+- Asked a `/btw` question, observed the distinct `Copilot SDK` streaming state,
+  then observed the completed fixture response. The prompt was sent once and
+  no ACP/terminal target selector appeared.
+
+Not yet claimed:
+
+- This is a browser fixture pass, not real GitHub consent or a real Copilot
+  account. The first live account pass requires a user-visible GitHub consent
+  page and cannot safely be fabricated by the fixture.
