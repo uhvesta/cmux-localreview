@@ -83,17 +83,24 @@ var parityMatrix = map[string]parityDisposition{
 	"new_session":                 {Execute: true, ForceDaemonCapability: true, Reason: "Native capability boundary is intentionally stricter than frozen TS."},
 	"sessions":                    {Execute: true, ForceDaemonCapability: true, Reason: "Native capability boundary is intentionally stricter than frozen TS."},
 
-	"repo_revisions":                         {Execute: true, ForceDaemonCapability: true, Reason: "Replayed with the daemon capability: native reviewer reads are deliberately capability-protected."},
-	"repo_comments_empty":                    {Reason: "Legacy difit comment-empty 404 semantics are intentionally replaced by durable native comment collections; dedicated comment tests cover the native contract."},
-	"create_comment":                         {Execute: true, ForceDaemonCapability: true, Reason: "Frozen difit short comment shape is translated at the native boundary into a durable formal thread."},
-	"repo_comments_saved":                    {Reason: "Frozen request uses legacy difit comment schema; native durable-thread migration is covered by daemon comment tests until an adapter fixture is added."},
-	"comment_import":                         {Reason: "Comment import supports richer native provenance and needs a normalized fixture projection."},
-	"review_history":                         {Reason: "Historical review semantics are covered by native session/comment integration tests; fixture projection remains to be normalized."},
-	"btw_threads_empty":                      {Reason: "Native /btw uses the SDK conversation store rather than the retired ACP thread projection."},
-	"btw_ask_validation":                     {Reason: "Native /btw validation is tested directly against explicit target routing; frozen ACP prompt shape is intentionally retired."},
-	"websocket_diff_updated":                 {Reason: "WebSocket frame byte parity is validated in internal/wshub; the fixture needs a deterministic watcher clock before direct replay."},
-	"comments_json":                          {Reason: "Legacy difit JSON projection differs from native durable-thread schema."},
-	"comments_output":                        {Reason: "Native formal export is workspace-level and deliberately does not make repository comments an export side channel."},
+	"repo_revisions":      {Execute: true, ForceDaemonCapability: true, Reason: "Replayed with the daemon capability: native reviewer reads are deliberately capability-protected."},
+	"repo_comments_empty": {Reason: "Legacy difit comment-empty 404 semantics are intentionally replaced by durable native comment collections; dedicated comment tests cover the native contract."},
+	"create_comment":      {Execute: true, ForceDaemonCapability: true, Reason: "Frozen difit short comment shape is translated at the native boundary into a durable formal thread."},
+	"repo_comments_saved": {Reason: "Frozen request uses legacy difit comment schema; native durable-thread migration is covered by daemon comment tests until an adapter fixture is added."},
+	// Import accepts the original compact difit row and stores it as a durable
+	// formal thread. The response is intentionally still byte-compatible with
+	// the frozen capture, so replay it instead of relying only on unit coverage.
+	"comment_import":         {Execute: true, ForceDaemonCapability: true, Reason: "Replayed with the daemon capability: native reviewer writes are capability-protected."},
+	"review_history":         {Execute: true, ForceDaemonCapability: true, Reason: "Replayed with the daemon capability: native reviewer reads are capability-protected."},
+	"btw_threads_empty":      {Reason: "Native /btw uses the SDK conversation store rather than the retired ACP thread projection."},
+	"btw_ask_validation":     {Reason: "Native /btw validation is tested directly against explicit target routing; frozen ACP prompt shape is intentionally retired."},
+	"websocket_diff_updated": {Reason: "WebSocket frame byte parity is validated in internal/wshub; the fixture needs a deterministic watcher clock before direct replay."},
+	// A new review session must expose an empty durable comment collection and
+	// retain the old empty comments-output compatibility endpoint. The fixtures
+	// assert those lifecycle edges without treating the old projection as the
+	// source of truth for native exports.
+	"comments_json":                          {Execute: true, ForceDaemonCapability: true, Reason: "Replayed with the daemon capability: native reviewer reads are capability-protected."},
+	"comments_output":                        {Execute: true, ForceDaemonCapability: true, Reason: "Replayed with the daemon capability: native reviewer reads are capability-protected."},
 	"ask_models":                             {Reason: "Native SDK model discovery is tested with a fake official SDK backend; frozen fixture has a TS-only model capability shape."},
 	"ask_conversations_empty":                {Execute: true, ForceDaemonCapability: true, Reason: "Replayed with the daemon capability: native reviewer reads are deliberately capability-protected."},
 	"ask_question_set_create":                {Execute: true, ForceDaemonCapability: true},
@@ -171,8 +178,8 @@ func TestFrozenTypeScriptParityMatrix(t *testing.T) {
 		"health", "unauthenticated_queue", "browser_session_exchange",
 		"github_auth_status", "github_auth_configure", "github_auth_device_start", "github_auth_device_poll", "github_auth_authenticated_status", "github_auth_disconnect",
 		"local_pr_requires_read_auth", "workspaces_empty", "queue_empty", "federation_nodes_empty", "open_workspace", "repos",
-		"repo_diff", "repo_diff_ignore_whitespace", "repo_revisions", "repo_line_count", "repo_blob", "repo_generated_status", "repo_fullfile", "create_comment",
-		"ui_state_empty", "ui_state_put", "export_prompt", "sessions", "new_session",
+		"repo_diff", "repo_diff_ignore_whitespace", "repo_revisions", "repo_line_count", "repo_blob", "repo_generated_status", "repo_fullfile", "create_comment", "comment_import",
+		"sessions", "review_history", "ui_state_empty", "ui_state_put", "export_prompt", "new_session", "comments_json", "comments_output",
 		"ask_conversations_empty", "ask_question_set_create", "ask_question_sets", "ask_question_set_get", "ask_question_set_update", "ask_question_set_delete", "ask_conversation_create", "ask_conversation_get", "ask_inline_conversation_reuses_context",
 		"queue_create_local", "queue_list_with_item", "queue_detail", "queue_reorder", "queue_add_feedback", "queue_feedback_prompt", "queue_export", "queue_open", "queue_complete", "queue_requeue", "queue_delete", "queue_history",
 		"agent_register", "agent_list", "agent_heartbeat", "agent_reconnect",

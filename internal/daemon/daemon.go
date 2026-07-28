@@ -687,6 +687,17 @@ func (d *Daemon) restoreActiveWorkspace() error {
 // Polling is deliberate here—Git state can change through IDEs, hooks, and
 // remote worktrees, none of which are reliably covered by filesystem events.
 func (d *Daemon) startDiffWatcher(repos []reviewRepo) {
+	// Capture the baseline before returning to the caller. Previously this was
+	// done inside the goroutine, so a file edit immediately after opening a
+	// workspace could be mistaken for the initial state and never trigger a
+	// reload. Browser reviewers (and the frozen WebSocket fixture) are allowed
+	// to edit as soon as the open request succeeds.
+	fingerprints := make(map[string]string, len(repos))
+	for _, repo := range repos {
+		if value, err := repoFingerprint(repo.AbsolutePath); err == nil {
+			fingerprints[repo.ID] = value
+		}
+	}
 	d.mu.Lock()
 	if d.watchStop != nil {
 		d.watchStop()
@@ -696,13 +707,6 @@ func (d *Daemon) startDiffWatcher(repos []reviewRepo) {
 	d.mu.Unlock()
 
 	go func() {
-		fingerprints := make(map[string]string, len(repos))
-		for _, repo := range repos {
-			value, err := repoFingerprint(repo.AbsolutePath)
-			if err == nil {
-				fingerprints[repo.ID] = value
-			}
-		}
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
 		for {
@@ -1310,14 +1314,10 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid comment import data"})
 				return
 			}
-			var entries []commentImport
-			if len(raw) > 0 && raw[0] == '[' {
-				_ = json.Unmarshal(raw, &entries)
-			} else {
-				var entry commentImport
-				if json.Unmarshal(raw, &entry) == nil {
-					entries = []commentImport{entry}
-				}
+			entries, normalizeErr := normalizeCommentImports(raw)
+			if normalizeErr != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid comment import data"})
+				return
 			}
 			if len(entries) == 0 {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid comment import data"})

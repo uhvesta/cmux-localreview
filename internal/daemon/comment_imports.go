@@ -32,6 +32,51 @@ type commentImport struct {
 	} `json:"codeSnapshot"`
 }
 
+// normalizeCommentImports accepts the portable durable format as the native
+// contract, plus the compact {id,file,line,body} rows emitted by the frozen
+// TypeScript reviewer. Keeping this translation at the HTTP boundary lets a
+// restored older browser import its comments without reintroducing a second
+// storage model.
+func normalizeCommentImports(raw json.RawMessage) ([]commentImport, error) {
+	var rows []json.RawMessage
+	if len(raw) > 0 && raw[0] == '[' {
+		if err := json.Unmarshal(raw, &rows); err != nil {
+			return nil, err
+		}
+	} else {
+		rows = []json.RawMessage{raw}
+	}
+	entries := make([]commentImport, 0, len(rows))
+	for _, row := range rows {
+		var entry commentImport
+		if err := json.Unmarshal(row, &entry); err != nil {
+			return nil, err
+		}
+		if entry.Type == "" {
+			var legacy struct {
+				ID   string `json:"id"`
+				File string `json:"file"`
+				Line int64  `json:"line"`
+				Body string `json:"body"`
+			}
+			if err := json.Unmarshal(row, &legacy); err != nil {
+				return nil, err
+			}
+			if legacy.File != "" && legacy.Line > 0 && strings.TrimSpace(legacy.Body) != "" {
+				entry.Type = "thread"
+				entry.ID = legacy.ID
+				entry.Channel = "formal"
+				entry.FilePath = legacy.File
+				entry.Position.Side = "new"
+				entry.Position.Line, _ = json.Marshal(legacy.Line)
+				entry.Body = legacy.Body
+			}
+		}
+		entries = append(entries, entry)
+	}
+	return entries, nil
+}
+
 type importedMessage struct {
 	ID        string `json:"id,omitempty"`
 	Body      string `json:"body"`
