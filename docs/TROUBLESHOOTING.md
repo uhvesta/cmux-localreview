@@ -10,7 +10,7 @@ bun --version
 git --version
 bun test
 bun run typecheck
-gh auth status
+./src/localreview-github-app.ts status
 copilot --version
 bun src/localreview-open.ts --home
 ```
@@ -58,17 +58,15 @@ not just the generic error.
 ## A remote PR cannot be added, refreshed, or published
 
 ```sh
-gh auth status
-gh pr view https://github.com/OWNER/REPOSITORY/pull/NUMBER \
-  --json number,title,state,headRefName,baseRefName
+bun src/localreview-github-app.ts status
 ```
 
 | Symptom | Cause | Recovery |
 | --- | --- | --- |
-| `gh` requests login | No CLI auth session | Run `gh auth login`, then retry. |
-| PR cannot resolve | Wrong URL or inaccessible repository | Verify canonical URL and account access. |
+| `The read GitHub App is not connected` | PR read App is not connected | Configure/connect **PR read** in Queue Home or with `localreview-github-app connect --capability read`. |
+| PR cannot resolve | Wrong URL, missing App installation, or inaccessible repository | Verify canonical URL and install the PR read App on that repository. |
 | Review is stale | PR head changed after opening | Refresh remote PRs, reopen, then publish. |
-| Inline comment rejected | Anchor is outdated/unsupported | Refresh; valid review publishing falls back to summary feedback. |
+| Inline comment rejected | Anchor is outdated/unsupported | Refresh and correct the anchor; the publish App never silently redirects a review. |
 | Cache missing | Worktree/mirror was cleaned | Re-add the PR URL. |
 
 Approval, request-changes, and comments affect GitHub. Confirm the target PR
@@ -76,18 +74,18 @@ and head SHA in the detail view before publishing.
 
 ## `/ask` has no model, authentication fails, or streaming stalls
 
-`/ask` is a fresh Copilot SDK chat using the installed Copilot CLI's login; it
-is not an existing ACP session.
+`/ask` is a fresh Copilot SDK chat using the dedicated **Copilot /ask** GitHub
+App connection; it is not an existing ACP session and does not reuse a
+Copilot CLI, `gh`, or environment login.
 
 ```sh
 copilot --version
-copilot -p 'Reply exactly COPILOT_OK' --output-format json --stream off --available-tools ''
+bun src/localreview-github-app.ts status
 ```
 
-Complete any requested Copilot terminal login, then reload the reviewer. If the
-CLI succeeds but `/ask` fails, restart the daemon and start a new conversation;
-retain the displayed model and error for diagnosis. Cancel a streaming turn
-before issuing a new one. `/ask` transcript entries never become formal review
+Connect the Copilot App and reload the reviewer. If `/ask` still fails, restart
+the daemon and start a new conversation; retain the displayed model and error
+for diagnosis. Cancel a streaming turn before issuing a new one. `/ask` transcript entries never become formal review
 feedback unless a reviewer explicitly converts an answer to a comment.
 
 If Copilot cannot find the project skills:
@@ -191,6 +189,6 @@ isolated queue; avoid running multiple daemons against one data directory.
 
 Include the queue-item ID, local/remote source, exact visible error, action,
 and selected diff base/target. Include `bun --version`, `git --version`, and
-the relevant `gh auth status` or `copilot --version` output with secrets
-redacted. Never include bearer tokens, discovery documents, ACP session IDs,
+the output of `localreview-github-app status` or `copilot --version` with
+secrets redacted. Never include bearer tokens, discovery documents, ACP session IDs,
 or terminal transcripts.

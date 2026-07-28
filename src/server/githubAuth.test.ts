@@ -1,62 +1,48 @@
 import { describe, expect, test } from "bun:test";
 
-import { GitHubAuthService, type GitHubAuthDependencies } from "./githubAuth.ts";
-import type { CommandResult } from "./gitExec.ts";
+import { GitHubAuthService, type GitHubCapability } from "./githubAuth.ts";
+import type { SecretStore } from "./secretStore.ts";
 
-function result(exitCode: number, stdout = "", stderr = ""): CommandResult {
-  return { exitCode, stdout, stderr };
-}
-
-function closedStream(): ReadableStream<Uint8Array> {
-  return new ReadableStream({ start(controller) { controller.close(); } });
+function memorySecrets(): SecretStore & { values: Map<string, string> } {
+  const values = new Map<string, string>();
+  const key = (service: string, account: string) => `${service}\0${account}`;
+  return { values, get: async (service, account) => values.get(key(service, account)), set: async (service, account, value) => { values.set(key(service, account), value); }, remove: async (service, account) => { values.delete(key(service, account)); } };
 }
 
 describe("GitHubAuthService", () => {
-  test("reports the GitHub CLI identity and a Copilot installation without exposing credentials", async () => {
-    const seen: string[][] = [];
-    const service = new GitHubAuthService({
-      run: async (command) => {
-        seen.push(command);
-        if (command[0] === "gh" && command[1] === "--version") return result(0, "gh version 2.99.0");
-        if (command[0] === "gh" && command[1] === "auth") return result(0);
-        if (command[0] === "gh" && command[1] === "api") return result(0, "octocat\n");
-        if (command[0] === "copilot") return result(0, "1.2.3\n");
-        return result(1, "", "unexpected command");
-      },
-    });
+  test("uses separate GitHub App device flows and stores issued tokens only in the secret store", async () => {
+    const secrets = memorySecrets();
+    let exchanges = 0;
+    const fetcher: typeof fetch = (async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith("/login/device/code")) return new Response(JSON.stringify({ device_code: "opaque-device-code", user_code: "ABCD-EFGH", verification_uri: "https://github.com/login/device", expires_in: 900, interval: 1 }), { status: 200 });
+      if (url.endsWith("/login/oauth/access_token")) { exchanges++; return new Response(JSON.stringify({ access_token: "ghu_app_user_token", expires_in: 28_800, refresh_token: "ghr_refresh" }), { status: 200 }); }
+      if (url.endsWith("/user")) return new Response(JSON.stringify({ login: "octocat" }), { status: 200 });
+      return new Response(JSON.stringify({ message: "unexpected" }), { status: 500 });
+    }) as typeof fetch;
+    const service = new GitHubAuthService(secrets, fetcher, async () => undefined, "/tmp/cmux-localreview-github-auth-test.json");
+    service.configure("read", "Iv1.readClient");
+    service.configure("write", "Iv1.writeClient");
+    service.configure("copilot", "Iv1.copilotClient");
 
-    expect(await service.status()).toMatchObject({
-      gh: { installed: true, authenticated: true, login: "octocat" },
-      copilot: { installed: true, version: "1.2.3" },
-      login: { state: "idle" },
-    });
-    expect(seen).toContainEqual(["gh", "api", "user", "--hostname", "github.com", "--jq", ".login"]);
+    const device = await service.start("copilot");
+    expect(device).toMatchObject({ userCode: "ABCD-EFGH", verificationUri: "https://github.com/login/device" });
+    const connected = await service.poll("copilot");
+    expect(connected).toMatchObject({ authenticated: true, login: "octocat", loginState: "succeeded" });
+    expect(await service.token("copilot")).toBe("ghu_app_user_token");
+    expect(exchanges).toBe(1);
+    expect([...secrets.values.values()].join("\n")).toContain("ghu_app_user_token");
+    const status = await service.status();
+    expect(status.capabilities.read.authenticated).toBe(false);
+    expect(status.capabilities.write.authenticated).toBe(false);
+    expect(status.capabilities.copilot.authenticated).toBe(true);
+
+    await service.disconnect("copilot");
+    await expect(service.token("copilot")).rejects.toThrow("not connected");
   });
 
-  test("starts exactly one browser OAuth login and surfaces completion", async () => {
-    let finish!: (code: number) => void;
-    const started: string[][] = [];
-    const dependencies: GitHubAuthDependencies = {
-      run: async () => result(1, "", "not logged in"),
-      spawn: (command) => {
-        started.push(command);
-        return { stdout: closedStream(), stderr: closedStream(), exited: new Promise((resolve) => { finish = resolve; }), kill: () => undefined };
-      },
-    };
-    const service = new GitHubAuthService(dependencies);
-    expect(service.start()).toMatchObject({ state: "waiting" });
-    expect(service.start()).toMatchObject({ state: "waiting" });
-    expect(started).toEqual([["gh", "auth", "login", "--hostname", "github.com", "--git-protocol", "ssh", "--web", "--scopes", "repo,read:org"]]);
-    finish(0);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect((await service.status()).login).toMatchObject({ state: "succeeded" });
-  });
-
-  test("makes a missing GitHub CLI an actionable unavailable state", async () => {
-    const service = new GitHubAuthService({ run: async () => { throw new Error("Executable not found"); } });
-    expect(await service.status()).toMatchObject({
-      gh: { installed: false, authenticated: false },
-      copilot: { installed: false },
-    });
+  test("requires configured capability instead of falling back to gh or another capability", async () => {
+    const service = new GitHubAuthService(memorySecrets(), fetch, async () => undefined, "/tmp/cmux-localreview-github-auth-unconfigured.json");
+    await expect(service.start("read" as GitHubCapability)).rejects.toThrow("Configure the read GitHub App");
   });
 });

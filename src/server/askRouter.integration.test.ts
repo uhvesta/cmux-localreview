@@ -37,6 +37,18 @@ afterEach(async () => {
 });
 
 describe("/ask HTTP integration with an injected Copilot boundary", () => {
+  test("refuses to fall back to a local Copilot or gh login when the App capability is absent", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const service = new AskService(db, temporaryWorkspace());
+    try {
+      await expect(service.listModels()).rejects.toThrow("Copilot GitHub App is not connected");
+    } finally {
+      await service.close();
+      db.close();
+    }
+  });
+
   test("formats inline questions with workspace, file, range, side, and selected code", () => {
     const formatted = formatAskPrompt("/review/workspace", "Could this throw path be simplified?", {
       repoId: "repo-fixture",

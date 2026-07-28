@@ -51,6 +51,8 @@ export interface WorkspaceServerOptions {
   defaultTerminalAgentId?: string;
   onTerminalDeliverySuccess?: (agentId: string) => void;
   onTerminalDeliveryFailure?: (agentId: string, error: unknown) => void;
+  /** Dedicated GitHub App token for the fresh Copilot SDK `/ask` runtime. */
+  copilotToken?: () => Promise<string>;
 }
 
 /** Stable short id for a repo, derived from its durable identity (gitDir). */
@@ -237,6 +239,7 @@ export async function buildWorkspaceApp(options: WorkspaceServerOptions): Promis
     workspaceRoot: options.workspaceRoot,
     getReviewSessionId: getSessionId,
     repoRoots: new Map(mounted.map((item) => [item.repoId, item.repo.absolutePath])),
+    copilotToken: options.copilotToken,
   });
   app.use(ask.router);
 

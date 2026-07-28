@@ -8,7 +8,7 @@ expected result before moving to the next step.
 
 | Machine role | Required | Optional integrations |
 | --- | --- | --- |
-| Local reviewer or submitter | Bun, Git, and this checkout | GitHub CLI, Copilot CLI, cmux |
+| Local reviewer or submitter | Bun, Git, this checkout, and a system secret store | Copilot CLI runtime, cmux |
 | Remote worker | The same tools plus SSH access from the review machine | A service supervisor |
 | Existing Copilot feedback target | Copilot CLI signed in, ACP listener, session ID | cmux |
 
@@ -17,15 +17,47 @@ Check the boundaries independently:
 ```sh
 git --version
 bun --version
-gh auth status
 copilot --version
 ssh -V
 ```
 
-Run `gh auth login` if the GitHub CLI is not authenticated. For Copilot, use
-the normal terminal sign-in flow; `/ask` uses that same logged-in CLI identity.
+`/ask` uses the installed Copilot CLI runtime but does **not** use its stored
+login. cmux-localreview passes an explicit daemon-owned GitHub App token with
+all other SDK credential sources disabled. On macOS this requires Keychain;
+on Linux install a libsecret provider that exposes `secret-tool`.
 cmux is optional: without it, snapshots, GitHub PRs, and `/ask` still work,
 but cmux provenance and terminal `/btw` routing do not.
+
+## Create and connect the GitHub Apps
+
+Create three GitHub Apps (personal or organization-owned), enable **Device
+Flow** on each, and retain their public Client IDs. The CLI prints the exact
+registration checklist:
+
+```sh
+bun src/localreview-github-app.ts guide
+```
+
+Use three different Apps and least privilege:
+
+| Capability | Repository permissions | Used for |
+| --- | --- | --- |
+| `read` | Metadata read, Contents read, Pull requests read | Resolve, mirror, and locally review PRs |
+| `write` | Metadata read, Pull requests read/write | Explicit GitHub review publication only |
+| `copilot` | The Copilot user-token permission required by your plan; no repo grants by default | Fresh Copilot SDK `/ask` sessions |
+
+Install each App only on the repositories it needs. Then configure and connect
+each one from Queue Home, or on a local/headless host:
+
+```sh
+bun src/localreview-github-app.ts configure --capability read --client-id Iv1.…
+bun src/localreview-github-app.ts connect --capability read
+bun src/localreview-github-app.ts status
+```
+
+`connect` opens GitHub’s device-flow page and waits locally. It stores tokens
+only under the `cmux-localreview.github-app` system-secret service. It never
+uses `gh`, a PAT, environment token, or Copilot CLI credential fallback.
 
 The daemon always binds to `127.0.0.1`. Use SSH local forwarding for a remote
 daemon or ACP listener; do not make either service public.
@@ -134,10 +166,10 @@ delivery. Delivered feedback is recorded so retries do not duplicate it.
 
 ## Review a GitHub PR
 
-Use an authenticated `gh` session and a canonical PR URL:
+Connect the **PR read** App and use a canonical PR URL:
 
 ```sh
-gh auth status
+bun src/localreview-github-app.ts status
 bun src/queue-submit.ts https://github.com/OWNER/REPOSITORY/pull/NUMBER
 ```
 
@@ -154,14 +186,14 @@ It does **not** create a queue item or snapshot, attach an ACP agent, or make
 GitHub review submission controls available in the browser.
 
 ```sh
-copilot login  # once per machine, for the /ask model picker
+# Connect read + copilot capabilities once, then:
 bun src/localreview-open.ts --pr https://github.com/OWNER/REPOSITORY/pull/NUMBER
 ```
 
 The resulting reviewer URL has no daemon bearer token and is accepted only on
 `127.0.0.1`. Open `/ask`, choose a model, and ask a side-chat or inline code
-question. GitHub CLI authentication is still needed to resolve and clone a
-private PR; no GitHub write operation occurs in this mode.
+question. The PR read App is required to resolve and clone a private PR; no
+GitHub write capability is required or used in this mode.
 
 ## Remote daemon and SSH forwarding
 
@@ -219,8 +251,8 @@ Run the relevant checks before claiming a machine is ready:
 bun test
 bun run typecheck
 bun run build
-gh auth status
-copilot -p 'Reply exactly OK' --output-format json --stream off --available-tools ''
+bun src/localreview-github-app.ts status
+copilot --version
 ```
 
 Finally, open Queue Home using `bun src/localreview-open.ts --home`, submit a

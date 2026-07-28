@@ -1,5 +1,5 @@
-import { realpathSync } from "node:fs";
-import { relative, resolve } from "node:path";
+import { mkdirSync, realpathSync } from "node:fs";
+import { join, relative, resolve } from "node:path";
 import type { Database } from "bun:sqlite";
 import { CopilotClient, RuntimeConnection, type CopilotSession, type ModelInfo, type PermissionRequest } from "@github/copilot-sdk";
 import express, { type Response, type Router } from "express";
@@ -24,6 +24,7 @@ import {
   updateQuestionSet,
 } from "./askQuestionSetStore.ts";
 import type { AskLocation } from "./askStore.ts";
+import { localreviewDataDir } from "./daemonPaths.ts";
 
 type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 type ContextTier = "default" | "long_context";
@@ -36,6 +37,8 @@ export interface AskRouterOptions {
   getReviewSessionId?: () => number;
   /** Maps the mounted diff application's public repo id to its actual root. */
   repoRoots?: ReadonlyMap<string, string>;
+  /** Returns the daemon-owned token for the dedicated Copilot GitHub App. */
+  copilotToken?: () => Promise<string>;
 }
 
 /**
@@ -88,37 +91,58 @@ export function formatAskPrompt(
 export class AskService {
   private readonly workspaceRoot: string;
   private readonly realWorkspaceRoot: string;
-  private readonly client: CopilotClient;
+  private client: CopilotClient | undefined;
   private readonly active = new Map<string, ActiveAsk>();
   // The browser receives SSE `started` before a cold Copilot runtime has
   // necessarily created its session. Remember an immediate Stop so it wins
   // once initialization completes instead of misleadingly returning false.
   private readonly pendingAborts = new Set<string>();
 
-  constructor(private readonly db: Database, workspaceRoot: string, private readonly repoRoots?: ReadonlyMap<string, string>) {
+  constructor(
+    private readonly db: Database,
+    workspaceRoot: string,
+    private readonly repoRoots?: ReadonlyMap<string, string>,
+    private readonly copilotToken?: () => Promise<string>,
+  ) {
     this.workspaceRoot = resolve(workspaceRoot);
     this.realWorkspaceRoot = realpathSync(this.workspaceRoot);
+  }
+
+  private async clientFor(): Promise<CopilotClient> {
+    if (this.client) return this.client;
+    if (!this.copilotToken) throw new Error("The Copilot GitHub App is not connected. Configure and connect the Copilot capability in Queue Home.");
+    const gitHubToken = await this.copilotToken();
+    // Give the spawned runtime only the ordinary process plumbing it needs.
+    // In particular, it cannot see GH_TOKEN, GITHUB_TOKEN, COPILOT_HOME, or
+    // any user's inherited GitHub/Copilot credential configuration.
+    const runtimeEnv = Object.fromEntries(Object.entries({
+      PATH: process.env.PATH,
+      HOME: process.env.HOME,
+      TMPDIR: process.env.TMPDIR,
+      LANG: process.env.LANG,
+      LC_ALL: process.env.LC_ALL,
+    }).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+    const runtimeHome = join(localreviewDataDir(), "copilot-sdk-runtime");
+    mkdirSync(runtimeHome, { recursive: true, mode: 0o700 });
     this.client = new CopilotClient({
+      // Empty mode avoids importing Copilot CLI defaults and configuration.
+      mode: "empty",
       workingDirectory: this.realWorkspaceRoot,
-      // Use the user's installed Copilot CLI rather than the SDK's bundled
-      // runtime. The installed CLI is the process that owns the user's normal
-      // keychain-backed login, which makes fresh SDK /ask sessions behave the
-      // same way as `copilot -p` and avoids a second, unauthenticated runtime.
-      connection: RuntimeConnection.forStdio({ path: process.env.COPILOT_CLI_PATH ?? "copilot" }),
-      // Do not give the SDK a private COPILOT_HOME.  Copilot CLI credentials
-      // live in the user's normal ~/.copilot directory; a private base
-      // directory looks like a clean installation and makes an otherwise
-      // authenticated CLI report "Not authenticated" from /ask.  Conversation
-      // identity is persisted in our own database, so sharing that runtime
-      // home does not merge localreview conversations.
-      useLoggedInUser: true,
+      baseDirectory: runtimeHome,
+      connection: RuntimeConnection.forStdio({ path: process.env.COPILOT_CLI_PATH ?? "copilot", env: runtimeEnv }),
+      // Explicit GitHub App credentials take precedence in the SDK and we
+      // explicitly reject all stored Copilot CLI / gh / environment auth.
+      gitHubToken,
+      useLoggedInUser: false,
       logLevel: "warning",
     });
+    return this.client;
   }
 
   async listModels(): Promise<ModelInfo[]> {
-    await this.client.start();
-    return this.client.listModels();
+    const client = await this.clientFor();
+    await client.start();
+    return client.listModels();
   }
 
   async close(): Promise<void> {
@@ -127,7 +151,8 @@ export class AskService {
     }
     this.active.clear();
     this.pendingAborts.clear();
-    await this.client.stop();
+    await this.client?.stop();
+    this.client = undefined;
   }
 
   async abort(conversationId: string): Promise<boolean> {
@@ -164,7 +189,8 @@ export class AskService {
     const running = this.active.get(conversationId);
     if (running) return running;
 
-    await this.client.start();
+    const client = await this.clientFor();
+    await client.start();
     const config = {
       model: conversation.model ?? undefined,
       reasoningEffort: conversation.reasoningEffort ?? undefined,
@@ -179,8 +205,8 @@ export class AskService {
       },
     };
     const session = conversation.copilotSessionId
-      ? await this.client.resumeSession(conversation.copilotSessionId, config)
-      : await this.client.createSession(config);
+      ? await client.resumeSession(conversation.copilotSessionId, config)
+      : await client.createSession(config);
     const active: ActiveAsk = { session, model: conversation.model, sending: false };
     this.active.set(conversationId, active);
     if (conversation.copilotSessionId !== session.sessionId) {
@@ -342,7 +368,7 @@ function writeSse(res: Response, event: string, data: unknown): void {
 export function createAskRouter(options: AskRouterOptions): { router: Router; askService: AskService } {
   const router = express.Router();
   router.use(express.json({ limit: "1mb" }));
-  const askService = new AskService(options.db, options.workspaceRoot, options.repoRoots);
+  const askService = new AskService(options.db, options.workspaceRoot, options.repoRoots, options.copilotToken);
   const reviewSessionId = () => options.getReviewSessionId?.() ?? 0;
 
   router.get("/api/ask/models", async (_req, res) => {

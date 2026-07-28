@@ -39,11 +39,25 @@ interface FederationQueue { node: FederationNode; items: QueueItem[]; error?: st
 
 interface FederationNodeWithRuntime extends FederationNode { runtime?: FederationRuntime; }
 
-interface GitHubAuthStatus {
-  gh: { installed: boolean; authenticated: boolean; login?: string; error?: string };
-  copilot: { installed: boolean; version?: string };
-  login: { state: 'idle' | 'waiting' | 'succeeded' | 'failed'; message?: string };
+type GitHubCapability = 'read' | 'write' | 'copilot';
+interface GitHubCapabilityStatus {
+  configured: boolean;
+  authenticated: boolean;
+  login?: string;
+  error?: string;
+  loginState: 'idle' | 'waiting' | 'succeeded' | 'failed';
+  message?: string;
 }
+interface GitHubAuthStatus {
+  provider: 'github-app-device-flow';
+  capabilities: Record<GitHubCapability, GitHubCapabilityStatus>;
+}
+
+const capabilityLabels: Record<GitHubCapability, { title: string; description: string }> = {
+  read: { title: 'PR read', description: 'Resolve and mirror pull requests for local review.' },
+  write: { title: 'PR publish', description: 'Publish explicit approval, changes, or comments.' },
+  copilot: { title: 'Copilot /ask', description: 'Start fresh, read-only Copilot SDK conversations.' },
+};
 
 const buttonStyle = {
   fontSize: 12, padding: '6px 9px', borderRadius: 5, border: '1px solid rgba(127,127,127,0.45)',
@@ -110,7 +124,10 @@ export function QueueHome() {
   const [authRequired, setAuthRequired] = useState(false);
   const [githubAuth, setGithubAuth] = useState<GitHubAuthStatus | null>(null);
   const [githubAuthLoading, setGithubAuthLoading] = useState(false);
-  const [startingGitHubAuth, setStartingGitHubAuth] = useState(false);
+  const [githubCapability, setGithubCapability] = useState<GitHubCapability>('read');
+  const [githubClientId, setGithubClientId] = useState('');
+  const [githubAction, setGithubAction] = useState<GitHubCapability | null>(null);
+  const [deviceCode, setDeviceCode] = useState<{ capability: GitHubCapability; userCode: string; verificationUri: string } | null>(null);
 
   useEffect(() => { captureDaemonTokenFromLocation(); }, []);
   const refresh = useCallback(async () => {
@@ -153,26 +170,46 @@ export function QueueHome() {
   }, []);
   useEffect(() => { void refreshGitHubAuth(); }, [refreshGitHubAuth]);
   useEffect(() => {
-    if (githubAuth?.login.state !== 'waiting') return;
-    const timer = window.setInterval(() => { void refreshGitHubAuth(); }, 1_500);
+    const waiting = githubAuth && (Object.keys(githubAuth.capabilities) as GitHubCapability[]).some((capability) => githubAuth.capabilities[capability].loginState === 'waiting');
+    if (!waiting) return;
+    const timer = window.setInterval(() => {
+      if (githubAuth) for (const capability of Object.keys(githubAuth.capabilities) as GitHubCapability[]) {
+        if (githubAuth.capabilities[capability].loginState === 'waiting') void daemonFetch(`/api/github/auth/${capability}/poll`, { method: 'POST' }).then(() => refreshGitHubAuth());
+      }
+    }, 2_000);
     return () => window.clearInterval(timer);
-  }, [githubAuth?.login.state, refreshGitHubAuth]);
-
-  const startGitHubAuth = useCallback(async () => {
-    setStartingGitHubAuth(true); setError(null);
-    try {
-      const response = await daemonFetch('/api/github/auth/start', { method: 'POST' });
-      const body = (await response.json().catch(() => null)) as { login?: GitHubAuthStatus['login']; error?: string } | null;
-      if (!response.ok) throw new Error(body?.error ?? 'Could not start GitHub sign-in.');
-      if (body?.login && githubAuth) setGithubAuth({ ...githubAuth, login: body.login });
-      await refreshGitHubAuth();
-    } catch (err) { setError(err instanceof Error ? err.message : 'Could not start GitHub sign-in.'); }
-    finally { setStartingGitHubAuth(false); }
   }, [githubAuth, refreshGitHubAuth]);
 
-  const cancelGitHubAuth = useCallback(async () => {
-    await daemonFetch('/api/github/auth/cancel', { method: 'POST' });
-    await refreshGitHubAuth();
+  const configureGitHubApp = useCallback(async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!githubClientId.trim()) return;
+    setGithubAction(githubCapability); setError(null);
+    try {
+      const response = await daemonFetch('/api/github/auth/configure', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ capability: githubCapability, clientId: githubClientId.trim() }) });
+      const body = (await response.json().catch(() => null)) as { error?: string } | null;
+      if (!response.ok) throw new Error(body?.error ?? 'Could not save this GitHub App client ID.');
+      setGithubClientId('');
+      await refreshGitHubAuth();
+    } catch (err) { setError(err instanceof Error ? err.message : 'Could not save this GitHub App client ID.'); }
+    finally { setGithubAction(null); }
+  }, [githubCapability, githubClientId, refreshGitHubAuth]);
+
+  const startGitHubAuth = useCallback(async (capability: GitHubCapability) => {
+    setGithubAction(capability); setError(null);
+    try {
+      const response = await daemonFetch(`/api/github/auth/${capability}/start`, { method: 'POST' });
+      const body = (await response.json().catch(() => null)) as { userCode?: string; verificationUri?: string; error?: string } | null;
+      if (!response.ok || !body?.userCode || !body?.verificationUri) throw new Error(body?.error ?? 'Could not start GitHub App authorization.');
+      setDeviceCode({ capability, userCode: body.userCode, verificationUri: body.verificationUri });
+      await refreshGitHubAuth();
+    } catch (err) { setError(err instanceof Error ? err.message : 'Could not start GitHub App authorization.'); }
+    finally { setGithubAction(null); }
+  }, [refreshGitHubAuth]);
+
+  const disconnectGitHubApp = useCallback(async (capability: GitHubCapability) => {
+    setGithubAction(capability);
+    try { await daemonFetch(`/api/github/auth/${capability}`, { method: 'DELETE' }); await refreshGitHubAuth(); }
+    finally { setGithubAction(null); }
   }, [refreshGitHubAuth]);
 
   const openWorkspace = useCallback(async (item: QueueItem) => {
@@ -287,19 +324,28 @@ export function QueueHome() {
       <input value={daemonToken} onChange={(event) => setDaemonToken(event.target.value)} type="password" autoComplete="off" aria-label="Daemon bearer token" placeholder="Daemon token" style={{ flex: 1, minWidth: 180, padding: '7px 8px', borderRadius: 5, border: '1px solid rgba(127,127,127,0.45)', background: 'transparent', color: 'inherit' }} />
       <button type="submit" disabled={!daemonToken.trim()} style={buttonStyle}>Connect</button>
     </form>}
-    {githubAuth && <section aria-label="GitHub and Copilot connection" style={{ margin: '0 0 18px', padding: 12, border: `1px solid ${githubAuth.gh.authenticated ? 'rgba(46,160,67,0.6)' : 'rgba(210,153,34,0.62)'}`, borderRadius: 8, display: 'flex', gap: 12, justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap' }}>
-      <div style={{ minWidth: 250 }}>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}><strong>GitHub &amp; Copilot</strong><span style={{ color: githubAuth.gh.authenticated ? '#2ea043' : '#d29922', fontSize: 12 }}>{githubAuth.gh.authenticated ? `Connected${githubAuth.gh.login ? ` as @${githubAuth.gh.login}` : ''}` : githubAuth.gh.installed ? 'Not connected' : 'GitHub CLI unavailable'}</span></div>
-        <p style={{ margin: '4px 0 0', fontSize: 12, opacity: 0.74 }}>
-          {githubAuth.login.state === 'waiting' ? githubAuth.login.message : githubAuth.gh.authenticated ? <>GitHub API calls and fresh Copilot SDK <code>/ask</code> chats use this secure GitHub CLI OAuth login. {githubAuth.copilot.installed ? 'Copilot CLI is installed.' : 'Install Copilot CLI to use /ask.'}</> : githubAuth.gh.error ?? 'Sign in with GitHub to read private PRs, publish reviews, and use /ask.'}
-        </p>
-        {githubAuth.login.state !== 'idle' && githubAuth.login.state !== 'waiting' && <p role="status" style={{ margin: '5px 0 0', fontSize: 12, color: githubAuth.login.state === 'failed' ? '#f85149' : '#2ea043' }}>{githubAuth.login.message}</p>}
+    {githubAuth && <section aria-label="GitHub App connections" style={{ margin: '0 0 18px', padding: 12, border: '1px solid rgba(127,127,127,0.42)', borderRadius: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}><div><strong>GitHub App connections</strong><p style={{ margin: '4px 0 0', fontSize: 12, opacity: 0.74 }}>Separate, least-privilege App grants. Tokens stay in this daemon’s system secret store; the browser receives only a device code.</p></div><button onClick={() => void refreshGitHubAuth()} disabled={githubAuthLoading} style={buttonStyle}>{githubAuthLoading ? 'Checking…' : 'Refresh status'}</button></div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(225px, 1fr))', gap: 9, marginTop: 10 }}>
+        {(Object.keys(capabilityLabels) as GitHubCapability[]).map((capability) => {
+          const status = githubAuth.capabilities[capability];
+          const waiting = status.loginState === 'waiting';
+          return <article key={capability} style={{ border: '1px solid rgba(127,127,127,0.3)', padding: 10, borderRadius: 6 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 7 }}><strong style={{ fontSize: 13 }}>{capabilityLabels[capability].title}</strong><span style={{ fontSize: 11, color: status.authenticated ? '#2ea043' : status.configured ? '#d29922' : '#8b949e' }}>{status.authenticated ? `Connected${status.login ? ` @${status.login}` : ''}` : status.configured ? (waiting ? 'Waiting…' : 'Not connected') : 'Not configured'}</span></div>
+            <p style={{ margin: '5px 0 9px', fontSize: 11, opacity: 0.7 }}>{status.message ?? status.error ?? capabilityLabels[capability].description}</p>
+            <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
+              {status.configured && !status.authenticated && <button onClick={() => void startGitHubAuth(capability)} disabled={githubAction !== null} style={{ ...buttonStyle, borderColor: '#2ea043' }}>{githubAction === capability ? 'Opening…' : waiting ? 'Restart device flow' : 'Connect'}</button>}
+              {status.authenticated && <button onClick={() => void disconnectGitHubApp(capability)} disabled={githubAction !== null} style={buttonStyle}>{githubAction === capability ? 'Disconnecting…' : 'Disconnect'}</button>}
+            </div>
+          </article>;
+        })}
       </div>
-      <div style={{ display: 'flex', gap: 7, alignItems: 'center', flexWrap: 'wrap' }}>
-        {githubAuth.login.state === 'waiting' ? <><button onClick={() => void refreshGitHubAuth()} disabled={githubAuthLoading} style={buttonStyle}>{githubAuthLoading ? 'Checking…' : 'Check sign-in'}</button><button onClick={() => void cancelGitHubAuth()} style={buttonStyle}>Cancel</button></> : <button onClick={() => void startGitHubAuth()} disabled={startingGitHubAuth || !githubAuth.gh.installed} style={{ ...buttonStyle, borderColor: '#2ea043' }}>{startingGitHubAuth ? 'Opening GitHub…' : githubAuth.gh.authenticated ? 'Reconnect GitHub' : 'Authenticate with GitHub'}</button>}
-        <button onClick={() => void refreshGitHubAuth()} disabled={githubAuthLoading} style={buttonStyle}>Refresh status</button>
-      </div>
-      <div style={{ width: '100%', fontSize: 11, opacity: 0.64 }}>This opens GitHub’s browser sign-in and stores OAuth in your system credential store. No GitHub token is pasted into or saved by cmux-localreview.</div>
+      <form onSubmit={configureGitHubApp} style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginTop: 11 }} aria-label="Configure GitHub App client ID">
+        <select value={githubCapability} onChange={(event) => setGithubCapability(event.target.value as GitHubCapability)} aria-label="GitHub App capability" style={{ ...buttonStyle, padding: '6px 7px' }}>{(Object.keys(capabilityLabels) as GitHubCapability[]).map((capability) => <option key={capability} value={capability}>{capabilityLabels[capability].title}</option>)}</select>
+        <input value={githubClientId} onChange={(event) => setGithubClientId(event.target.value)} placeholder="GitHub App client ID (Iv1.… )" autoComplete="off" aria-label="GitHub App client ID" style={{ flex: 1, minWidth: 220, padding: '6px 8px', borderRadius: 5, border: '1px solid rgba(127,127,127,0.45)', background: 'transparent', color: 'inherit' }} />
+        <button type="submit" disabled={!githubClientId.trim() || githubAction !== null} style={buttonStyle}>{githubAction === githubCapability ? 'Saving…' : 'Save App'}</button>
+      </form>
+      {deviceCode && <div role="status" style={{ marginTop: 10, padding: 10, border: '1px solid rgba(88,166,255,0.5)', borderRadius: 6, fontSize: 12 }}>Authorize <strong>{capabilityLabels[deviceCode.capability].title}</strong> at <a href={deviceCode.verificationUri} target="_blank" rel="noreferrer">github.com/login/device</a> with code <code style={{ fontWeight: 700, fontSize: 14 }}>{deviceCode.userCode}</code>. This page checks automatically; no token is shown or pasted.</div>}
     </section>}
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 22, alignItems: 'start' }}>
       <section aria-label="Local review queue">

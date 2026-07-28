@@ -151,35 +151,42 @@ checks for its self-contained Git bundles.
 
 ## GitHub PR reviews
 
-### Authenticate once from Queue Home
+### Authenticate with dedicated GitHub Apps
 
-Open Queue Home with `localreview-open --home` and choose **Authenticate with
-GitHub**. It opens GitHub's official browser OAuth flow—there is no GitHub or
-Copilot token field. On completion, `gh` keeps the OAuth credential in the
-operating-system credential store. That same login powers GitHub API work
-(private PR reads and optional review publication) and is a supported fallback
-for fresh Copilot SDK `/ask` sessions.
+Queue Home uses three separate GitHub App device-flow connections, not `gh`,
+PATs, environment variables, or an existing Copilot CLI login:
 
-The connection card reports the signed-in GitHub identity and whether Copilot
-CLI is installed. Open `/ask` after signing in to load the Copilot model list.
-cmux-localreview never receives, displays, or writes the GitHub OAuth token.
+- **PR read** resolves and mirrors PRs for local review.
+- **PR publish** is required only when publishing an approval, request for
+  changes, or GitHub comment.
+- **Copilot /ask** authenticates fresh Copilot SDK sessions.
 
-For a headless host only, use `gh auth login --web --hostname github.com
---git-protocol ssh --scopes repo,read:org` on that host; this is the same OAuth
-flow, not a copied-token workflow.
+Create the App registrations once (device flow must be enabled), then connect
+them in Queue Home or run:
 
-Remote PR submission requires an authenticated `gh` CLI. The daemon resolves
-the PR's repository plus base/head SHAs before cloning, then checks out that
-exact head in a managed cache worktree. Re-submitting the same PR URL refreshes
-the review stream; when its head changes, a new immutable review round linked
-to the prior item returns to the queue. `POST /api/queue/:id/refresh` performs
-the same refresh explicitly, while `POST /api/queue/:id/cleanup` removes the
-managed worktree (pass `{ "removeMirror": true }` only when its reusable
-mirror should be discarded too).
+```sh
+bun src/localreview-github-app.ts guide
+bun src/localreview-github-app.ts configure --capability read --client-id Iv1.…
+bun src/localreview-github-app.ts connect --capability read
+```
 
-Approving or requesting changes sends a GitHub Review through `gh`: file/line
-feedback is emitted as inline review comments when GitHub accepts the anchors,
-with a summary-review fallback for stale or unsupported anchors.
+The daemon keeps issued access and refresh tokens only in macOS Keychain or
+Linux libsecret, under its own service name. The browser receives a short-lived
+device code, never a GitHub token. The public App client IDs are the only values
+written to daemon configuration. See [the operator setup guide](docs/SETUP.md)
+for exact permissions and headless setup.
+
+The daemon resolves the PR's repository plus base/head SHAs before cloning,
+then checks out that exact head in a managed cache worktree. Re-submitting the
+same PR URL refreshes the review stream; when its head changes, a new immutable
+review round linked to the prior item returns to the queue. `POST
+/api/queue/:id/refresh` performs the same refresh explicitly, while `POST
+/api/queue/:id/cleanup` removes the managed worktree (pass `{ "removeMirror":
+true }` only when its reusable mirror should be discarded too).
+
+Publishing is through GitHub’s Reviews API using the separate publish App. A
+stale or invalid inline anchor is rejected rather than silently publishing
+against a newer head or changing transport.
 
 ## Submission context and automatic queueing
 
@@ -312,37 +319,26 @@ PR read and an actual Copilot response; the final review-publication step is
 explicitly opt-in because it creates a real GitHub review.
 
 ```sh
-# GitHub device/login flow and a token/API check. `repo` is needed for private
-# PR metadata and review publication; use a fine-grained token with equivalent
-# pull-request read/write permissions if your organization requires it.
-gh auth login --web --git-protocol ssh --scopes repo,read:org
-gh auth status
-gh api user --jq .login
+# Set up dedicated Apps once; the guide specifies the least-privilege
+# permissions. Configure/connect read and copilot for local PR review + /ask.
+bun src/localreview-github-app.ts guide
+bun src/localreview-github-app.ts configure --capability read --client-id Iv1.…
+bun src/localreview-github-app.ts connect --capability read
+bun src/localreview-github-app.ts configure --capability copilot --client-id Iv1.…
+bun src/localreview-github-app.ts connect --capability copilot
 
-# Copilot keeps its credential in the normal CLI credential store. This opens
-# the device/web flow only if it is not already authenticated.
-copilot login
-copilot -C /path/to/repository -p 'Reply exactly: cmux-localreview Copilot authentication verified.' --allow-all
-
-# Resolve, mirror, snapshot, and queue a real PR. This uses the authenticated
-# `gh` CLI, but does not publish a review yet.
+# Resolve, mirror, snapshot, and queue a real PR through the read App. This
+# does not publish a review yet.
 export PR_URL='https://github.com/OWNER/REPOSITORY/pull/NUMBER'
-gh pr view "$PR_URL" --json url,title,state,headRefName,baseRefName
-# The REST response is intentionally used for immutable SHAs: it works with
-# both current and older supported gh CLI releases.
-gh api repos/OWNER/REPOSITORY/pulls/NUMBER --jq '{head: .head.sha, base: .base.sha, repo: .base.repo.full_name}'
 bun src/queue-submit.ts "$PR_URL" --title 'Authenticated remote smoke' --json
 bun src/localreview-open.ts --home
 ```
 
 In Queue Home, open that remote item and verify its **Remote cache** state,
-head/base SHAs, and source files. To exercise an actual GitHub review, add a
-non-destructive summary or inline comment and choose **Request changes** or
-**Approve** only on the disposable PR. Confirm the result with:
-
-```sh
-gh pr view "$PR_URL" --json reviews --jq '.reviews[-1]'
-```
+head/base SHAs, and source files. To exercise an actual GitHub review, connect
+the separate **PR publish** App, add a non-destructive summary or inline
+comment, and choose **Request changes** or **Approve** only on the disposable
+PR. Confirm the result on that PR’s GitHub page.
 
 For an existing Copilot CLI agent, run it as `copilot --acp --port 4123`, keep
 the session ID returned by ACP, submit the three ACP values with

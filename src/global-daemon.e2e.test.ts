@@ -5,7 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { startGlobalDaemon } from "./global-daemon.ts";
+import { GitHubAuthService } from "./server/githubAuth.ts";
 import { startFakeAcpTcpAgent } from "./server/testFixtures/fakeAcpTcpAgent.ts";
+import type { SecretStore } from "./server/secretStore.ts";
 
 const roots: string[] = [];
 
@@ -24,11 +26,41 @@ function createRepository(path: string): void {
   execFileSync("git", ["commit", "-qm", "fixture"], { cwd: path });
 }
 
+function memorySecretStore(): SecretStore {
+  const values = new Map<string, string>();
+  const key = (service: string, account: string) => `${service}\0${account}`;
+  return { get: async (service, account) => values.get(key(service, account)), set: async (service, account, value) => { values.set(key(service, account), value); }, remove: async (service, account) => { values.delete(key(service, account)); } };
+}
+
 afterEach(() => {
   while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true });
 });
 
 describe("global daemon authenticated queue lifecycle", () => {
+  test("exposes only dedicated GitHub App capability setup, never a token or gh fallback", async () => {
+    const root = temporaryRoot();
+    const previousDataDir = process.env.CMUX_LOCALREVIEW_DATA_DIR;
+    process.env.CMUX_LOCALREVIEW_DATA_DIR = join(root, "daemon-data");
+    const auth = new GitHubAuthService(memorySecretStore(), fetch, async () => undefined, join(root, "github-apps.json"));
+    const daemon = await startGlobalDaemon({ token: "github-app-e2e", githubAuthService: auth });
+    const authed = (path: string, init: RequestInit = {}) => fetch(`http://127.0.0.1:${daemon.discovery.port}${path}`, { ...init, headers: { authorization: "Bearer github-app-e2e", ...(init.headers ?? {}) } });
+    try {
+      const initial = await (await authed("/api/github/auth/status")).json() as { provider: string; capabilities: { read: { configured: boolean } } };
+      expect(initial.provider).toBe("github-app-device-flow");
+      expect(initial.capabilities.read.configured).toBe(false);
+      const configured = await authed("/api/github/auth/configure", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ capability: "read", clientId: "Iv1.fixtureRead" }) });
+      expect(configured.status).toBe(204);
+      const statusText = await (await authed("/api/github/auth/status")).text();
+      expect(statusText).toContain("github-app-device-flow");
+      expect(statusText).not.toContain("access_token");
+      expect(statusText).not.toContain("gh auth");
+    } finally {
+      await daemon.close();
+      if (previousDataDir === undefined) delete process.env.CMUX_LOCALREVIEW_DATA_DIR;
+      else process.env.CMUX_LOCALREVIEW_DATA_DIR = previousDataDir;
+    }
+  });
+
   test("captures a snapshot, delivers feedback to ACP, removes a reviewed item, and resubmits its stable topic", async () => {
     const root = temporaryRoot();
     const workspace = join(root, "workspace");

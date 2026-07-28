@@ -38,7 +38,11 @@ interface ActiveReview {
   stop: () => Promise<void>;
 }
 
-export interface GlobalDaemonOptions { port?: number; host?: string; token?: string; open?: boolean; }
+export interface GlobalDaemonOptions {
+  port?: number; host?: string; token?: string; open?: boolean;
+  /** Dependency injection for hermetic auth-route verification. */
+  githubAuthService?: GitHubAuthService;
+}
 
 function safeWorkspace(input: unknown): string {
   if (typeof input !== "string" || !input.trim()) throw new Error("workspacePath is required");
@@ -71,7 +75,7 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
   ensureDaemonDirectories();
   const db = openDb(daemonDbPath());
   const federation = new FederationTunnelManager(db);
-  const githubAuth = new GitHubAuthService();
+  const githubAuth = options.githubAuthService ?? new GitHubAuthService();
   const token = options.token ?? newDaemonToken();
   const app = express();
   app.use(express.json({ limit: "2mb" }));
@@ -95,17 +99,35 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
   // before either marks them delivered and send duplicate instructions.
   const feedbackDeliveries = new Map<string, Promise<unknown>>();
 
-  // Browser-first authentication for both GitHub API operations and the
-  // Copilot SDK. `gh` owns the OAuth credential in the OS keychain; neither
-  // a GitHub token nor a Copilot token is accepted or retained by this app.
+  // Dedicated, GitHub-App credentials are owned by this daemon's OS-secret
+  // store. The browser sees device codes and status only—never user tokens.
   api.get("/github/auth/status", async (_req, res) => {
     res.json(await githubAuth.status());
   });
-  api.post("/github/auth/start", (_req, res) => {
-    res.status(202).json({ login: githubAuth.start() });
+  api.post("/github/auth/configure", (req, res) => {
+    const capability = bodyString(req.body?.capability);
+    const clientId = bodyString(req.body?.clientId);
+    if ((capability !== "read" && capability !== "write" && capability !== "copilot") || !clientId) { res.status(400).json({ error: "capability (read, write, or copilot) and clientId are required" }); return; }
+    try { githubAuth.configure(capability, clientId); res.status(204).end(); }
+    catch (error) { res.status(400).json({ error: String(error) }); }
   });
-  api.post("/github/auth/cancel", (_req, res) => {
-    res.json({ login: githubAuth.cancel() });
+  api.post("/github/auth/:capability/start", async (req, res) => {
+    const capability = req.params.capability as "read" | "write" | "copilot";
+    if (capability !== "read" && capability !== "write" && capability !== "copilot") { res.status(400).json({ error: "Unknown GitHub capability" }); return; }
+    try { res.status(202).json(await githubAuth.start(capability)); }
+    catch (error) { res.status(400).json({ error: String(error) }); }
+  });
+  api.post("/github/auth/:capability/poll", async (req, res) => {
+    const capability = req.params.capability as "read" | "write" | "copilot";
+    if (capability !== "read" && capability !== "write" && capability !== "copilot") { res.status(400).json({ error: "Unknown GitHub capability" }); return; }
+    try { res.json(await githubAuth.poll(capability)); }
+    catch (error) { res.status(400).json({ error: String(error) }); }
+  });
+  api.delete("/github/auth/:capability", async (req, res) => {
+    const capability = req.params.capability as "read" | "write" | "copilot";
+    if (capability !== "read" && capability !== "write" && capability !== "copilot") { res.status(400).json({ error: "Unknown GitHub capability" }); return; }
+    try { await githubAuth.disconnect(capability); res.status(204).end(); }
+    catch (error) { res.status(400).json({ error: String(error) }); }
   });
 
   const feedbackPrompt = (item: { title: string; workspacePath: string }, feedback: QueueFeedback[], decisionBody?: string) => {
@@ -268,8 +290,12 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
     agentId?: string; agentProvider?: string; copilotSessionId?: string; feedbackTarget?: string; provenance?: unknown;
     acpHost?: string; acpPort?: number; acpSessionId?: string; agentKind?: string;
   }) => {
-    const pr = await resolveRemotePullRequest(input.remoteUrl);
-    const remoteWorkspace = await prepareRemoteWorkspace(pr);
+    // A remote checkout is never allowed to borrow credentials from `gh`, a
+    // Git credential helper, or the browser.  The read-only GitHub App owns
+    // both PR resolution and the short-lived HTTP header used by git.
+    const readToken = await githubAuth.token("read");
+    const pr = await resolveRemotePullRequest(input.remoteUrl, readToken);
+    const remoteWorkspace = await prepareRemoteWorkspace(pr, readToken);
     const baseRef = input.base ?? pr.baseSha;
     const provenance = await provenanceFor(remoteWorkspace.workspacePath, input.provenance);
     let snapshotManifestPath: string | undefined;
@@ -302,8 +328,9 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
    * investigation and /ask, not formal review submission.
    */
   const openReadOnlyPullRequest = async (remoteUrl: string) => {
-    const pr = await resolveRemotePullRequest(remoteUrl);
-    const remoteWorkspace = await prepareRemoteWorkspace(pr);
+    const readToken = await githubAuth.token("read");
+    const pr = await resolveRemotePullRequest(remoteUrl, readToken);
+    const remoteWorkspace = await prepareRemoteWorkspace(pr, readToken);
     const review = await activate(remoteWorkspace.workspacePath, pr.baseSha);
     return {
       pullRequest: pr,
@@ -331,6 +358,10 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
       resolveTerminalAgent: (agentId, rootPath) => resolveTerminalTarget(db, agentId, rootPath),
       onTerminalDeliverySuccess: (agentId) => markAgentDelivered(db, agentId),
       onTerminalDeliveryFailure: (agentId, error) => markAgentDeliveryFailed(db, agentId, error),
+      // `/ask` is deliberately a fresh Copilot SDK session, authenticated by
+      // the capability-specific App token. It does not inherit Copilot CLI,
+      // `gh`, environment, or browser credentials.
+      copilotToken: () => githubAuth.token("copilot"),
     });
     const startedHub = hub;
     let cleanupBtw: (() => void) | undefined;
@@ -370,9 +401,10 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
     } catch (error) { res.status(400).json({ error: String(error) }); }
   });
 
-  // Token-free by design, but only usable from loopback. This is the API form
-  // of `localreview-open --pr`; it must never create a queue record or grant
-  // a browser the formal feedback/publish controls.
+  // No daemon credential reaches the browser, and this endpoint is usable
+  // only from loopback. Its internal PR read uses the daemon-owned read App.
+  // This is the API form of `localreview-open --pr`; it must never create a
+  // queue record or grant formal feedback/publish controls.
   api.post("/local-review/pr", async (req, res) => {
     if (!isLoopbackRequest(req)) { res.status(403).json({ error: "Local question-only PR review is available only from loopback." }); return; }
     try {
@@ -538,7 +570,10 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
       // publication before committing the local lifecycle transition.
       const outgoing = { ...before, decisionBody: bodyString(req.body?.body) ?? null };
       const remoteReview = before.kind === "remote" && (decision === "approved" || decision === "changes_requested")
-        ? await submitRemoteDecision(outgoing, decision, feedbackForItem(db, before.id)) : undefined;
+        ? await submitRemoteDecision(outgoing, decision, feedbackForItem(db, before.id), {
+          read: await githubAuth.token("read"),
+          write: await githubAuth.token("write"),
+        }) : undefined;
       const item = decideQueueItem(db, before.id, decision, bodyString(req.body?.body))!;
       const injectFeedback = decision === "changes_requested" && req.body?.injectFeedback === true;
       const delivery = injectFeedback
@@ -558,7 +593,10 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
     if (item.kind !== "remote") { res.status(400).json({ error: "Only remote PR queue items can publish GitHub comments" }); return; }
     try {
       const outgoing = { ...item, decisionBody: bodyString(req.body?.body) ?? null };
-      const remoteReview = await submitRemoteDecision(outgoing, "comment", feedbackForItem(db, item.id));
+      const remoteReview = await submitRemoteDecision(outgoing, "comment", feedbackForItem(db, item.id), {
+        read: await githubAuth.token("read"),
+        write: await githubAuth.token("write"),
+      });
       res.json({ item, remoteReview });
     } catch (error) { res.status(502).json({ error: String(error), item }); }
   });

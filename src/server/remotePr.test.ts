@@ -83,27 +83,17 @@ describe("managed remote PR workspaces", () => {
 
   test("refuses to publish a decision when the opened PR head is stale", async () => {
     const root = tempRoot();
-    const bin = join(root, "bin");
-    const log = join(root, "gh-post.log");
-    const priorPath = process.env.PATH;
-    const priorLog = process.env.GH_LOG;
-    execFileSync("mkdir", ["-p", bin]);
-    writeFileSync(join(bin, "gh"), `#!/bin/sh
-if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
-  printf '%s\\n' '{"url":"https://github.example/acme/widget/pull/42","number":42,"title":"Widget","body":"","state":"OPEN","isDraft":false,"headRefName":"feature","baseRefName":"main"}'
-  exit 0
-fi
-if [ "$1" = "api" ] && [ "$2" = "repos/acme/widget/pulls/42" ]; then
-  printf '%s\\n' '{"head":{"sha":"2222222222222222222222222222222222222222"},"base":{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repo":{"full_name":"acme/widget","clone_url":"https://github.example/acme/widget.git"}}}'
-  exit 0
-fi
-printf '%s\\n' "$*" >> "$GH_LOG"
-exit 99
-`, { mode: 0o755 });
-    process.env.PATH = `${bin}:${priorPath}`;
-    process.env.GH_LOG = log;
+    const { setGitHubFetchForTests, submitRemoteDecision } = await import("./remotePr.ts");
+    const calls: string[] = [];
+    setGitHubFetchForTests(async (input) => {
+      calls.push(String(input));
+      return new Response(JSON.stringify({
+        number: 42, html_url: "https://github.example/acme/widget/pull/42", title: "Widget", body: "", state: "OPEN", draft: false,
+        head: { sha: "2".repeat(40), ref: "feature" },
+        base: { sha: "b".repeat(40), ref: "main", repo: { full_name: "acme/widget", clone_url: "https://github.example/acme/widget.git" } },
+      }), { status: 200 });
+    });
     try {
-      const { submitRemoteDecision } = await import("./remotePr.ts");
       const pr = {
         url: "https://github.example/acme/widget/pull/42", number: 42, title: "Widget", body: "", state: "OPEN", isDraft: false,
         repository: "acme/widget", repositoryUrl: "https://github.example/acme/widget.git", headRefName: "feature",
@@ -113,13 +103,11 @@ exit 99
         id: "item-1", remoteUrl: pr.url, workspacePath: root, decisionBody: "Please fix this.",
         snapshotManifest: { remotePullRequest: pr },
       } as any;
-      await expect(submitRemoteDecision(item, "changes_requested", [{ body: "Bad edge case", path: "src/a.ts", line: 4 }]))
+      await expect(submitRemoteDecision(item, "changes_requested", [{ body: "Bad edge case", path: "src/a.ts", line: 4 }], { read: "read-token", write: "write-token" }))
         .rejects.toThrow("refresh the queue before publishing a review");
-      expect(existsSync(log)).toBe(false);
+      expect(calls).toEqual(["https://github.example/api/v3/repos/acme/widget/pulls/42"]);
     } finally {
-      process.env.PATH = priorPath;
-      if (priorLog === undefined) delete process.env.GH_LOG;
-      else process.env.GH_LOG = priorLog;
+      setGitHubFetchForTests();
     }
   });
 });

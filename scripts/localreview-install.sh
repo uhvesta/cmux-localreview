@@ -82,6 +82,7 @@ else
     localreview-open:src/localreview-open.ts \
     localreview-demo:src/localreview-demo.ts \
     localreview-setup:src/localreview-setup.ts \
+    localreview-github-app:src/localreview-github-app.ts \
     localreview-reproduce:src/localreview-reproduce.ts \
     localreview-reproduce-copilot:src/localreview-reproduce-copilot.ts \
     localreview-remote:src/localreview-remote.ts \
