@@ -14,7 +14,8 @@ interface AskModel {
   supportedReasoningEfforts?: ReasoningEffort[];
   defaultReasoningEffort?: ReasoningEffort;
 }
-interface AskModelsResponse { models?: AskModel[]; state?: 'ready' | 'unavailable'; warning?: string; }
+interface AskWorkspaceSettings { model?: string | null; reasoningEffort?: ReasoningEffort | null; contextTier?: ContextTier | null; }
+interface AskModelsResponse { models?: AskModel[]; state?: 'ready' | 'unavailable'; warning?: string; workspaceDefaults?: AskWorkspaceSettings; }
 interface AskMessage { id: string | number; role: 'user' | 'assistant' | 'system'; body: string; pending: boolean; createdAt: number; location?: { filePath?: string; startLine?: number } | null; }
 interface AskConversation { id: string; model?: string | null; reasoningEffort?: ReasoningEffort | null; contextTier?: ContextTier | null; context?: { filePath?: string } | null; reviewSessionId?: number | null; archivedAt?: number | null; updatedAt?: number; }
 interface QuestionSet { id: string; name: string; questions: { body: string }[]; }
@@ -36,6 +37,12 @@ function storedDraft(): string {
   try { return window.localStorage.getItem(ASK_DRAFT_STORAGE_KEY) ?? ''; } catch { return ''; }
 }
 
+function sameWorkspaceDefaults(left: AskWorkspaceSettings | null, right: AskWorkspaceSettings | null): boolean {
+  return left?.model === right?.model
+    && left?.reasoningEffort === right?.reasoningEffort
+    && left?.contextTier === right?.contextTier;
+}
+
 /** A review-scoped, persisted Copilot conversation. It never shares /btw messages. */
 export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId, onRequestedConversationOpened }: AskPanelProps) {
   const [models, setModels] = useState<AskModel[]>([]);
@@ -51,6 +58,7 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
   const [model, setModel] = useState('');
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort | ''>('');
   const [contextTier, setContextTier] = useState<ContextTier>('default');
+  const [workspaceDefaults, setWorkspaceDefaults] = useState<AskWorkspaceSettings | null>(null);
   const [prompt, setPrompt] = useState(storedDraft);
   const [retryPrompt, setRetryPrompt] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
@@ -61,6 +69,7 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
   const sendInFlightRef = useRef(false);
   const activeEventSourceRef = useRef<EventSource | null>(null);
   const abortEventStreamRef = useRef<(() => void) | null>(null);
+  const workspaceDefaultsRef = useRef<AskWorkspaceSettings | null>(null);
   // Several entry points can restore a transcript at once (panel refresh,
   // finished inline turn, and “Open full /ask chat”). Only the newest result
   // may update the panel; otherwise an earlier response can hide a just-made
@@ -75,9 +84,13 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
     if (sequence !== transcriptLoadSequence.current) return;
     setConversationId(id);
     setMessages(Array.isArray(data.messages) ? data.messages : []);
-    if (data.conversation?.model) setModel(data.conversation.model);
-    setReasoningEffort(data.conversation?.reasoningEffort ?? '');
-    setContextTier(data.conversation?.contextTier ?? 'default');
+    // A conversation with no override inherits the durable workspace picker.
+    // Do not leave controls displaying values from whichever conversation was
+    // viewed immediately before it.
+    const defaults = workspaceDefaultsRef.current;
+    setModel(data.conversation?.model ?? defaults?.model ?? '');
+    setReasoningEffort(data.conversation?.reasoningEffort ?? defaults?.reasoningEffort ?? '');
+    setContextTier(data.conversation?.contextTier ?? defaults?.contextTier ?? 'default');
   }, []);
 
   const refresh = useCallback(async () => {
@@ -92,6 +105,15 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
       if (modelsResponse?.ok) {
         const modelData = (await modelsResponse.json()) as AskModelsResponse;
         const nextModels = Array.isArray(modelData.models) ? modelData.models : [];
+        const defaults = modelData.workspaceDefaults ?? null;
+        // `/ask/models` is refreshed whenever the panel opens. Preserve
+        // object identity for an unchanged default; otherwise `refresh` would
+        // be recreated through `loadConversation` and continuously refetch.
+        setWorkspaceDefaults((current) => {
+          if (sameWorkspaceDefaults(current, defaults)) return current;
+          workspaceDefaultsRef.current = defaults;
+          return defaults;
+        });
         if (modelData.state === 'unavailable') {
           // A 200 fallback is intentionally not an authenticated model list.
           // Do not let the reviewer unknowingly start a question with a fake
@@ -100,7 +122,15 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
           setModels([]); setModelStatus('unavailable');
           setError(modelData.warning || 'Copilot SDK is unavailable. Restart the localreview daemon, then refresh /ask; saved transcripts remain available.');
         } else {
-          setModels(nextModels); setModelStatus('available'); setModel((current) => current || nextModels[0]?.id || '');
+          setModels(nextModels); setModelStatus('available');
+          // A workspace picker default is durable independently of a
+          // conversation. Only adopt it before a transcript is selected: an
+          // explicit conversation override must always remain authoritative.
+          if (!conversationId) {
+            setModel(defaults?.model ?? nextModels[0]?.id ?? '');
+            setReasoningEffort(defaults?.reasoningEffort ?? '');
+            setContextTier(defaults?.contextTier ?? 'default');
+          }
         }
       } else {
         setModels([]); setModelStatus('unavailable');
@@ -198,15 +228,31 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
     const nextModel = next.model ?? model;
     const nextEffort = next.reasoningEffort ?? reasoningEffort;
     const nextTier = next.contextTier ?? contextTier;
-    setModel(nextModel); setReasoningEffort(nextEffort); setContextTier(nextTier);
-    if (!conversationId) return;
     try {
-      const response = await daemonFetch(`/api/ask/conversations/${encodeURIComponent(conversationId)}/settings`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: nextModel, reasoningEffort: nextEffort || undefined, contextTier: nextTier }),
+      // Keep the workspace picker durable even before the first question.
+      // This is deliberately separate from a selected conversation: it
+      // governs future fresh chats, while the conversation retains an
+      // explicit model/config override after it has started.
+      const defaultsResponse = await daemonFetch('/api/ask/settings', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: nextModel, reasoningEffort: nextEffort || undefined, contextTier: nextTier }),
       });
-      if (!response.ok) throw new Error('Unable to update Copilot settings.');
-      const data = (await response.json()) as { conversation?: AskConversation };
-      if (data.conversation) setConversations((current) => current.map((item) => item.id === data.conversation!.id ? data.conversation! : item));
+      if (!defaultsResponse.ok) throw new Error('Unable to save this workspace’s Copilot defaults.');
+      const defaultsData = (await defaultsResponse.json()) as { workspaceDefaults?: AskWorkspaceSettings };
+      const savedDefaults = defaultsData.workspaceDefaults ?? { model: nextModel || null, reasoningEffort: nextEffort || null, contextTier: nextTier };
+      setWorkspaceDefaults((current) => {
+        if (sameWorkspaceDefaults(current, savedDefaults)) return current;
+        workspaceDefaultsRef.current = savedDefaults;
+        return savedDefaults;
+      });
+      if (conversationId) {
+        const response = await daemonFetch(`/api/ask/conversations/${encodeURIComponent(conversationId)}/settings`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: nextModel, reasoningEffort: nextEffort || undefined, contextTier: nextTier }),
+        });
+        if (!response.ok) throw new Error('Workspace defaults saved, but this conversation could not switch. Cancel or wait for the current response, then try again.');
+        const data = (await response.json()) as { conversation?: AskConversation };
+        if (data.conversation) setConversations((current) => current.map((item) => item.id === data.conversation!.id ? data.conversation! : item));
+      }
+      setModel(nextModel); setReasoningEffort(nextEffort); setContextTier(nextTier);
     } catch (err) { setError(err instanceof Error ? err.message : 'Unable to update Copilot settings.'); }
   }, [contextTier, conversationId, model, reasoningEffort]);
 
@@ -437,7 +483,7 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
 
   return <section style={{ position: 'fixed', right: 0, top: 0, bottom: 0, width: 390, zIndex: 56, display: 'flex', flexDirection: 'column', background: 'var(--bg-primary, #161b22)', borderLeft: '1px solid rgba(127,127,127,0.35)' }} aria-label="Copilot ask">
     <div style={{ display: 'flex', gap: 7, alignItems: 'center', padding: '9px 11px', borderBottom: '1px solid rgba(127,127,127,0.3)' }}>
-      <strong style={{ fontSize: 13 }}>/ask</strong><span title="Fresh Copilot SDK chat, separate from ACP review feedback" style={{ fontSize: 10, opacity: 0.6 }}>fresh SDK chat</span>
+      <strong style={{ fontSize: 13 }}>/ask</strong><span title="Fresh Copilot SDK chat, separate from ACP review feedback" style={{ fontSize: 10, opacity: 0.6 }}>fresh SDK chat{workspaceDefaults?.model ? ' · workspace default saved' : ''}</span>
       <select aria-label="Copilot model" disabled={historicalConversation || sending} title={sending ? 'Cancel or wait for Copilot before changing this conversation’s model.' : 'The next question starts a fresh SDK session with this model.'} value={model} onChange={(event) => chooseModel(event.target.value)} style={{ marginLeft: 'auto', maxWidth: 210, fontSize: 11, background: 'transparent', color: 'inherit' }}>
         {models.length === 0 && <option value="">{modelStatus === 'loading' ? 'Checking Copilot…' : 'Copilot unavailable'}</option>}
         {models.map((item) => <option key={item.id} value={item.id}>{item.name ?? item.id}</option>)}

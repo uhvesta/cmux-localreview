@@ -69,6 +69,14 @@ repo_id=$(jq -r '.repos[0].id' <<<"$opened")
 models=$(api_get ask/models)
 jq -e '.state == "ready" and .source == "sdk" and (.models | length == 3)' <<<"$models" >/dev/null
 
+# The model picker owns a durable workspace default before any conversation is
+# created. This is the exact UI flow for choosing a model, thinking level, and
+# context tier and then refreshing/reopening the review: it must not require a
+# hidden starter conversation and it must never initiate a Copilot prompt.
+api_post ask/settings '{"model":"claude-sonnet-4.6","reasoningEffort":"high","contextTier":"long_context"}' >/dev/null
+workspace_defaults=$(api_get ask/settings)
+jq -e '.workspaceDefaults.model == "claude-sonnet-4.6" and .workspaceDefaults.reasoningEffort == "high" and .workspaceDefaults.contextTier == "long_context"' <<<"$workspace_defaults" >/dev/null
+
 # Follow the inline React form's precise create → subscribe → POST sequence.
 # Reopening the same location must reuse the persisted shared conversation,
 # and its GET must not create or replay an additional SDK prompt.
@@ -158,6 +166,8 @@ start_daemon
 authenticate
 after_restart=$(api_get "ask/conversations/$conversation_id")
 jq -e '.messages | length == 2 and .[1].pending == false and (.[1].body | contains("claude-sonnet-4.6"))' <<<"$after_restart" >/dev/null
+workspace_defaults_after_restart=$(api_get ask/settings)
+jq -e '.workspaceDefaults.model == "claude-sonnet-4.6" and .workspaceDefaults.reasoningEffort == "high" and .workspaceDefaults.contextTier == "long_context"' <<<"$workspace_defaults_after_restart" >/dev/null
 inline_after_restart=$(api_get "ask/conversations/$inline_id")
 jq -e '.messages | length == 2 and .[0].location.selectedCode == "const after = 2" and .[1].pending == false' <<<"$inline_after_restart" >/dev/null
 
