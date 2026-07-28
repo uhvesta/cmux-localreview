@@ -138,3 +138,8 @@ handoff. Deletion is **not** ready: the matrix now executes every frozen HTTP
 row and the remote-PR lifecycle has a direct native replay, but the required
 two complete Phase-3 browser/Electron passes have not been recorded. Do not
 remove `src/` or package dependencies based only on this preparation work.
+
+The renderer-side package boundary is documented in
+[`UI-DEPENDENCY-AUDIT.md`](UI-DEPENDENCY-AUDIT.md). Its clean-install script
+builds Vite in a temporary directory without starting the frozen server; run
+it before and after the reviewed dependency-pruning commit.
