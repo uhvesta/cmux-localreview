@@ -279,3 +279,41 @@ Not yet claimed:
   removal is not claimed from that pass.
 - Phase 4 deletion and a tagged GitHub Release remain intentionally open until
   those two complete Phase-3 passes and the full parity audit are complete.
+
+## 2026-07-28 — Release-install and frozen-parity expansion
+
+Done:
+
+- Made the frozen HTTP/remote-PR fixture corpus release-verifiable without
+  executing Bun, Node, `src/`, or the old capture harness. The native gate
+  verifies corpus provenance, SHA-256 integrity, uniqueness, and Bazel
+  runfiles before matrix replay.
+- Expanded exact native fixture replay from 26 to 53 of 81 frozen contracts,
+  covering the queue lifecycle and immutable materialization, agent lifecycle,
+  revisions, durable `/ask` CRUD/inline reuse/question-set CRUD, and legacy
+  comment-save adaptation. Every remaining exclusion is explicit in the
+  matrix, including retired ACP behavior and deliberate durable-model-setting
+  semantics.
+- Fixed release installs to create the same native historical aliases as the
+  source installer. The release installer now supports a deterministic staging
+  base for archive validation; it never installs Node/Bun launchers.
+
+Validated:
+
+- `scripts/verify-frozen-parity-corpus.sh`,
+  `scripts/verify-go-parity-matrix.sh`, and
+  `scripts/verify-parity-fixtures.sh` passed.
+- `scripts/verify-native-installer.sh` built a Darwin archive, verified its
+  checksum through a static curl fixture, installed both binaries plus all
+  aliases into a disposable prefix, and exercised daemon start/status/stop.
+  The source installer was also run twice against a disposable project and
+  preserved user instructions while installing managed Copilot skills.
+- `go test ./...`, `bazel test //...` (18 test targets), and a fresh
+  `bazel build //desktop:app` archive inspection passed.
+
+Not yet claimed:
+
+- Exact replay is stronger but not yet universal; the remaining rows must be
+  either replayed or accepted as documented migration substitutions in the
+  final Phase-4 absence audit. Real authenticated service flows and the two
+  clean click-driven Phase-3 passes remain required before deletion/tagging.
