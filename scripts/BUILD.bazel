@@ -1,4 +1,5 @@
 exports_files([
+    "verify-go-parity-matrix.sh",
     "legacy-bin.mjs",
     "stage-ui-assets.sh",
 ])

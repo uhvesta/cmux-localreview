@@ -23,7 +23,9 @@ cp $(location package.json) \"$$stage/package.json\"
 cp $(location //cmd/localreviewd:localreviewd) \"$$stage/localreviewd\"
 chmod 0755 \"$$stage/localreviewd\"
 ./desktop/node_modules/.bin/electron-builder --project \"$$stage\" --dir --config.extraResources.from=\"$$stage/localreviewd\" --config.extraResources.to=localreviewd
-artifact=$$(find \"$$stage/dist\" -maxdepth 1 -type d -name '*unpacked' -print -quit)
+# macOS --dir produces a platform folder containing an .app; Linux uses an
+# *unpacked directory. Package either layout without guessing a platform name.
+artifact=$$(find \"$$stage/dist\" -type d \\( -name '*.app' -o -name '*unpacked' \\) -print -quit)
 test -n \"$$artifact\"
 tar -C \"$$(dirname \"$$artifact\")\" -czf \"$$PWD/$@\" \"$$(basename \"$$artifact\")\"
 """,

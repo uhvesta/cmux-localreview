@@ -95,7 +95,7 @@ func (d *Daemon) handleQueueFeedbackDelivery(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	if err := d.startCopilotTurn(conversation, user, assistant, prompt, policy == "interrupt"); err != nil {
+	if err := d.startCopilotTurn(conversation, user, assistant, prompt, policy == "interrupt", nil); err != nil {
 		// No automatic retry: settle the visible attempted delivery and leave the
 		// feedback records undelivered for an intentional later retry.
 		d.persistAskEvent(conversation.ID, assistant.ID, askruntime.Delta{Event: askruntime.EventError, Error: err.Error()})

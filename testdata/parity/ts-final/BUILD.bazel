@@ -1,0 +1,5 @@
+filegroup(
+    name = "http_fixture",
+    srcs = ["http.json"],
+    visibility = ["//visibility:public"],
+)

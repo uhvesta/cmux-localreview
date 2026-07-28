@@ -18,6 +18,10 @@ type File struct {
 	Additions int     `json:"additions"`
 	Deletions int     `json:"deletions"`
 	Chunks    []Chunk `json:"chunks"`
+	// IsGenerated is computed by the daemon from the selected file content.
+	// Keep the field even when false: the reviewer uses it to decide whether a
+	// diff should be collapsed by default.
+	IsGenerated bool `json:"isGenerated"`
 }
 
 type Chunk struct {
@@ -47,10 +51,12 @@ type Selection struct {
 }
 
 type Response struct {
-	Commit                   string `json:"commit"`
-	Files                    []File `json:"files"`
-	IgnoreWhitespace         bool   `json:"ignoreWhitespace,omitempty"`
-	IsEmpty                  bool   `json:"isEmpty,omitempty"`
+	Commit string `json:"commit"`
+	Files  []File `json:"files"`
+	// These false values are meaningful to the reviewer (and were present in
+	// the frozen TS contract), so do not hide them behind omitempty.
+	IgnoreWhitespace         bool   `json:"ignoreWhitespace"`
+	IsEmpty                  bool   `json:"isEmpty"`
 	BaseCommitish            string `json:"baseCommitish,omitempty"`
 	TargetCommitish          string `json:"targetCommitish,omitempty"`
 	RequestedBaseCommitish   string `json:"requestedBaseCommitish,omitempty"`

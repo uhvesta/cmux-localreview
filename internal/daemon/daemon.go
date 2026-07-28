@@ -1003,7 +1003,15 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"workspacePath": workspace, "repos": repos, "reviewUrl": "/review"})
+		// `path` is retained for the frozen reviewer bootstrap contract while
+		// `workspaceRelativePath` is the clearer native field used by Queue Home.
+		// Returning both makes activation forward-compatible without forcing the
+		// built UI to infer a path from an implementation detail.
+		responseRepos := make([]map[string]any, 0, len(repos))
+		for _, repo := range repos {
+			responseRepos = append(responseRepos, map[string]any{"id": repo.ID, "path": repo.WorkspaceRelativePath, "workspaceRelativePath": repo.WorkspaceRelativePath})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"workspacePath": workspace, "repos": responseRepos, "reviewUrl": "/review"})
 		return
 	}
 	if path == "/repos" && r.Method == http.MethodGet {
@@ -1016,7 +1024,19 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		items := make([]map[string]any, 0, len(review.Repos))
 		for _, repo := range review.Repos {
-			items = append(items, map[string]any{"id": repo.ID, "workspaceRelativePath": repo.WorkspaceRelativePath, "changeCount": 0, "files": []string{}})
+			files := []string{}
+			if diff, err := gitdiff.Parse(repo.AbsolutePath, gitdiff.Selection{}); err == nil {
+				for _, file := range diff.Files {
+					files = append(files, file.Path)
+				}
+			}
+			var remoteURL any
+			if output, err := exec.Command("git", "-C", repo.AbsolutePath, "remote", "get-url", "origin").Output(); err == nil {
+				if value := strings.TrimSpace(string(output)); value != "" {
+					remoteURL = value
+				}
+			}
+			items = append(items, map[string]any{"id": repo.ID, "workspaceRelativePath": repo.WorkspaceRelativePath, "remoteUrl": remoteURL, "changeCount": len(files), "files": files})
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"workspaceRoot": review.Root, "repos": items})
 		return
@@ -1207,12 +1227,20 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 				return
 			}
+			var commentCount int
+			if err := d.db.QueryRow(`SELECT COUNT(*) FROM comments WHERE session_id=?`, id).Scan(&commentCount); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			// /btw is SDK-native and no longer persists legacy ACP thread rows, but
+			// retaining the zero count keeps older reviewer clients from treating a
+			// missing key as an unknown session state.
 			sessions = append(sessions, map[string]any{"id": id, "label": nullableString(label), "startedAt": started, "frozenAt": func() any {
 				if frozen.Valid {
 					return frozen.Int64
 				}
 				return nil
-			}()})
+			}(), "commentCount": commentCount, "btwThreadCount": 0})
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions, "activeSessionId": review.SessionID})
 		return
@@ -1364,7 +1392,10 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 				return
 			}
-			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			// Blobs are source bytes, not rendered text.  Retain the frozen API's
+			// byte-oriented media type so callers do not accidentally charset-decode
+			// binary or non-UTF-8 source files.
+			w.Header().Set("Content-Type", "application/octet-stream")
 			_, _ = w.Write(contents)
 			return
 		}
@@ -1599,6 +1630,12 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 				return
+			}
+			for index := range response.Files {
+				contents, readErr := readRepoFile(repo, response.Files[index].Path, response.TargetCommitish)
+				if readErr == nil {
+					response.Files[index].IsGenerated, _ = generatedStatus(response.Files[index].Path, contents)
+				}
 			}
 			response.RepositoryID = repo.ID
 			writeJSON(w, http.StatusOK, response)
@@ -2106,8 +2143,7 @@ func Start(ctx context.Context, options Options) (*Daemon, error) {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "version": Version, "pid": os.Getpid(), "runtime": runtime.Version()})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": Version, "pid": os.Getpid(), "runtime": runtime.Version()})
 	})
 	mux.HandleFunc("/api/browser/session", d.sessionExchange)
 	mux.Handle("/ws", d.ws)

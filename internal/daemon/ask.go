@@ -193,6 +193,10 @@ func (d *Daemon) handleAsk(w http.ResponseWriter, r *http.Request, path string) 
 		return true
 	}
 	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) == 4 && parts[0] == "ask" && parts[1] == "question-sets" && parts[3] == "send" && r.Method == http.MethodPost {
+		d.handleQuestionSetDelivery(w, r, parts[2])
+		return true
+	}
 	if len(parts) == 3 && parts[0] == "ask" && parts[1] == "question-sets" {
 		id := parts[2]
 		if r.Method == http.MethodGet {

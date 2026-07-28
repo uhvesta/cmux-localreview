@@ -249,7 +249,7 @@ func (d *Daemon) persistAskEvent(conversationID string, assistantID int64, event
 // startCopilotTurn starts one explicit SDK-native turn. Queue delivery uses
 // the same durable transport as /ask but supplies a different envelope, so
 // formal feedback never leaks into /ask exports or question transcripts.
-func (d *Daemon) startCopilotTurn(conversation *ask.Conversation, user *ask.Message, assistant *ask.Message, prompt string, interrupt bool) error {
+func (d *Daemon) startCopilotTurn(conversation *ask.Conversation, user *ask.Message, assistant *ask.Message, prompt string, interrupt bool, afterTerminal func(askruntime.Delta)) error {
 	workingDirectory, err := d.askWorkingDirectory()
 	if err != nil {
 		return err
@@ -277,10 +277,19 @@ func (d *Daemon) startCopilotTurn(conversation *ask.Conversation, user *ask.Mess
 	// scheduled.
 	_, err = runtime.Send(context.Background(), conversation.ID, config, prompt, func(event askruntime.Delta) {
 		d.persistAskEvent(conversation.ID, assistant.ID, event)
+		// Only an idle completion advances a sequential set. An SDK error is a
+		// visible terminal response, never permission to skip its question.
+		if event.Event == askruntime.EventDone && afterTerminal != nil {
+			afterTerminal(event)
+		}
 	})
 	return err
 }
 
 func (d *Daemon) startAskTurn(conversation *ask.Conversation, user *ask.Message, assistant *ask.Message) error {
-	return d.startCopilotTurn(conversation, user, assistant, askPrompt(user.Body, user.Location, conversation.Context), false)
+	return d.startAskTurnAfter(conversation, user, assistant, nil)
+}
+
+func (d *Daemon) startAskTurnAfter(conversation *ask.Conversation, user *ask.Message, assistant *ask.Message, afterTerminal func(askruntime.Delta)) error {
+	return d.startCopilotTurn(conversation, user, assistant, askPrompt(user.Body, user.Location, conversation.Context), false, afterTerminal)
 }

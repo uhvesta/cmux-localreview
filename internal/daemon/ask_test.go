@@ -249,3 +249,88 @@ func TestAskMessageStreamsIntoDurableTranscriptWithoutReplayOnRead(t *testing.T)
 		t.Fatalf("prompts=%q", session.prompts)
 	}
 }
+
+func TestQuestionSetDeliveryUsesOnePersistentConversationAndNeverReplaysOnRead(t *testing.T) {
+	d := askRouteDaemon(t)
+	session := &askRouteSession{emit: true}
+	d.askRuntime = askruntime.New(askRouteBackend{session: session})
+	conversation, err := ask.CreateConversation(context.Background(), d.db, ask.CreateConversationInput{Model: "gpt-5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, err := ask.CreateQuestionSet(context.Background(), d.db, "Review pass", []string{"What changed?", "Any risks?"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := askRequest(t, d, http.MethodPost, "/ask/question-sets/"+set.ID+"/send", `{"conversationId":"`+conversation.ID+`","mode":"combined","location":{"workspacePath":"apps/api/main.go","filePath":"main.go","startLine":8,"selectedCode":"return result"}}`)
+	if response.Code != http.StatusAccepted || !bytes.Contains(response.Body.Bytes(), []byte(`"questionsAccepted":2`)) {
+		t.Fatalf("delivery=%d %s", response.Code, response.Body.String())
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		messages, listErr := ask.ListMessages(context.Background(), d.db, conversation.ID)
+		if listErr == nil && len(messages) == 2 && !messages[1].Pending {
+			if !strings.Contains(messages[0].Body, "1. What changed?") || !strings.Contains(messages[0].Body, "2. Any risks?") || messages[0].Location == nil || messages[0].Location.WorkspacePath != "apps/api/main.go" {
+				t.Fatalf("combined messages=%#v", messages)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("combined transcript did not settle: messages=%#v err=%v", messages, listErr)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// A reload only reads the durable transcript. It must not resubmit either
+	// question or create a second SDK session/turn.
+	read := askRequest(t, d, http.MethodGet, "/ask/conversations/"+conversation.ID, "")
+	if read.Code != http.StatusOK {
+		t.Fatalf("read=%d %s", read.Code, read.Body.String())
+	}
+	session.mu.Lock()
+	if len(session.prompts) != 1 || !strings.Contains(session.prompts[0], "Workspace-relative path: apps/api/main.go") {
+		session.mu.Unlock()
+		t.Fatalf("combined prompts=%q", session.prompts)
+	}
+	session.mu.Unlock()
+}
+
+func TestQuestionSetSequentialDeliveryWaitsForEachTurn(t *testing.T) {
+	d := askRouteDaemon(t)
+	session := &askRouteSession{emit: true}
+	d.askRuntime = askruntime.New(askRouteBackend{session: session})
+	conversation, err := ask.CreateConversation(context.Background(), d.db, ask.CreateConversationInput{Model: "gpt-5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, err := ask.CreateQuestionSet(context.Background(), d.db, "Sequential", []string{"First question", "Second question"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := askRequest(t, d, http.MethodPost, "/ask/question-sets/"+set.ID+"/send", `{"conversationId":"`+conversation.ID+`","mode":"sequential"}`)
+	if response.Code != http.StatusAccepted || !bytes.Contains(response.Body.Bytes(), []byte(`"remaining":1`)) {
+		t.Fatalf("delivery=%d %s", response.Code, response.Body.String())
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		session.mu.Lock()
+		prompts := append([]string(nil), session.prompts...)
+		session.mu.Unlock()
+		messages, listErr := ask.ListMessages(context.Background(), d.db, conversation.ID)
+		if len(prompts) == 2 && listErr == nil && len(messages) == 4 && !messages[1].Pending && !messages[3].Pending {
+			if !strings.Contains(prompts[0], "First question") || !strings.Contains(prompts[1], "Second question") {
+				t.Fatalf("sequential prompts=%q", prompts)
+			}
+			session.mu.Lock()
+			opened := len(session.configs)
+			session.mu.Unlock()
+			if opened != 1 {
+				t.Fatalf("sequential set opened %d SDK sessions; expected one persistent conversation", opened)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("sequential set did not finish: prompts=%q messages=%#v err=%v", prompts, messages, listErr)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
