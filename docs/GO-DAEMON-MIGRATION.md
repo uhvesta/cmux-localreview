@@ -39,13 +39,22 @@ are deliberately small but real:
 
 ```sh
 bazel run //cmd/localreview -- daemon --port 57992
+bazel run //cmd/localreview -- open
 bazel run //cmd/localreview -- queue-submit --title "Parser" --topic parser /path/to/workspace
 ```
 
 `queue-submit` uses the owner-only discovery capability and the daemon HTTP
-API; it does not open SQLite directly. Snapshot capture and ACP metadata are
-not silently omitted by the production command—they remain on the migration
-route until the corresponding Go capture modules land.
+API; it does not open SQLite directly. It captures a multi-repository,
+immutable Git snapshot before enqueueing. `open` puts the daemon capability
+only in a URL fragment, which the browser immediately exchanges for an
+HttpOnly cookie. Use `--no-open` to print that URL for Firefox, Chrome, or a
+remote desktop session without launching a browser.
+
+For source-only development, use `GOFLAGS=-mod=mod go run ./cmd/localreview
+...`. This repository's pre-existing JavaScript `vendor/` directory makes
+plain `go run` choose Go vendor mode even though it does not contain Go
+dependencies. Release and user installation should use Bazel instead; it is
+unaffected by that Go toolchain behavior.
 
 During the transition, the TypeScript daemon remains the production default.
 The Go binary intentionally returns `501` for unported API routes; it must not
@@ -98,9 +107,10 @@ ${CMUX_LOCALREVIEW_DATA_DIR:-~/.local/share/cmux-localreview}
 ```
 
 It must retain the existing `daemon.db`, artifacts, snapshots, and discovery
-file. Before any Go-owned migration beyond schema v18, the CLI will create an
-owner-only backup and use an append-only, transactional SQLite migration. A
-rollback must be able to reopen the backup with the prior daemon.
+file. The Go daemon now runs the complete append-only v1→v19 schema history
+transactionally, verified against a v1 fixture. Before Go becomes the default,
+cutover still needs an owner-only backup and a rollback test proving that the
+prior daemon can reopen that backup.
 
 Federation node credentials are included in this security migration: move them
 from SQLite into the OS secret provider, keyed by node ID, before the Go

@@ -12,8 +12,10 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 
@@ -140,9 +142,47 @@ func reproduce(args []string) error {
 	fmt.Printf("Reproduced snapshot %s\ncwd: %s\n", manifest.ID, destination)
 	return nil
 }
+
+// openHome creates the one-time browser capability URL. The daemon token is
+// deliberately kept in the URL fragment: browsers never transmit fragments
+// to the HTTP server, and the React client exchanges it immediately for an
+// HttpOnly, same-origin cookie.
+func openHome(args []string) error {
+	flags := flag.NewFlagSet("open", flag.ContinueOnError)
+	noOpen := flags.Bool("no-open", false, "print the Queue Home URL without launching a browser")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("usage: localreview open [--no-open]")
+	}
+	d, err := discovered()
+	if err != nil {
+		return err
+	}
+	url := fmt.Sprintf("http://127.0.0.1:%d/#daemonToken=%s", d.Port, d.Token)
+	fmt.Println(url)
+	if *noOpen {
+		return nil
+	}
+	var command *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		command = exec.Command("open", url)
+	case "windows":
+		command = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	default:
+		command = exec.Command("xdg-open", url)
+	}
+	if err := command.Start(); err != nil {
+		return fmt.Errorf("Queue Home URL printed above, but could not launch a browser: %w", err)
+	}
+	return nil
+}
+
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: localreview <daemon|queue-submit|reproduce> [options]")
+		fmt.Fprintln(os.Stderr, "usage: localreview <daemon|open|queue-submit|reproduce> [options]")
 		os.Exit(2)
 	}
 	switch os.Args[1] {
@@ -161,8 +201,13 @@ func main() {
 			fmt.Fprintln(os.Stderr, "localreview:", err)
 			os.Exit(1)
 		}
+	case "open":
+		if err := openHome(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "localreview:", err)
+			os.Exit(1)
+		}
 	default:
-		fmt.Fprintln(os.Stderr, "usage: localreview <daemon|queue-submit|reproduce> [options]")
+		fmt.Fprintln(os.Stderr, "usage: localreview <daemon|open|queue-submit|reproduce> [options]")
 		os.Exit(2)
 	}
 }

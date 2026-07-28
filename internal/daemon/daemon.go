@@ -149,6 +149,19 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	_ = json.NewEncoder(w).Encode(value)
 }
 
+func dereference(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+// shellQuote is display-only: reproduction plans are intended to be copied
+// into a shell, and a single-quoted path avoids surprising word splitting.
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
+
 // apiHandler ports the queue control plane first. Unported routes fail
 // explicitly; they never fall back to a Node process behind the caller.
 func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
@@ -211,7 +224,149 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if path == "/queue/open-next" && r.Method == http.MethodPost {
+		item, err := queueStore.OpenNext(d.db)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if item == nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "No queued review items"})
+			return
+		}
+		// Opening only changes the durable lifecycle. It never opens a
+		// workspace or prompts an ACP agent as a side effect.
+		writeJSON(w, http.StatusOK, map[string]any{"item": item, "reviewUrl": "/review?queueItem=" + item.ID})
+		return
+	}
 	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) == 2 && parts[0] == "queue" && r.Method == http.MethodGet {
+		item, err := queueStore.Get(d.db, parts[1])
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if item == nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "Unknown queue item"})
+			return
+		}
+		feedback, err := queueStore.FeedbackForItem(d.db, item.ID, false)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		decisions, err := queueStore.DecisionsForItem(d.db, item.ID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"item": item, "feedback": feedback, "decisions": decisions})
+		return
+	}
+	if len(parts) == 3 && parts[0] == "queue" && r.Method == http.MethodPost && parts[2] == "reorder" {
+		var input struct {
+			Position int `json:"position"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&input); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid reorder input"})
+			return
+		}
+		item, err := queueStore.Reorder(d.db, parts[1], input.Position)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if item == nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "Unknown queue item"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"item": item})
+		return
+	}
+	if len(parts) == 3 && parts[0] == "queue" && r.Method == http.MethodPost && parts[2] == "decision" {
+		var input struct {
+			Decision string `json:"decision"`
+			Body     string `json:"body"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&input); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid decision"})
+			return
+		}
+		item, err := queueStore.Decide(d.db, parts[1], queueStore.Status(input.Decision), input.Body)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		if item == nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "Unknown queue item"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"item": item})
+		return
+	}
+	if len(parts) == 3 && parts[0] == "queue" && r.Method == http.MethodPost && parts[2] == "feedback" {
+		var input queueStore.FeedbackInput
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&input); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid feedback"})
+			return
+		}
+		feedback, err := queueStore.AddFeedback(d.db, parts[1], input)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{"feedback": feedback})
+		return
+	}
+	if len(parts) == 4 && parts[0] == "queue" && parts[2] == "feedback" && parts[3] == "prompt" && r.Method == http.MethodGet {
+		item, err := queueStore.Get(d.db, parts[1])
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if item == nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "Unknown queue item"})
+			return
+		}
+		feedback, err := queueStore.FeedbackForItem(d.db, item.ID, r.URL.Query().Get("includeDelivered") != "true")
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte(queueStore.FeedbackPrompt(*item, feedback, dereference(item.DecisionBody))))
+		return
+	}
+	if len(parts) == 3 && parts[0] == "queue" && parts[2] == "reproduce" && r.Method == http.MethodGet {
+		item, err := queueStore.Get(d.db, parts[1])
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if item == nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "Unknown queue item"})
+			return
+		}
+		var manifest struct {
+			ID    string            `json:"id"`
+			Repos []json.RawMessage `json:"repos"`
+		}
+		hasSnapshot := item.SnapshotManifestPath != nil && len(item.SnapshotManifest) > 0 && json.Unmarshal(item.SnapshotManifest, &manifest) == nil && manifest.ID != ""
+		var snapshot any
+		if hasSnapshot {
+			snapshot = map[string]any{"id": manifest.ID, "manifestPath": *item.SnapshotManifestPath, "repositories": len(manifest.Repos)}
+		}
+		var existingACP any
+		if item.ACPHost != nil && item.ACPPort != nil && item.ACPSessionID != nil {
+			existingACP = map[string]any{"host": *item.ACPHost, "port": *item.ACPPort, "sessionId": *item.ACPSessionID, "state": item.ACPState, "error": item.ACPLastError, "canAttemptResume": item.ACPState != "error"}
+		}
+		var commands any
+		if hasSnapshot {
+			commands = map[string]string{"reproduceSnapshot": "localreview reproduce " + shellQuote(*item.SnapshotManifestPath) + " <empty-destination>", "reproduceCopilot": "localreview reproduce-copilot " + item.ID + " <empty-destination>", "freshAcp": "cd <empty-destination> && copilot --acp --port 4123"}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"itemId": item.ID, "workspacePath": item.WorkspacePath, "snapshot": snapshot, "existingAcp": existingACP, "copilotSessionId": item.CopilotSessionID, "commands": commands, "notes": []string{"Materialization requires an explicit empty destination; viewing this plan never overwrites a workspace.", "A saved ACP endpoint is a live-session hint only; resume works only while that endpoint and session remain live."}})
+		return
+	}
 	if len(parts) == 3 && parts[0] == "queue" && r.Method == http.MethodPost {
 		var item *queueStore.Item
 		var err error

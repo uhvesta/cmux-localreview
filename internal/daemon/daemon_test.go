@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -94,5 +95,98 @@ func TestQueueHTTPContract(t *testing.T) {
 	response, err = http.DefaultClient.Do(list)
 	if err != nil || response.StatusCode != http.StatusOK {
 		t.Fatalf("list=%v err=%v", response, err)
+	}
+}
+
+func TestQueueControlPlaneHTTPContract(t *testing.T) {
+	dir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d, err := Start(ctx, Options{DataDir: dir, UIDir: filepath.Join(dir, "missing-ui")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	contents, err := os.ReadFile(filepath.Join(dir, "daemon.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var discovered discovery
+	if err = json.Unmarshal(contents, &discovered); err != nil {
+		t.Fatal(err)
+	}
+	base := "http://127.0.0.1:" + fmt.Sprint(d.Port())
+	call := func(method, path, payload string) (*http.Response, []byte) {
+		request, _ := http.NewRequest(method, base+path, strings.NewReader(payload))
+		request.Header.Set("Authorization", "Bearer "+discovered.Token)
+		if payload != "" {
+			request.Header.Set("Content-Type", "application/json")
+		}
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(response.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		return response, body
+	}
+	created, body := call(http.MethodPost, "/api/queue", `{"title":"Parser","workspacePath":"/tmp/parser","topic":"parser","snapshotManifestPath":"/tmp/manifest.json","snapshotManifest":{"id":"snap","repos":[{}]},"acpHost":"127.0.0.1","acpPort":4123,"acpSessionId":"acp-1"}`)
+	if created.StatusCode != http.StatusCreated {
+		t.Fatalf("create=%d %s", created.StatusCode, body)
+	}
+	var result struct {
+		Item struct {
+			ID       string `json:"id"`
+			ACPState string `json:"acpState"`
+		} `json:"item"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Item.ID == "" || result.Item.ACPState != "idle" {
+		t.Fatalf("created=%s", body)
+	}
+	createdTwo, body := call(http.MethodPost, "/api/queue", `{"title":"Other","workspacePath":"/tmp/other"}`)
+	if createdTwo.StatusCode != http.StatusCreated {
+		t.Fatalf("second=%d %s", createdTwo.StatusCode, body)
+	}
+	var second struct {
+		Item struct {
+			ID string `json:"id"`
+		} `json:"item"`
+	}
+	if err := json.Unmarshal(body, &second); err != nil {
+		t.Fatal(err)
+	}
+	response, body := call(http.MethodPost, "/api/queue/"+second.Item.ID+"/reorder", `{"position":1}`)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("reorder=%d %s", response.StatusCode, body)
+	}
+	response, body = call(http.MethodPost, "/api/queue/open-next", "")
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), second.Item.ID) || !strings.Contains(string(body), "in_review") {
+		t.Fatalf("open=%d %s", response.StatusCode, body)
+	}
+	response, body = call(http.MethodPost, "/api/queue/"+result.Item.ID+"/feedback", `{"body":"Check boundary","path":"packages/parser/a.go","line":8}`)
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("feedback=%d %s", response.StatusCode, body)
+	}
+	response, body = call(http.MethodGet, "/api/queue/"+result.Item.ID+"/feedback/prompt", "")
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "packages/parser/a.go:8: Check boundary") {
+		t.Fatalf("prompt=%d %s", response.StatusCode, body)
+	}
+	response, body = call(http.MethodPost, "/api/queue/"+result.Item.ID+"/decision", `{"decision":"changes_requested","body":"Please revise"}`)
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "changes_requested") {
+		t.Fatalf("decision=%d %s", response.StatusCode, body)
+	}
+	response, body = call(http.MethodGet, "/api/queue/"+result.Item.ID, "")
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "Check boundary") || !strings.Contains(string(body), "changes_requested") {
+		t.Fatalf("detail=%d %s", response.StatusCode, body)
+	}
+	response, body = call(http.MethodGet, "/api/queue/"+result.Item.ID+"/reproduce", "")
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "localreview reproduce") || !strings.Contains(string(body), "snap") {
+		t.Fatalf("reproduce=%d %s", response.StatusCode, body)
 	}
 }
