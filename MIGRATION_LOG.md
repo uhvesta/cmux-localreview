@@ -792,3 +792,41 @@ Not yet claimed:
   login, Copilot SDK completion/stream/cancel, model switch, or authenticated
   review-plan generation was attempted because the fresh profile intentionally
   had no GitHub/Copilot credential.
+
+## 2026-07-28 — Bazel renderer freshness and unauthenticated /ask recovery
+
+Done:
+
+- Replaced the mutable checked-in hashed Vite bundle with a declared Bazel
+  archive action. `localreviewd` now embeds the renderer compiled from the
+  current `vendor/difit` sources on every Bazel/release build, so a source UI
+  change cannot silently ship an older `internal/webassets/dist` tree.
+- Kept `go test ./...` independent of Bun through a deliberately tiny
+  source-only fallback; the supported daemon/release path is the Bazel target,
+  which selects the generated archive. The stale bootstrap asset corpus was
+  deleted rather than left as an accidental second distribution path.
+- Drove a fresh daemon through the local browser capability exchange and
+  confirmed Queue Home rendered the current SSH-federation UI copy from the
+  newly built embedded archive.
+- Added inline `/ask` unauthenticated recovery: opening a thread remains
+  read-only, explains that no question was sent, disables the composer, and
+  offers an explicit retry. This preserves the no-accidental-reprompt
+  invariant.
+
+Validated:
+
+- `go test ./...`
+- `bazel test //... --test_output=errors`
+- `bash scripts/verify-native-runtime-boundary.sh`
+- `bash scripts/verify-release-archives.sh`
+- `bash scripts/verify-e2e-copilot-fixture.sh`
+- Fresh local-browser Queue Home load against the current Bazel binary.
+
+Not yet claimed:
+
+- This repaired a release-blocking stale-renderer path and adds one more
+  unauthenticated browser acceptance slice. It does not constitute either of
+  the two required full Phase-3 clean-profile passes. Real loopback consent,
+  live Copilot SDK streaming/model switching/`/btw`, remote Queue Home tunnel
+  UI, authenticated Electron click-through, Phase-4 legacy deletion, and a
+  tagged release remain required.
