@@ -59,6 +59,7 @@ type parityDisposition struct {
 	NativeQuestionSetDelivery bool
 	NativeQueueReproduction   bool
 	NativeWebsocketDiff       bool
+	NativeQueueHook           bool
 }
 
 var parityMatrix = map[string]parityDisposition{
@@ -167,9 +168,13 @@ var parityMatrix = map[string]parityDisposition{
 	// The native watcher exposes a deterministic no-op poll seam in this
 	// matrix. These rows prove real DB registration and cancellation lifecycle
 	// without a wall-clock sleep or a synthetic Git snapshot.
-	"queue_watch_enable":         {Execute: true, NativeQueueWatch: true},
-	"queue_watch_disable":        {Execute: true, NativeQueueWatch: true},
-	"queue_hook":                 {Reason: "Hook discovery is CLI-facing and has a dedicated native CLI test."},
+	"queue_watch_enable":  {Execute: true, NativeQueueWatch: true},
+	"queue_watch_disable": {Execute: true, NativeQueueWatch: true},
+	// The frozen hook row follows an older removed queue item. Native retains
+	// the item's stable identity rather than fabricating a third queue round;
+	// replay the same request and assert the stronger idempotency/provenance
+	// contract explicitly.
+	"queue_hook":                 {Execute: true, NativeQueueHook: true},
 	"agent_register":             {Execute: true},
 	"agent_list":                 {Execute: true},
 	"agent_heartbeat":            {Execute: true},
@@ -210,7 +215,7 @@ func TestFrozenTypeScriptParityMatrix(t *testing.T) {
 		"repo_diff", "repo_diff_ignore_whitespace", "repo_revisions", "websocket_diff_updated", "repo_line_count", "repo_blob", "repo_generated_status", "repo_fullfile", "repo_comments_empty", "create_comment", "repo_comments_saved", "comment_import",
 		"sessions", "review_history", "ui_state_empty", "ui_state_put", "export_prompt", "new_session", "comments_json", "comments_output",
 		"ask_models", "ask_conversations_empty", "ask_question_set_create", "ask_question_sets", "ask_question_set_get", "ask_question_set_update", "ask_question_set_delete", "ask_conversation_create", "ask_conversation_get", "ask_inline_conversation_reuses_context", "ask_conversation_model", "ask_conversation_settings", "ask_conversation_cancel_idle", "ask_question_set_for_send", "ask_question_set_combined_sse", "ask_question_set_sequential_sse", "ask_conversation_fresh", "ask_conversation_history",
-		"queue_create_local", "queue_list_with_item", "queue_detail", "queue_reorder", "queue_add_feedback", "queue_feedback_prompt", "queue_reproduce", "queue_export", "queue_open", "queue_complete", "queue_requeue", "queue_delete", "queue_history", "queue_watch_enable", "queue_watch_disable",
+		"queue_create_local", "queue_list_with_item", "queue_detail", "queue_reorder", "queue_add_feedback", "queue_feedback_prompt", "queue_reproduce", "queue_export", "queue_open", "queue_complete", "queue_requeue", "queue_delete", "queue_history", "queue_watch_enable", "queue_watch_disable", "queue_hook",
 		"agent_register", "agent_list", "agent_heartbeat", "agent_reconnect",
 	} {
 		fixture := byName[name]
@@ -218,6 +223,8 @@ func TestFrozenTypeScriptParityMatrix(t *testing.T) {
 		response := replayFrozenFixture(t, d, fixture, disposition, state)
 		if disposition.NativeWebsocketDiff {
 			assertNativeWebsocketDiffFixture(t, d, fixture, state)
+		} else if disposition.NativeQueueHook {
+			assertNativeQueueHookFixture(t, fixture, response, state)
 		} else if disposition.NativeAskSettings {
 			assertNativeAskSettingsFixture(t, fixture, response)
 		} else if disposition.NativeCommentCollection {
@@ -683,6 +690,52 @@ func assertNativeQueueReproductionFixture(t *testing.T, fixture frozenParityFixt
 	}
 	if !strings.Contains(strings.Join(payload.Notes, "\n"), "fresh SDK-native /ask") {
 		t.Fatalf("%s: native reproduce plan does not explain fresh /ask handoff: %#v", fixture.Name, payload.Notes)
+	}
+}
+
+// assertNativeQueueHookFixture checks the native hook's meaningful contract:
+// an unchanged source is idempotent, preserves the original queue identity,
+// and retains self-contained provenance/snapshot material for later review.
+// The frozen TS fixture expected a newly numbered row even after an earlier
+// removal; retaining identity is safer because it cannot silently create a
+// duplicate review round for the same immutable source fingerprint.
+func assertNativeQueueHookFixture(t *testing.T, fixture frozenParityFixture, actual *httptest.ResponseRecorder, state map[string]string) {
+	t.Helper()
+	if actual.Code != http.StatusOK || actual.Header().Get("Content-Type") != "application/json; charset=utf-8" {
+		t.Fatalf("%s: hook response=%d type=%q body=%s", fixture.Name, actual.Code, actual.Header().Get("Content-Type"), actual.Body.String())
+	}
+	var payload struct {
+		Created bool `json:"created"`
+		Item    struct {
+			ID                   string          `json:"id"`
+			WorkspacePath        string          `json:"workspacePath"`
+			SnapshotManifestPath *string         `json:"snapshotManifestPath"`
+			SnapshotManifest     json.RawMessage `json:"snapshotManifest"`
+			SourceFingerprint    *string         `json:"sourceFingerprint"`
+			Provenance           json.RawMessage `json:"provenance"`
+		} `json:"item"`
+	}
+	if err := json.Unmarshal(actual.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("%s: invalid hook response: %v", fixture.Name, err)
+	}
+	wantWorkspace := state["<fixture-root>/workspace"]
+	if canonical, err := filepath.EvalSymlinks(wantWorkspace); err == nil {
+		wantWorkspace = canonical
+	}
+	if payload.Created || payload.Item.ID != state["<uuid>"] || payload.Item.WorkspacePath != wantWorkspace || payload.Item.SnapshotManifestPath == nil || strings.TrimSpace(*payload.Item.SnapshotManifestPath) == "" || payload.Item.SourceFingerprint == nil || strings.TrimSpace(*payload.Item.SourceFingerprint) == "" {
+		t.Fatalf("%s: hook is not a retained idempotent snapshot: %#v", fixture.Name, payload)
+	}
+	for label, raw := range map[string]json.RawMessage{"item": payload.Item.Provenance, "snapshot": payload.Item.SnapshotManifest} {
+		var value map[string]any
+		if err := json.Unmarshal(raw, &value); err != nil {
+			t.Fatalf("%s: %s provenance decode: %v", fixture.Name, label, err)
+		}
+		if label == "snapshot" {
+			value, _ = value["provenance"].(map[string]any)
+		}
+		if _, ok := value["supplied"].(map[string]any); !ok {
+			t.Fatalf("%s: %s missing retained submission provenance: %s", fixture.Name, label, raw)
+		}
 	}
 }
 

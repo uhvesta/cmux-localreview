@@ -577,3 +577,25 @@ Not yet claimed:
 
 - This closes the frozen wire contract; browser reload UI remains part of the
   two required complete Phase-3 computer-use passes.
+
+## 2026-07-28 — Native queue-hook parity and provenance
+
+Done:
+
+- Made the frozen `queue_hook` request executable. Its native adapter proves
+  that an unchanged source returns the same retained snapshot identity rather
+  than creating a duplicate queue round after an old item was removed.
+- Expanded default snapshot provenance to retain the immediate caller/cmux
+  details plus a durable submission/auto-queue envelope. Both the queue item
+  and immutable manifest now carry enough provenance to reproduce how a hook
+  entered the queue without consulting mutable daemon state.
+
+Validated:
+
+- `go test ./internal/daemon -run '^TestFrozenTypeScriptParityMatrix$' -count=1`
+  and the matching Bazel test passed.
+
+Not yet claimed:
+
+- The frozen row's obsolete third-position/title details are deliberately not
+  recreated; native idempotency is the stronger review-safety contract.

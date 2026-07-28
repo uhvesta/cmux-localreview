@@ -204,16 +204,24 @@ func (d *Daemon) defaultQueueProvenance(workspace, mechanism string) (json.RawMe
 		available = true
 		cmuxError = ""
 	}
+	caller := map[string]any{
+		"cwd":             cwd,
+		"cmuxSurfaceId":   nil,
+		"cmuxWorkspaceId": nil,
+	}
+	cmux := map[string]any{"available": available, "surfaces": []any{}, "error": cmuxError}
+	// Preserve both the immediate capture details and a self-contained copy of
+	// the submission context. Hook/watch snapshots are frequently reopened long
+	// after their source worktree moved, so a reviewer must be able to tell how
+	// the item entered the queue without consulting mutable daemon state.
+	submission := map[string]any{"version": 1, "workspacePath": workspace, "caller": caller, "cmux": cmux}
 	return json.Marshal(map[string]any{
 		"version":       1,
 		"workspacePath": workspace,
-		"caller": map[string]any{
-			"cwd":             cwd,
-			"cmuxSurfaceId":   nil,
-			"cmuxWorkspaceId": nil,
-		},
-		"cmux":       map[string]any{"available": available, "surfaces": []any{}, "error": cmuxError},
-		"submission": map[string]any{"mechanism": mechanism},
+		"caller":        caller,
+		"cmux":          cmux,
+		"submission":    map[string]any{"mechanism": mechanism},
+		"supplied":      map[string]any{"submission": submission, "autoQueue": map[string]any{"mechanism": mechanism, "previousFingerprint": nil}},
 	})
 }
 
