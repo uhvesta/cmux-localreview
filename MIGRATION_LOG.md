@@ -963,3 +963,35 @@ Not yet claimed:
 - These are static and fixture-backed recovery checks. The two complete
   authenticated browser/Electron passes remain the only proof that all
   recovery routes work against real credentials and live services.
+
+## 2026-07-28 — Phase-3 fixture completeness and evidence integrity
+
+Done:
+
+- Working-tree diffs now project Git's NUL-delimited untracked-file inventory
+  as added-file hunks with line metadata. The staged and commit-to-commit
+  representations deliberately exclude it, so the Phase-3 multi-repository
+  fixture now genuinely contains staged, unstaged, and untracked reviewable
+  changes.
+- Extended the Phase-3 manual evidence tool with a validating `report` and a
+  structural `verify-two` command. The latter requires two different prepared
+  sessions, distinct workspace/web/Electron profiles, well-formed append-only
+  ledgers, and all fourteen latest observations marked pass.
+- Both commands remain explicitly non-certifying: they reject malformed or
+  reused evidence but cannot assert that OAuth/Copilot was real. Independent
+  note review and two copied reports in this log remain required before Phase
+  4.
+
+Validated:
+
+- `go test ./internal/gitdiff -count=1`
+- `bazel test //internal/gitdiff:gitdiff_test --test_output=errors`
+- Clean prepared sessions: incomplete report remains incomplete; duplicate
+  session and malformed-ledger paths reject; two distinct structural sessions
+  require all fourteen latest pass values.
+- `bash -n scripts/phase3-acceptance.sh` and `git diff --check`.
+
+Not yet claimed:
+
+- The runner's structural success is not an authenticated acceptance pass.
+  No ledger values were fabricated for OAuth, Copilot streaming, or Electron.
