@@ -65,19 +65,18 @@ needs to paste it into one of these CLI sessions.
 
 ## Remote workers
 
-Run a loopback-only native daemon on each remote worker and keep normal SSH
-operations explicit:
+Run a loopback-only native daemon on each remote worker:
 
 ```sh
 # On the remote worker.
 localreview remote daemon run --port 4311 --data-dir /srv/cmux-localreview
 ```
 
-Never expose the daemon or a Copilot listener on a public interface. Native
-SSH federation remains an operator-managed migration feature, so validate your
-own SSH forward, host identity, and supervisor behavior before relying on it.
-Do not copy discovery tokens, OAuth credentials, or copied terminal content to
-the remote host.
+Never expose the daemon or a Copilot listener on a public interface. Queue
+Home's native federation transport creates a short-lived loopback SSH forward
+on demand; validate SSH host identity and supervisor behavior before relying
+on it. Do not copy discovery tokens, OAuth credentials, or copied terminal
+content to the remote host.
 
 ## Authentication boundary
 

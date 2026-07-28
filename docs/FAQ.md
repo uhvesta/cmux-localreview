@@ -109,6 +109,6 @@ Yes, loopback-only:
 localreview remote daemon run --port 4311 --data-dir /srv/cmux-localreview
 ```
 
-Run it under your normal supervisor. SSH federation UI/transport is still an
-operator-managed migration feature; keep any forward explicit and avoid
-putting the daemon discovery token in source, shell history, or chat.
+Run it under your normal supervisor. The native federation transport creates
+an ephemeral loopback-only SSH forward on demand; use SSH keys/agent auth and
+avoid putting the daemon discovery token in source, shell history, or chat.

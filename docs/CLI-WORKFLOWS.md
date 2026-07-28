@@ -247,9 +247,44 @@ decisions do not need the `write` capability. GitHub Reviews publication is
 not shipped in the native daemon yet: a publish attempt is rejected clearly
 instead of being silently recorded locally.
 
-Run a remote worker loopback-only with `localreview remote daemon run`. SSH
-federation is intentionally operator-managed during the migration; do not use
-historical Bun tunnel helpers or ACP examples as a supported native recipe.
+### Federating a remote daemon over SSH
+
+Run the remote daemon on the remote machine with its normal loopback listener;
+do **not** bind it to a LAN address or reverse-proxy it:
+
+```sh
+# remote host
+localreview daemon --port 57140
+# or let it choose a port and read ~/.local/share/cmux-localreview/daemon.json
+```
+
+On the local machine, obtain the remote daemon's discovery token through your
+normal SSH/admin channel and add a node. The token is sent only to the local
+daemon over its browser capability channel, stored in the platform secret
+store under a federation-specific account (never SQLite), and used only in an
+`Authorization` header inside a temporary SSH forward; it is never returned by
+Queue Home.
+
+```sh
+printf '%s\n' "$REMOTE_DAEMON_DISCOVERY_TOKEN" | localreview federation add \
+  --id work-lab --label 'Work lab' --ssh user@work-lab.example \
+  --port 57140 --token-stdin
+localreview federation connect work-lab
+localreview federation queue --refresh
+```
+
+Each fetch uses `ssh -N -T -o BatchMode=yes -o ExitOnForwardFailure=yes -L
+127.0.0.1:EPHEMERAL:127.0.0.1:REMOTE_PORT user@host`. The daemon never listens
+outside loopback, and forwarding uses no shell interpolation. Queue Home lazily
+caches each node's queue/workspace response for 15 seconds; use **Refresh** or
+`?refresh=true` to bypass the cache. **Disconnect** kills the local forward and
+clears its cache; **Retry/Connect** establishes a fresh forward. A failed node
+is retained with its error so other local/remote queues remain usable.
+
+Use SSH keys or your platform's SSH agent. `BatchMode=yes` means password or
+host-key prompts fail visibly rather than hanging the browser; first verify
+`ssh user@host true` in a terminal. No historical Bun tunnel helper or ACP
+session forwarding is required or supported.
 
 ## Validation checklist
 

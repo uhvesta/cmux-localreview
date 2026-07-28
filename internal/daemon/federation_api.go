@@ -1,19 +1,33 @@
 package daemon
 
-// This file deliberately exposes federation configuration before the SSH
-// transport is ported.  It never dials a configured target and never invents
-// a tunnel/connection: Queue Home can safely manage durable node metadata,
-// while every unavailable remote operation says so explicitly.
+// Native SSH federation API. Node credentials remain daemon-only; browser
+// responses receive only redacted metadata and runtime tunnel state.
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/uhvesta/cmux-localreview/internal/federation"
 )
 
-const federationTransportUnavailable = "Remote federation transport is not available in this build. The node configuration is saved; install a release with SSH federation support before connecting or loading its queue."
+const federationSecretService = "cmux-localreview.federation"
+
+func federationSecretAccount(id string) string { return "remote-daemon:" + id }
+func (d *Daemon) federationToken(id string) (string, error) {
+	if d.federationSecrets == nil {
+		return "", fmt.Errorf("system secret store is unavailable")
+	}
+	token, err := d.federationSecrets.Get(federationSecretService, federationSecretAccount(id))
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(token) == "" {
+		return "", fmt.Errorf("remote daemon capability is missing; re-add this node")
+	}
+	return token, nil
+}
 
 type federationNodeInput struct {
 	ID         string `json:"id"`
@@ -56,22 +70,15 @@ type federationNodeView struct {
 	UpdatedAt       int64   `json:"updatedAt"`
 }
 
-func federationRuntimeFor(node federation.Node) federationRuntime {
-	state := "disconnected"
-	if !node.Enabled {
-		state = "disabled"
-	} else if node.LastError != nil && strings.TrimSpace(*node.LastError) != "" {
-		state = "error"
+func (d *Daemon) federationRuntimeFor(node federation.Node) federationRuntime {
+	if d.federation == nil {
+		return federationRuntime{ID: node.ID, State: "error", Available: false, Message: "Federation transport is unavailable"}
 	}
-	return federationRuntime{
-		ID: node.ID, State: state, LocalPort: nil, CachedResponses: 0,
-		LastConnectedAt: node.LastConnectedAt, LastError: node.LastError,
-		Available: false, Message: federationTransportUnavailable,
-	}
+	return d.federation.runtime(node.ID, node)
 }
 
-func federationNodeViewFor(node federation.Node) federationNodeView {
-	runtime := federationRuntimeFor(node)
+func (d *Daemon) federationNodeViewFor(node federation.Node) federationNodeView {
+	runtime := d.federationRuntimeFor(node)
 	return federationNodeView{
 		ID: node.ID, Label: node.Label, SSHTarget: node.SSHTarget,
 		RemotePort: node.RemotePort, Enabled: node.Enabled, State: runtime.State,
@@ -111,7 +118,7 @@ func (d *Daemon) handleFederation(w http.ResponseWriter, r *http.Request, path s
 			} else {
 				views := make([]federationNodeView, 0, len(nodes))
 				for _, node := range nodes {
-					views = append(views, federationNodeViewFor(node))
+					views = append(views, d.federationNodeViewFor(node))
 				}
 				writeJSON(w, http.StatusOK, map[string]any{"nodes": views})
 			}
@@ -134,11 +141,20 @@ func (d *Daemon) handleFederation(w http.ResponseWriter, r *http.Request, path s
 			if input.Enabled != nil {
 				enabled = *input.Enabled
 			}
+			if d.federationSecrets == nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "system secret store is unavailable"})
+				return true
+			}
+			if err := d.federationSecrets.Set(federationSecretService, federationSecretAccount(id), input.Token); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not save remote daemon capability"})
+				return true
+			}
 			node, err := federation.Upsert(d.db, federation.Config{ID: id, Label: input.Label, SSHTarget: input.SSHTarget, RemotePort: input.RemotePort, Token: input.Token, Enabled: enabled})
 			if err != nil {
+				_ = d.federationSecrets.Delete(federationSecretService, federationSecretAccount(id))
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			} else {
-				writeJSON(w, http.StatusCreated, map[string]any{"node": federationNodeViewFor(*node)})
+				writeJSON(w, http.StatusCreated, map[string]any{"node": d.federationNodeViewFor(*node)})
 			}
 		default:
 			w.Header().Set("Allow", "GET, POST")
@@ -153,17 +169,37 @@ func (d *Daemon) handleFederation(w http.ResponseWriter, r *http.Request, path s
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return true
 		}
-		// Preserve the TS response's per-node aggregate shape, but make lack of
-		// transport explicit instead of emitting a misleading empty success.
+		refresh := r.URL.Query().Get("refresh") == "true"
 		rows := make([]map[string]any, 0, len(nodes))
 		for _, node := range nodes {
-			row := map[string]any{"node": federationNodeViewFor(node), "items": []any{}, "runtime": federationRuntimeFor(node)}
-			if node.Enabled {
-				row["error"] = federationTransportUnavailable
+			row := map[string]any{"node": d.federationNodeViewFor(node), "items": []any{}, "runtime": d.federationRuntimeFor(node)}
+			if !node.Enabled {
+				rows = append(rows, row)
+				continue
+			}
+			token, tokenErr := d.federationToken(node.ID)
+			if tokenErr != nil {
+				row["error"] = "Could not load remote node capability"
+				rows = append(rows, row)
+				continue
+			}
+			items, cached, fetchErr := d.federation.queue(r.Context(), node, token, refresh)
+			if fetchErr != nil {
+				_ = federation.MarkRetryableFailure(d.db, node.ID, fetchErr)
+				row["error"] = fetchErr.Error()
+			} else {
+				_ = federation.MarkConnected(d.db, node.ID)
+				row["items"] = items
+				row["cached"] = cached
+			}
+			updated, _ := federation.Get(d.db, node.ID)
+			if updated != nil {
+				row["node"] = d.federationNodeViewFor(*updated)
+				row["runtime"] = d.federationRuntimeFor(*updated)
 			}
 			rows = append(rows, row)
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"nodes": rows, "transportAvailable": false})
+		writeJSON(w, http.StatusOK, map[string]any{"nodes": rows, "transportAvailable": true})
 		return true
 	}
 
@@ -192,6 +228,10 @@ func (d *Daemon) handleFederation(w http.ResponseWriter, r *http.Request, path s
 		} else if !removed {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "Unknown federation node"})
 		} else {
+			d.federation.disconnect(id)
+			if d.federationSecrets != nil {
+				_ = d.federationSecrets.Delete(federationSecretService, federationSecretAccount(id))
+			}
 			w.WriteHeader(http.StatusNoContent)
 		}
 		return true
@@ -209,7 +249,7 @@ func (d *Daemon) handleFederation(w http.ResponseWriter, r *http.Request, path s
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return true
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"node": federationNodeViewFor(*node), "runtime": federationRuntimeFor(*node)})
+		writeJSON(w, http.StatusOK, map[string]any{"node": d.federationNodeViewFor(*node), "runtime": d.federationRuntimeFor(*node)})
 	case "disconnect":
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", "POST")
@@ -220,29 +260,63 @@ func (d *Daemon) handleFederation(w http.ResponseWriter, r *http.Request, path s
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return true
 		}
+		d.federation.disconnect(id)
 		node, _ = federation.Get(d.db, id)
-		writeJSON(w, http.StatusOK, map[string]any{"node": federationNodeViewFor(*node), "runtime": federationRuntimeFor(*node)})
+		writeJSON(w, http.StatusOK, map[string]any{"node": d.federationNodeViewFor(*node), "runtime": d.federationRuntimeFor(*node)})
 	case "connect":
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", "POST")
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return true
 		}
-		// Re-enable only. Reporting success from an unimplemented transport is
-		// worse than a clear recovery instruction, so this remains a 501.
 		if _, err := federation.Reconnect(d.db, id); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return true
 		}
+		token, tokenErr := d.federationToken(id)
+		if tokenErr != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Could not load remote node capability"})
+			return true
+		}
+		_, _, fetchErr := d.federation.queue(r.Context(), *node, token, true)
+		if fetchErr != nil {
+			_ = federation.MarkRetryableFailure(d.db, id, fetchErr)
+			node, _ = federation.Get(d.db, id)
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": fetchErr.Error(), "node": d.federationNodeViewFor(*node), "runtime": d.federationRuntimeFor(*node)})
+			return true
+		}
+		_ = federation.MarkConnected(d.db, id)
 		node, _ = federation.Get(d.db, id)
-		writeJSON(w, http.StatusNotImplemented, map[string]any{"error": federationTransportUnavailable, "node": federationNodeViewFor(*node), "runtime": federationRuntimeFor(*node)})
+		writeJSON(w, http.StatusOK, map[string]any{"node": d.federationNodeViewFor(*node), "runtime": d.federationRuntimeFor(*node)})
 	case "queue", "workspaces":
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", "GET")
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return true
 		}
-		writeJSON(w, http.StatusNotImplemented, map[string]any{"error": federationTransportUnavailable, "node": federationNodeViewFor(*node), "runtime": federationRuntimeFor(*node)})
+		token, tokenErr := d.federationToken(id)
+		if tokenErr != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Could not load remote node capability"})
+			return true
+		}
+		refresh := r.URL.Query().Get("refresh") == "true"
+		var items []map[string]any
+		var cached bool
+		var fetchErr error
+		if action == "queue" {
+			items, cached, fetchErr = d.federation.queue(r.Context(), *node, token, refresh)
+		} else {
+			items, cached, fetchErr = d.federation.workspaces(r.Context(), *node, token, refresh)
+		}
+		if fetchErr != nil {
+			_ = federation.MarkRetryableFailure(d.db, id, fetchErr)
+			node, _ = federation.Get(d.db, id)
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": fetchErr.Error(), "node": d.federationNodeViewFor(*node), "runtime": d.federationRuntimeFor(*node)})
+			return true
+		}
+		_ = federation.MarkConnected(d.db, id)
+		node, _ = federation.Get(d.db, id)
+		writeJSON(w, http.StatusOK, map[string]any{"node": d.federationNodeViewFor(*node), "items": items, "cached": cached, "runtime": d.federationRuntimeFor(*node)})
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Unknown federation node route"})
 	}

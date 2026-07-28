@@ -143,11 +143,12 @@ Run the same native binary on a remote host with a separate data directory:
 localreview remote daemon run --port 4311 --data-dir /srv/cmux-localreview
 ```
 
-The daemon never becomes public by changing this command. Federation metadata
-and UI states exist, but end-to-end SSH aggregation remains an operator-managed
-integration during the migration. Establish an explicit SSH local forward and
-validate it in your own environment before adding a remote node; do not copy a
-discovery token through a command line, prompt, or source file.
+The daemon never becomes public by changing this command. Add it to the local
+Queue Home with `localreview federation add`; the native transport establishes
+an ephemeral SSH loopback forward when a queue is opened. Validate SSH keys
+and host verification first, and pass the discovery token through standard
+input (`--token-stdin`), never as a command-line argument, prompt, or source
+file.
 
 ## Verify installation
 

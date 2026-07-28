@@ -12,6 +12,7 @@ go_library(
         "daemon.go",
 		"export.go",
         "federation_api.go",
+        "federation_transport.go",
         "queue_watcher.go",
 		"queue_delivery.go",
 		"question_set_delivery.go",

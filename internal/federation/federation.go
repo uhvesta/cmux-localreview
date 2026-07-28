@@ -101,8 +101,10 @@ func validate(c Config) error {
 	return nil
 }
 
-// Upsert validates and persists a node. Secrets stay in SQLite only; callers
-// receive the redacted Node view.
+// Upsert validates and persists a node. The supplied Token is validated so
+// callers cannot create an unusable node, but is deliberately never written
+// to SQLite: the daemon stores it in the OS secret service before calling
+// this function. The database only contains redacted connection metadata.
 func Upsert(db *sql.DB, c Config) (*Node, error) {
 	if err := validate(c); err != nil {
 		return nil, err
@@ -111,7 +113,7 @@ func Upsert(db *sql.DB, c Config) (*Node, error) {
 	_, err := db.Exec(`INSERT INTO federation_nodes(id,label,ssh_target,remote_port,token,enabled,created_at,updated_at)
 VALUES(?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET label=excluded.label,ssh_target=excluded.ssh_target,remote_port=excluded.remote_port,token=excluded.token,enabled=excluded.enabled,updated_at=excluded.updated_at`,
-		c.ID, strings.TrimSpace(c.Label), strings.TrimSpace(c.SSHTarget), c.RemotePort, c.Token, c.Enabled, now, now)
+		c.ID, strings.TrimSpace(c.Label), strings.TrimSpace(c.SSHTarget), c.RemotePort, "", c.Enabled, now, now)
 	if err != nil {
 		return nil, err
 	}
@@ -148,6 +150,33 @@ func scan(row interface{ Scan(...any) error }) (*Node, error) {
 
 func Get(db *sql.DB, id string) (*Node, error) {
 	return scan(db.QueryRow(`SELECT id,label,ssh_target,remote_port,enabled,last_connected_at,last_error,created_at,updated_at FROM federation_nodes WHERE id=?`, id))
+}
+
+// MigrateLegacyTokens removes credentials written by pre-secret-store builds.
+// put must commit the token to an OS-backed secret store before this function
+// clears SQLite. Calling it is idempotent: current nodes have an empty token.
+func MigrateLegacyTokens(db *sql.DB, put func(id, token string) error) error {
+	if put == nil {
+		return errors.New("legacy federation token migration requires a secret writer")
+	}
+	rows, err := db.Query(`SELECT id,token FROM federation_nodes WHERE token <> ''`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, token string
+		if err := rows.Scan(&id, &token); err != nil {
+			return err
+		}
+		if err := put(id, token); err != nil {
+			return fmt.Errorf("migrate federation node %q secret: %w", id, err)
+		}
+		if _, err := db.Exec(`UPDATE federation_nodes SET token='',updated_at=? WHERE id=?`, time.Now().UnixMilli(), id); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 func List(db *sql.DB) ([]Node, error) {

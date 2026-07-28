@@ -595,6 +595,65 @@ func remoteCommand(args []string) error {
 		return errors.New("usage: localreview remote <daemon|submit|status> [options]")
 	}
 }
+
+func federationCommand(args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: localreview federation <add|list|connect|disconnect|queue|workspaces> [options]")
+	}
+	switch args[0] {
+	case "add":
+		flags := flag.NewFlagSet("federation add", flag.ContinueOnError)
+		id := flags.String("id", "", "stable node ID")
+		label := flags.String("label", "", "display label")
+		sshTarget := flags.String("ssh", "", "SSH target (user@host)")
+		port := flags.Int("port", 0, "remote loopback daemon port")
+		tokenStdin := flags.Bool("token-stdin", false, "read remote daemon discovery token from standard input")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *id == "" || *label == "" || *sshTarget == "" || *port == 0 || !*tokenStdin || flags.NArg() != 0 {
+			return errors.New("usage: localreview federation add --id ID --label LABEL --ssh user@host --port PORT --token-stdin")
+		}
+		secret, err := io.ReadAll(io.LimitReader(os.Stdin, 64<<10))
+		if err != nil {
+			return fmt.Errorf("read remote daemon token: %w", err)
+		}
+		token := strings.TrimSpace(string(secret))
+		if token == "" {
+			return errors.New("remote daemon token from standard input is empty")
+		}
+		return printDaemonJSON(http.MethodPost, "/federation/nodes", map[string]any{"id": *id, "label": *label, "sshTarget": *sshTarget, "remotePort": *port, "token": token})
+	case "list":
+		if len(args) != 1 {
+			return errors.New("usage: localreview federation list")
+		}
+		return printDaemonJSON(http.MethodGet, "/federation/nodes", nil)
+	case "connect", "disconnect":
+		if len(args) != 2 {
+			return fmt.Errorf("usage: localreview federation %s <node-id>", args[0])
+		}
+		return printDaemonJSON(http.MethodPost, "/federation/nodes/"+url.PathEscape(args[1])+"/"+args[0], nil)
+	case "queue", "workspaces":
+		flags := flag.NewFlagSet("federation "+args[0], flag.ContinueOnError)
+		refresh := flags.Bool("refresh", false, "bypass 15-second cache")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if flags.NArg() > 1 || (args[0] == "workspaces" && flags.NArg() == 0) {
+			return fmt.Errorf("usage: localreview federation %s [node-id] [--refresh]", args[0])
+		}
+		path := "/federation/" + args[0]
+		if flags.NArg() == 1 {
+			path = "/federation/nodes/" + url.PathEscape(flags.Arg(0)) + "/" + args[0]
+		}
+		if *refresh {
+			path += "?refresh=true"
+		}
+		return printDaemonJSON(http.MethodGet, path, nil)
+	default:
+		return errors.New("usage: localreview federation <add|list|connect|disconnect|queue|workspaces> [options]")
+	}
+}
 func submit(args []string) error {
 	flags := flag.NewFlagSet("queue-submit", flag.ContinueOnError)
 	title := flags.String("title", "", "queue title")
@@ -841,7 +900,7 @@ func openHome(args []string) error {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: localreview <daemon|open|submit|queue-submit|reproduce|setup|auth|github-app|remote|demo> [options]")
+		fmt.Fprintln(os.Stderr, "usage: localreview <daemon|open|submit|queue-submit|reproduce|setup|auth|github-app|remote|federation|demo> [options]")
 		os.Exit(2)
 	}
 	switch os.Args[1] {
@@ -880,6 +939,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, "localreview:", err)
 			os.Exit(1)
 		}
+	case "federation":
+		if err := federationCommand(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "localreview:", err)
+			os.Exit(1)
+		}
 	case "open":
 		if err := openHome(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "localreview:", err)
@@ -894,7 +958,7 @@ func main() {
 			os.Exit(1)
 		}
 	default:
-		fmt.Fprintln(os.Stderr, "usage: localreview <daemon|open|submit|queue-submit|reproduce|setup|auth|github-app|remote|demo> [options]")
+		fmt.Fprintln(os.Stderr, "usage: localreview <daemon|open|submit|queue-submit|reproduce|setup|auth|github-app|remote|federation|demo> [options]")
 		os.Exit(2)
 	}
 }

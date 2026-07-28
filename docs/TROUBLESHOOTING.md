@@ -128,10 +128,11 @@ On the worker, verify its local process and port:
 localreview remote daemon run --port 4311 --data-dir /srv/cmux-localreview
 ```
 
-Keep it on loopback. SSH forwarding and federated aggregation are explicit
-operator-managed steps during the migration. Fix SSH keys/host verification
-and validate the forward yourself; do not make the daemon public or transfer a
-discovery token through an untrusted channel.
+Keep it on loopback. The native federation transport opens an ephemeral local
+SSH forward and reports its retryable error on the node card. Fix SSH
+keys/host verification (`ssh user@host true`) and press Retry/Connect; do not
+make the daemon public or transfer a discovery token through an untrusted
+channel.
 
 ## Snapshot reproduction fails
 

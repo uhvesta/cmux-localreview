@@ -64,8 +64,8 @@ func TestNodeLifecycleRedactsSecretAndPreservesRetry(t *testing.T) {
 		t.Fatalf("expected connecting retry state, got %#v err=%v", node, err)
 	}
 	var token string
-	if err := db.QueryRow(`SELECT token FROM federation_nodes WHERE id='lab'`).Scan(&token); err != nil || token != "secret" {
-		t.Fatalf("expected persisted opaque token, got %q %v", token, err)
+	if err := db.QueryRow(`SELECT token FROM federation_nodes WHERE id='lab'`).Scan(&token); err != nil || token != "" {
+		t.Fatalf("federation token must not be persisted in SQLite, got %q %v", token, err)
 	}
 }
 
@@ -87,6 +87,24 @@ func TestValidationAndLoopbackEndpoint(t *testing.T) {
 	endpoint, err := ParseLoopbackEndpoint("::1", 57140)
 	if err != nil || endpoint.Host != "::1" {
 		t.Fatalf("unexpected endpoint %#v %v", endpoint, err)
+	}
+}
+
+func TestMigrateLegacyTokensClearsSQLiteAfterSecretWrite(t *testing.T) {
+	db := testDB(t)
+	if _, err := db.Exec(`INSERT INTO federation_nodes(id,label,ssh_target,remote_port,token,enabled,created_at,updated_at) VALUES('old','Old','user@host',57140,'legacy-token',1,1,1)`); err != nil {
+		t.Fatal(err)
+	}
+	stored := map[string]string{}
+	if err := MigrateLegacyTokens(db, func(id, token string) error { stored[id] = token; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if stored["old"] != "legacy-token" {
+		t.Fatalf("stored=%#v", stored)
+	}
+	var token string
+	if err := db.QueryRow(`SELECT token FROM federation_nodes WHERE id='old'`).Scan(&token); err != nil || token != "" {
+		t.Fatalf("sqlite token=%q err=%v", token, err)
 	}
 }
 

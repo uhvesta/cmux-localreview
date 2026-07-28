@@ -29,6 +29,7 @@ import (
 
 	"github.com/uhvesta/cmux-localreview/internal/agent"
 	"github.com/uhvesta/cmux-localreview/internal/askruntime"
+	"github.com/uhvesta/cmux-localreview/internal/federation"
 	"github.com/uhvesta/cmux-localreview/internal/gitdiff"
 	"github.com/uhvesta/cmux-localreview/internal/githubauth"
 	"github.com/uhvesta/cmux-localreview/internal/githubreview"
@@ -55,6 +56,12 @@ type Options struct {
 	// local cmux installation or deterministic integration tests.  An empty
 	// value follows cmux's standard discovery-file/fallback convention.
 	CmuxSocketPath string
+	// FederationDialer can be replaced only by an embedding/test host. The
+	// production default is an OpenSSH loopback forwarder.
+	FederationDialer FederationDialer
+	// FederationSecrets stores remote daemon capabilities under a separate
+	// service/account from GitHub credentials. Nil uses the platform store.
+	FederationSecrets githubauth.SecretStore
 }
 
 type discovery struct {
@@ -66,31 +73,33 @@ type discovery struct {
 }
 
 type Daemon struct {
-	listener        net.Listener
-	server          *http.Server
-	dataDir         string
-	token           string
-	mu              sync.Mutex
-	sessions        map[string]time.Time
-	db              *sql.DB
-	review          *workspaceReview
-	github          *githubauth.ServiceClient
-	ws              *wshub.Hub
-	watchStop       context.CancelFunc
-	watchMu         sync.Mutex
-	watches         map[chan string]struct{}
-	queueWatchMu    sync.Mutex
-	queueWatches    map[string]context.CancelFunc
-	authMu          sync.Mutex
-	authFlows       map[githubauth.Capability]*githubauth.LoopbackFlow
-	askMu           sync.Mutex
-	askRuntime      *askruntime.Runtime
-	askClose        func() error
-	askFactory      *AskRuntimeFactory
-	askWatchers     map[string]map[chan askruntime.Delta]struct{}
-	queueDeliveryMu sync.Mutex
-	queueDeliveries map[string]struct{}
-	cmuxSocketPath  string
+	listener          net.Listener
+	server            *http.Server
+	dataDir           string
+	token             string
+	mu                sync.Mutex
+	sessions          map[string]time.Time
+	db                *sql.DB
+	review            *workspaceReview
+	github            *githubauth.ServiceClient
+	ws                *wshub.Hub
+	watchStop         context.CancelFunc
+	watchMu           sync.Mutex
+	watches           map[chan string]struct{}
+	queueWatchMu      sync.Mutex
+	queueWatches      map[string]context.CancelFunc
+	authMu            sync.Mutex
+	authFlows         map[githubauth.Capability]*githubauth.LoopbackFlow
+	askMu             sync.Mutex
+	askRuntime        *askruntime.Runtime
+	askClose          func() error
+	askFactory        *AskRuntimeFactory
+	askWatchers       map[string]map[chan askruntime.Delta]struct{}
+	queueDeliveryMu   sync.Mutex
+	queueDeliveries   map[string]struct{}
+	cmuxSocketPath    string
+	federation        *federationTransport
+	federationSecrets githubauth.SecretStore
 }
 
 func browserOpener(rawURL string) error {
@@ -2217,7 +2226,18 @@ func Start(ctx context.Context, options Options) (*Daemon, error) {
 		}
 		askFactory = NewProductionAskRuntimeFactory(github, dir)
 	}
-	d := &Daemon{listener: listener, dataDir: dir, token: token, sessions: make(map[string]time.Time), watches: make(map[chan string]struct{}), queueWatches: make(map[string]context.CancelFunc), authFlows: make(map[githubauth.Capability]*githubauth.LoopbackFlow), askRuntime: options.AskRuntime, askFactory: askFactory, askWatchers: make(map[string]map[chan askruntime.Delta]struct{}), queueDeliveries: make(map[string]struct{}), cmuxSocketPath: options.CmuxSocketPath, db: db, github: github, ws: wshub.New(wshub.Options{Path: "/ws"})}
+	federationSecrets := options.FederationSecrets
+	if federationSecrets == nil {
+		federationSecrets = github.Secrets
+	}
+	if err := federation.MigrateLegacyTokens(db, func(id, token string) error {
+		return federationSecrets.Set(federationSecretService, federationSecretAccount(id), token)
+	}); err != nil {
+		_ = listener.Close()
+		_ = db.Close()
+		return nil, fmt.Errorf("migrate federation credentials to system secret store: %w", err)
+	}
+	d := &Daemon{listener: listener, dataDir: dir, token: token, sessions: make(map[string]time.Time), watches: make(map[chan string]struct{}), queueWatches: make(map[string]context.CancelFunc), authFlows: make(map[githubauth.Capability]*githubauth.LoopbackFlow), askRuntime: options.AskRuntime, askFactory: askFactory, askWatchers: make(map[string]map[chan askruntime.Delta]struct{}), queueDeliveries: make(map[string]struct{}), cmuxSocketPath: options.CmuxSocketPath, federation: newFederationTransport(options.FederationDialer), federationSecrets: federationSecrets, db: db, github: github, ws: wshub.New(wshub.Options{Path: "/ws"})}
 	if err := d.restoreActiveWorkspace(); err != nil {
 		// Persisted active workspace state is best-effort at startup. An absent
 		// worktree must not prevent Queue Home from recovering it or opening a
@@ -2265,6 +2285,9 @@ func (d *Daemon) Close() error {
 	}
 	d.mu.Unlock()
 	d.stopAllQueueWatchers()
+	if d.federation != nil {
+		d.federation.close()
+	}
 	d.authMu.Lock()
 	for capability, flow := range d.authFlows {
 		flow.Close()

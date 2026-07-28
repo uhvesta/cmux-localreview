@@ -133,11 +133,11 @@ var parityMatrix = map[string]parityDisposition{
 	"agent_list":                             {Reason: "Native agent lifecycle is covered by agent API tests; frozen ACP fields are intentionally absent."},
 	"agent_heartbeat":                        {Reason: "Native agent lifecycle is covered by agent API tests; frozen ACP fields are intentionally absent."},
 	"agent_reconnect":                        {Reason: "Native agent lifecycle is covered by agent API tests; frozen ACP fields are intentionally absent."},
-	"federation_node_create":                 {Reason: "SSH transport is deferred by product scope; metadata-only native federation has focused API tests."},
-	"federation_node_status":                 {Reason: "SSH transport is deferred by product scope; metadata-only native federation has focused API tests."},
-	"federation_node_disconnect":             {Reason: "SSH transport is deferred by product scope; metadata-only native federation has focused API tests."},
-	"federation_aggregate_queue":             {Reason: "SSH transport is deferred by product scope; metadata-only native federation has focused API tests."},
-	"federation_node_delete":                 {Reason: "SSH transport is deferred by product scope; metadata-only native federation has focused API tests."},
+	"federation_node_create":                 {Reason: "Frozen TS fixture predates native SSH transport; hermetic loopback tunnel API tests cover the stronger native contract."},
+	"federation_node_status":                 {Reason: "Frozen TS fixture predates native SSH transport; hermetic loopback tunnel API tests cover the stronger native contract."},
+	"federation_node_disconnect":             {Reason: "Frozen TS fixture predates native SSH transport; hermetic loopback tunnel API tests cover the stronger native contract."},
+	"federation_aggregate_queue":             {Reason: "Frozen TS fixture predates native SSH transport; hermetic loopback tunnel API tests cover the stronger native contract."},
+	"federation_node_delete":                 {Reason: "Frozen TS fixture predates native SSH transport; hermetic loopback tunnel API tests cover the stronger native contract."},
 }
 
 func TestFrozenTypeScriptParityMatrix(t *testing.T) {
