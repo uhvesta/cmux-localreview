@@ -11,13 +11,16 @@ runtime until every row below is closed.
 ```sh
 bash scripts/verify-frozen-parity-corpus.sh
 bash scripts/verify-go-parity-matrix.sh
+bash scripts/verify-native-runtime-boundary.sh
 ```
 
 These commands use only Git (when available), Go, Bazel, and the checked-in
 JSON. They do not run Bun/Node, call a capture script, import `src/`, or make
 network calls. The first command checks both corpus files against pinned
 SHA-256 digests and validates their provenance. The second makes that check a
-precondition of native HTTP replay.
+precondition of native HTTP replay. The third checks that the shipped Go
+daemon/CLI surface has no Bun, Node, frozen-server, or ACP-adapter runtime
+dependency; React/Electron build-time JavaScript is deliberately out of scope.
 
 The expected corpus is intentionally retained:
 
