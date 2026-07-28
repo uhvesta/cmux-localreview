@@ -62,11 +62,13 @@ type reviewRepo struct {
 	ID                    string `json:"id"`
 	AbsolutePath          string `json:"-"`
 	WorkspaceRelativePath string `json:"workspaceRelativePath"`
+	DBID                  int64  `json:"-"`
 }
 
 type workspaceReview struct {
-	Root  string
-	Repos []reviewRepo
+	Root      string
+	SessionID int64
+	Repos     []reviewRepo
 }
 
 func dataDirectory(override string) (string, error) {
@@ -280,6 +282,20 @@ func (d *Daemon) reviewRepo(id string) (reviewRepo, bool) {
 	return reviewRepo{}, false
 }
 
+func (d *Daemon) reviewContext(id string) (workspaceReview, reviewRepo, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.review == nil {
+		return workspaceReview{}, reviewRepo{}, false
+	}
+	for _, repo := range d.review.Repos {
+		if repo.ID == id {
+			return *d.review, repo, true
+		}
+	}
+	return workspaceReview{}, reviewRepo{}, false
+}
+
 func dereference(value *string) string {
 	if value == nil {
 		return ""
@@ -374,15 +390,37 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		d.mu.Lock()
-		d.review = &workspaceReview{Root: workspace, Repos: repos}
-		d.mu.Unlock()
 		now := time.Now().UnixMilli()
 		tx, err := d.db.Begin()
 		if err == nil {
 			_, err = tx.Exec(`UPDATE workspace_registry SET active=0`)
 			if err == nil {
 				_, err = tx.Exec(`INSERT INTO workspace_registry(root_path,label,last_opened_at,active) VALUES(?,?,?,1) ON CONFLICT(root_path) DO UPDATE SET label=COALESCE(excluded.label,label),last_opened_at=excluded.last_opened_at,active=1`, workspace, nullable(input.Label), now)
+			}
+			var sessionID int64
+			if err == nil {
+				result, insertErr := tx.Exec(`INSERT INTO sessions(label,started_at) VALUES(?,?)`, nullable(input.Label), now)
+				err = insertErr
+				if err == nil {
+					sessionID, err = result.LastInsertId()
+				}
+			}
+			if err == nil {
+				for index := range repos {
+					_, err = tx.Exec(`INSERT INTO repos(workspace_relative_path,git_dir,created_at) VALUES(?,?,?) ON CONFLICT(git_dir) DO UPDATE SET workspace_relative_path=excluded.workspace_relative_path`, repos[index].WorkspaceRelativePath, repos[index].AbsolutePath, now)
+					if err != nil {
+						break
+					}
+					err = tx.QueryRow(`SELECT id FROM repos WHERE git_dir=?`, repos[index].AbsolutePath).Scan(&repos[index].DBID)
+					if err != nil {
+						break
+					}
+				}
+				if err == nil {
+					d.mu.Lock()
+					d.review = &workspaceReview{Root: workspace, SessionID: sessionID, Repos: repos}
+					d.mu.Unlock()
+				}
 			}
 			if err == nil {
 				err = tx.Commit()
@@ -417,6 +455,124 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 	// sibling routes (comments/blobs/revisions) are ported independently.
 	if strings.HasPrefix(path, "/repos/") {
 		parts := strings.Split(strings.Trim(path, "/"), "/")
+		if len(parts) == 4 && parts[0] == "repos" && parts[2] == "api" && parts[3] == "comments-json" && r.Method == http.MethodGet {
+			review, repo, ok := d.reviewContext(parts[1])
+			if !ok {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "Unknown review repository"})
+				return
+			}
+			rows, err := d.db.Query(`SELECT thread_id,file_path,side,start_line,end_line,messages_json,created_at,updated_at,anchor_content FROM comments WHERE session_id=? AND repo_id=? ORDER BY created_at,id`, review.SessionID, repo.DBID)
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			defer rows.Close()
+			threads := []map[string]any{}
+			for rows.Next() {
+				var id, file, side string
+				var start, end, created, updated int64
+				var messages, content sql.NullString
+				if err := rows.Scan(&id, &file, &side, &start, &end, &messages, &created, &updated, &content); err != nil {
+					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+					return
+				}
+				var line any = start
+				if start != end {
+					line = map[string]int64{"start": start, "end": end}
+				}
+				var parsed any = []any{}
+				if messages.Valid {
+					_ = json.Unmarshal([]byte(messages.String), &parsed)
+				}
+				thread := map[string]any{"id": id, "filePath": file, "createdAt": time.UnixMilli(created).UTC().Format(time.RFC3339Nano), "updatedAt": time.UnixMilli(updated).UTC().Format(time.RFC3339Nano), "position": map[string]any{"side": side, "line": line}, "messages": parsed}
+				if content.Valid {
+					thread["codeSnapshot"] = map[string]string{"content": content.String}
+				}
+				threads = append(threads, thread)
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"version": 0, "threads": threads})
+			return
+		}
+		if len(parts) == 4 && parts[0] == "repos" && parts[2] == "api" && parts[3] == "comments" && r.Method == http.MethodPost {
+			review, repo, ok := d.reviewContext(parts[1])
+			if !ok {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "Unknown review repository"})
+				return
+			}
+			var payload struct {
+				Threads []struct {
+					ID       string `json:"id"`
+					FilePath string `json:"filePath"`
+					Position struct {
+						Side string          `json:"side"`
+						Line json.RawMessage `json:"line"`
+					} `json:"position"`
+					Messages     json.RawMessage `json:"messages"`
+					CodeSnapshot struct {
+						Content string `json:"content"`
+					} `json:"codeSnapshot"`
+				} `json:"threads"`
+			}
+			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&payload); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid comment data"})
+				return
+			}
+			now := time.Now().UnixMilli()
+			tx, err := d.db.Begin()
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			for _, thread := range payload.Threads {
+				if thread.ID == "" || thread.FilePath == "" || (thread.Position.Side != "old" && thread.Position.Side != "new") {
+					_ = tx.Rollback()
+					writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid comment thread"})
+					return
+				}
+				var start, end int64
+				var single int64
+				if json.Unmarshal(thread.Position.Line, &single) == nil {
+					start, end = single, single
+				} else {
+					var span struct {
+						Start int64 `json:"start"`
+						End   int64 `json:"end"`
+					}
+					if json.Unmarshal(thread.Position.Line, &span) != nil || span.Start < 1 || span.End < span.Start {
+						_ = tx.Rollback()
+						writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid comment line"})
+						return
+					}
+					start, end = span.Start, span.End
+				}
+				var messages []struct {
+					Body string `json:"body"`
+				}
+				_ = json.Unmarshal(thread.Messages, &messages)
+				body := ""
+				if len(messages) > 0 {
+					body = messages[0].Body
+				}
+				if body == "" {
+					_ = tx.Rollback()
+					writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Comment body is required"})
+					return
+				}
+				hash := sha256.Sum256([]byte(thread.CodeSnapshot.Content))
+				_, err = tx.Exec(`INSERT INTO comments(session_id,repo_id,file_path,side,start_line,end_line,body,anchor_content_hash,created_at,updated_at,thread_id,messages_json,anchor_content,channel) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?, 'formal') ON CONFLICT(session_id,repo_id,thread_id) DO UPDATE SET file_path=excluded.file_path,side=excluded.side,start_line=excluded.start_line,end_line=excluded.end_line,body=excluded.body,anchor_content_hash=excluded.anchor_content_hash,updated_at=excluded.updated_at,messages_json=excluded.messages_json,anchor_content=excluded.anchor_content`, review.SessionID, repo.DBID, thread.FilePath, thread.Position.Side, start, end, body, fmt.Sprintf("%x", hash[:]), now, now, thread.ID, string(thread.Messages), nullable(thread.CodeSnapshot.Content))
+				if err != nil {
+					_ = tx.Rollback()
+					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+					return
+				}
+			}
+			if err = tx.Commit(); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"success": true, "merged": false, "version": now})
+			return
+		}
 		if len(parts) == 4 && parts[0] == "repos" && parts[2] == "api" && parts[3] == "diff" && r.Method == http.MethodGet {
 			repo, ok := d.reviewRepo(parts[1])
 			if !ok {
