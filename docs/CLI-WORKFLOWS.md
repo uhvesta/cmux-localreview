@@ -1,0 +1,148 @@
+# Go CLI workflows
+
+This is the authoritative command reference for the Go migration branch. The
+only supported runtime commands are the `localreviewd` daemon and the
+`localreview` CLI built by Bazel. Historical `bun src/*.ts` commands and ACP
+session commands are migration-era references, not an operational interface.
+
+## Install or build
+
+For a development checkout, build both binaries:
+
+```sh
+bazel build //cmd/localreviewd:localreviewd //cmd/localreview:localreview
+export PATH="$PWD/bazel-bin/cmd/localreviewd/localreviewd_:$PWD/bazel-bin/cmd/localreview/localreview_:$PATH"
+```
+
+Release archives install the same two binaries under `~/.local/bin`:
+
+```sh
+sh ./install.sh
+```
+
+`localreviewd` owns the loopback HTTP server, SQLite data, browser session
+capability, embedded UI, and Git diff operations. `localreview` is the only
+operator CLI; it never opens the SQLite database directly.
+
+## Start the daemon and open the UI
+
+```sh
+# Keep this process running in a terminal or service supervisor.
+localreview daemon --port 0
+
+# Queue Home. It prints a one-time URL, then opens it unless --no-open is set.
+localreview open
+
+# Open an explicit workspace reviewer after registering the workspace.
+localreview open /absolute/path/to/workspace
+
+# Print instead of launching a browser.
+localreview open --no-open /absolute/path/to/workspace
+```
+
+The daemon writes `daemon.json` in `${CMUX_LOCALREVIEW_DATA_DIR}` when set,
+otherwise `~/.local/share/cmux-localreview`. It is mode `0600` and contains a
+loopback bearer capability. `localreview open` places it only in the URL
+fragment; the UI exchanges it for an HttpOnly, SameSite=Strict local cookie.
+Do not copy that URL or token into tickets, logs, or prompts.
+
+## Install Copilot project skills
+
+Run this once per project, then again after upgrading localreview:
+
+```sh
+# Project-local .github skills and a bounded managed instruction block.
+localreview setup /absolute/path/to/project
+
+# Preview all changes without writing anything.
+localreview setup --dry-run --json /absolute/path/to/project
+
+# Also install personal skills beneath ~/.copilot/skills.
+localreview setup --personal /absolute/path/to/project
+```
+
+The installer never overwrites unmanaged files. It owns only its named skills
+and its marked block in `.github/copilot-instructions.md`. Start a new Copilot
+CLI session or reload skills after installation.
+
+## Submit and review a local snapshot
+
+```sh
+# Capture an immutable snapshot, then create or reuse the active queue stream.
+localreview queue-submit --title 'Review parser change' --topic parser-boundaries \
+  /absolute/path/to/workspace
+
+# Open Queue Home, select the item, and choose Open workspace.
+localreview open
+```
+
+A local stream identity is the cleaned absolute workspace path plus the
+optional stable topic (or title when no topic is supplied). Re-submitting an
+active stream is idempotent. After a terminal decision or removal, reusing the
+same stream creates a new immutable round linked to the prior one.
+
+Queue Home is the primary entry point. It shows local and remote sections; a
+reviewer opens only after the explicit **Open workspace** action. **Remove**
+dismisses an item without claiming review completion. Removed and terminal
+items stay in history, cannot be reopened or receive feedback, and their
+snapshot is not altered.
+
+## Reproduce a saved snapshot
+
+```sh
+localreview reproduce /path/to/manifest.json /new-or-empty/destination
+localreview open /new-or-empty/destination
+```
+
+Reproduction verifies the saved Git bundles and refuses a non-empty
+destination. Opening the reproduction starts a fresh SDK-native `/ask`
+conversation; it never replays prompts merely because a page, queue item, or
+conversation is reopened.
+
+## `/ask`, Copilot authentication, and model choice
+
+`/ask` is a fresh, persisted Copilot SDK conversation. It is separate from
+formal review comments and exported feedback. A question created inline keeps
+the workspace path, repository, file, side, line/range, and selected text.
+Reloading the reviewer reads that saved transcript; it does not send another
+prompt.
+
+The Go daemon accepts only its dedicated Copilot credential source. It does
+not fall back to `gh`, a PAT, environment variables, or an existing Copilot
+CLI login. GitHub OAuth configuration and the fully live SDK message route are
+still being completed during this migration; until Queue Home reports a live
+model catalogue, the model picker intentionally reports its unauthenticated
+or fallback state instead of pretending requests will work.
+
+## File-change reload workflow
+
+When an opened workspace changes, the daemon fingerprints both Git status and
+the actual binary diff. This detects content-only edits that remain `M` in
+`git status`. The reviewer displays **Changes detected — click to reload**;
+click it to refetch the diff. Reloading a diff does not create a queue item or
+send anything to Copilot.
+
+## Remote and GitHub workflows
+
+The queue UI can display remote nodes and PR records, but SSH federation,
+GitHub PR mirroring/publication, and remote setup are not yet operator-ready
+in the Go cutover. Do not use historical `global-daemon`, `queue-submit <PR
+URL>`, ACP, or remote-tunnel documentation as a supported production recipe.
+Use local snapshots until the corresponding Go CLI subcommands land.
+
+## Validation checklist
+
+```sh
+go test ./...
+bazel test //...
+bash scripts/verify-parity-fixtures.sh
+
+# Build the embedded browser UI before a distributable daemon build.
+bash scripts/stage-ui-assets.sh
+bazel build //cmd/localreviewd:localreviewd //cmd/localreview:localreview
+```
+
+For a manual smoke test: create a disposable Git repository with one modified
+tracked file, run `localreview daemon`, queue it with `localreview
+queue-submit`, use Queue Home to open it, edit the file again, and click the
+reload notice. Confirm the diff changes and browser console has no new error.

@@ -10,9 +10,16 @@
 - [Demo and source install](docs/DEMO.md) — disposable browser demo plus a user-prefix CLI installation flow.
 - [Troubleshooting](docs/TROUBLESHOOTING.md) — actionable recovery for auth, diff, Copilot, GitHub, cmux, and SSH states.
 - [Go daemon migration](docs/GO-DAEMON-MIGRATION.md) — Bazel build, compatibility gates, and the Go control-plane cutover.
+- [Go CLI workflows](docs/CLI-WORKFLOWS.md) — authoritative current commands for setup, queueing, opening, reproducing, `/ask`, and validation.
 - [Multiple Copilot ACP sessions](docs/COPILOT-ACP-SESSIONS.md) — safe local/remote session wiring and feedback delivery.
 
-## Common workflow
+> **Migration status:** commands below this notice that begin with `bun src/`
+> document the legacy TypeScript control plane. For the active Go daemon use
+> [Go CLI workflows](docs/CLI-WORKFLOWS.md): `localreview daemon`,
+> `localreview open`, `localreview queue-submit`, `localreview reproduce`, and
+> `localreview setup`. ACP/URI agent attachment is not part of the Go runtime.
+
+## Legacy TypeScript workflow reference
 
 ```sh
 # Start/open an explicit workspace reviewer (starts the daemon when needed)

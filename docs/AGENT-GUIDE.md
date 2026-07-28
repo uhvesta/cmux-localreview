@@ -1,5 +1,10 @@
 # Agent guide
 
+> **Migration note:** the agent policy remains useful, but its `bun src/*`,
+> ACP, and remote instructions describe the legacy control plane. Use
+> [Go CLI workflows](CLI-WORKFLOWS.md) as the executable command reference
+> until Go route/CLI parity is complete.
+
 This guide is the operating contract for an agent working with a
 `cmux-localreview` checkout. It complements the command reference in the
 [README](../README.md); use it to decide what to do, what data to preserve,

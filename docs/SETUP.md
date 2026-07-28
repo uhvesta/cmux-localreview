@@ -1,5 +1,10 @@
 # Operator setup guide
 
+> **Historical guide:** this page describes the TypeScript/ACP deployment.
+> During the Go-daemon migration, use [Go CLI workflows](CLI-WORKFLOWS.md) for
+> supported commands. In particular, do not substitute the `bun src/*`, ACP,
+> or remote-tunnel examples below for the current `localreview` CLI.
+
 This guide is for a person or automation agent preparing a machine to submit
 and review work. Run the command for the machine's role, then verify the
 expected result before moving to the next step.

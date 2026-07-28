@@ -1,5 +1,9 @@
 # Multiple Copilot CLI sessions
 
+> **Retired for the Go runtime:** this is retained only as legacy design
+> history. The current migration intentionally removes ACP/URI transport from
+> the Go core; `/ask` is SDK-native. See [Go CLI workflows](CLI-WORKFLOWS.md).
+
 This guide describes the current safe setup and the migration target. ACP is
 the feedback transport: cmux is for visibility and persistence, never for
 keystroke injection.
