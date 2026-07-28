@@ -7,7 +7,7 @@ set -euo pipefail
 root=$(CDPATH= cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 
-for command in bazel curl git jq; do
+for command in bazel curl git jq ps; do
   command -v "$command" >/dev/null || { echo "$command is required" >&2; exit 2; }
 done
 
@@ -16,6 +16,8 @@ binary="$root/bazel-bin/cmd/localreviewd-e2e/localreviewd-e2e_/localreviewd-e2e"
 data=$(mktemp -d "${TMPDIR:-/tmp}/cmux-localreview-e2e-check.XXXXXX")
 repo=$(mktemp -d "${TMPDIR:-/tmp}/cmux-localreview-e2e-repo.XXXXXX")
 daemon_pid=""
+max_rss_kb=${LOCALREVIEW_MAX_RSS_KB:-51200}
+rss_report=${LOCALREVIEW_E2E_RSS_REPORT:-0}
 
 cleanup() {
   if [[ -n "$daemon_pid" ]] && kill -0 "$daemon_pid" 2>/dev/null; then kill -TERM "$daemon_pid" || true; fi
@@ -47,6 +49,32 @@ authenticate() {
 api_get() { curl -fsS -b "$cookie" "$origin/api/$1"; }
 api_post() { curl -fsS -b "$cookie" -H "Origin: $origin" -H 'content-type: application/json' -d "$2" "$origin/api/$1"; }
 
+# Report the resident set rather than virtual size: this is the budget the
+# native migration promises to keep below 50 MiB.  Keep the probe here (rather
+# than in the caller) so every sample is tied to the exact daemon PID that
+# served this acceptance round.
+read_rss_kb() {
+  local value
+  value=$(ps -o rss= -p "$daemon_pid" | tr -d '[:space:]')
+  case "$value" in
+    ''|*[!0-9]*) echo "could not read daemon RSS for PID $daemon_pid" >&2; return 1 ;;
+  esac
+  echo "$value"
+}
+
+record_rss() {
+  local label value
+  label=$1
+  value=$(read_rss_kb)
+  if [[ "$value" -gt "$max_rss_kb" ]]; then
+    echo "${label} RSS ${value}KB exceeds ${max_rss_kb}KB budget" >&2
+    return 1
+  fi
+  if [[ "$rss_report" == "1" ]]; then
+    printf 'RSS_%s_KB=%s\n' "$label" "$value"
+  fi
+}
+
 git -C "$repo" init -q
 git -C "$repo" config user.email fixture@example.invalid
 git -C "$repo" config user.name fixture
@@ -56,6 +84,7 @@ printf 'package fixture\n\nconst after = 2\n' >"$repo/main.go"
 
 start_daemon
 authenticate
+record_rss IDLE
 
 queue=$(api_post queue "{\"title\":\"Fixture acceptance\",\"workspacePath\":\"$repo\",\"reviewTopic\":\"fixture-e2e\"}")
 item=$(jq -r .item.id <<<"$queue")
@@ -157,6 +186,11 @@ jq -e '.item.removedAt != null and .item.removedReason == "Fixture lifecycle rem
 history_after_remove=$(api_get 'queue?history=true')
 jq -e --arg id "$item" '.items[] | select(.id == $id and .removedAt != null)' <<<"$history_after_remove" >/dev/null
 
+# The full route-level exercise above is intentionally performed against one
+# long-running daemon.  This sample catches retained turn/session state before
+# the restart-persistence check below starts a fresh process.
+record_rss AFTER_CHECKLIST
+
 # Restarting resets only live fixture SDK sessions. It must retain the saved
 # transcript and a read must never replay a prompt.
 kill -TERM "$daemon_pid"
@@ -170,5 +204,6 @@ workspace_defaults_after_restart=$(api_get ask/settings)
 jq -e '.workspaceDefaults.model == "claude-sonnet-4.6" and .workspaceDefaults.reasoningEffort == "high" and .workspaceDefaults.contextTier == "long_context"' <<<"$workspace_defaults_after_restart" >/dev/null
 inline_after_restart=$(api_get "ask/conversations/$inline_id")
 jq -e '.messages | length == 2 and .[0].location.selectedCode == "const after = 2" and .[1].pending == false' <<<"$inline_after_restart" >/dev/null
+record_rss AFTER_RESTART
 
 echo "E2E Copilot fixture acceptance passed"

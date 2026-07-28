@@ -298,6 +298,32 @@ queue item does not replay an existing Copilot turn. It does not represent an
 OAuth success or validate an external Copilot service; run the dedicated real-
 auth pass separately.
 
+### Repeatable Phase 3 fixture/RSS gate (no secrets)
+
+For the route-level portions of the Phase 3 checklist, run the full deterministic
+fixture twice and retain its daemon RSS samples:
+
+```sh
+scripts/verify-phase3-fixture-trend.sh
+```
+
+The gate records the daemon’s idle RSS, RSS after the complete queue + inline
+`/ask` + `/btw` + restart checklist, and RSS after restart for every round. It
+enforces the 50 MiB daemon budget (`LOCALREVIEW_MAX_RSS_KB=51200`) and rejects
+an after-checklist increase greater than 4 MiB between the first and last
+round. Tune only when investigating a platform-specific allocator measurement:
+
+```sh
+LOCALREVIEW_PHASE3_ROUNDS=3 \
+LOCALREVIEW_MAX_RSS_TREND_KB=4096 \
+scripts/verify-phase3-fixture-trend.sh
+```
+
+This is deliberate evidence for the native daemon’s no-secret routes; it does
+not replace the clean-profile browser OAuth, live Copilot, or packaged Electron
+passes in the migration checklist. The fixture never contacts GitHub/Copilot
+and cannot create credentials or resend a real prompt.
+
 ## File-change reload workflow
 
 When an opened workspace changes, the daemon fingerprints both Git status and
