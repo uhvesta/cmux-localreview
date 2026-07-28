@@ -811,21 +811,21 @@ func assertNativeQuestionSetDeliveryFixture(t *testing.T, d *Daemon, fixture fro
 }
 
 func questionSetTurnsSettled(messages []ask.Message, wantUserBodies []string) bool {
-	userBodies := make([]string, 0, len(messages))
-	for _, message := range messages {
-		if message.Pending {
-			return false
-		}
-		if message.Role == ask.RoleUser {
-			userBodies = append(userBodies, message.Body)
-		}
-	}
-	if len(userBodies) < len(wantUserBodies) || len(messages) < len(wantUserBodies)*2 {
+	// A sequential completion schedules the next turn after the preceding
+	// assistant settles. There is a tiny, valid interval in which the final
+	// user turn has been persisted but its pending assistant placeholder has
+	// not. Counting all historical messages (or merely seeing no pending
+	// message) mistakes that interval for a finished delivery. Require the
+	// requested turns themselves to be complete user/assistant pairs at the
+	// tail before proving that a transcript read is inert.
+	if len(messages) < len(wantUserBodies)*2 {
 		return false
 	}
-	start := len(userBodies) - len(wantUserBodies)
+	start := len(messages) - len(wantUserBodies)*2
 	for index, want := range wantUserBodies {
-		if userBodies[start+index] != want {
+		user := messages[start+index*2]
+		assistant := messages[start+index*2+1]
+		if user.Pending || assistant.Pending || user.Role != ask.RoleUser || assistant.Role != ask.RoleAssistant || user.Body != want {
 			return false
 		}
 	}
