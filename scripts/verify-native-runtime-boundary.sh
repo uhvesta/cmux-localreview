@@ -21,10 +21,25 @@ if rg -n -i '(exec\.(Command|CommandContext)\([^)]*"(node|bun)"|exec\.LookPath\(
   fail 'Go daemon/CLI references a retired JS or ACP runtime'
 fi
 
-# The two release binaries must be buildable without Node/Bun on PATH. This
-# check is intentionally structural; the UI build remains a separate
-# build-time concern and release archives embed its already-built assets.
+# The UI build is intentionally a separate Bun/Vite *build-time* concern.
+# The native executable process itself must not need Node/Bun after the
+# embedded archive exists. Confirm that Bazel can resolve both release
+# binaries, then invoke the host-native outputs with a deliberately tiny PATH
+# that contains neither runtime. This catches a future exec.LookPath edge that
+# source scanning alone would miss.
 bazel query 'kind(go_binary, //cmd/localreview/... union //cmd/localreviewd/...)' >/dev/null || fail 'Bazel cannot resolve released native binaries'
+
+native_output() {
+  bazel cquery --output=files "$1" | tail -n 1
+}
+
+cli=$(native_output //cmd/localreview:localreview)
+daemon=$(native_output //cmd/localreviewd:localreviewd)
+test -x "$cli" || fail 'native localreview output is missing; build it before boundary verification'
+test -x "$daemon" || fail 'native localreviewd output is missing; build it before boundary verification'
+runtime_path=/usr/bin:/bin
+env PATH="$runtime_path" "$cli" --help >/dev/null || fail 'localreview requires an external runtime to print help'
+env PATH="$runtime_path" "$daemon" --help >/dev/null || fail 'localreviewd requires an external runtime to print help'
 
 # The deterministic E2E fixture is intentionally a *different* binary. It
 # must never enter release archive inputs or Electron's packaged sidecar.

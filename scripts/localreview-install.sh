@@ -15,7 +15,7 @@ skills fail over without a Bun/TypeScript daemon.
 Options:
   --prefix PATH       User-owned install prefix (default: ~/.local)
   --dry-run           Print actions without writing
-  --no-ui-build       Reuse currently staged embedded UI assets
+  --no-ui-stage       Skip the optional UI staging preflight
   --no-project-setup  Do not install Copilot skills in [project]
   -h, --help          Show this help
 EOF
@@ -25,7 +25,7 @@ script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
 source_root=$(CDPATH= cd "$script_dir/.." && pwd)
 prefix=${HOME}/.local
 dry_run=0
-ui_build=1
+ui_stage=1
 project_setup=1
 project=
 
@@ -33,7 +33,11 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --prefix) [ "$#" -ge 2 ] || { echo "--prefix requires a path" >&2; exit 2; }; prefix=$2; shift 2 ;;
     --dry-run) dry_run=1; shift ;;
-    --no-ui-build) ui_build=0; shift ;;
+    # Bazel owns the authoritative embedded UI archive.  This only avoids the
+    # redundant, early staging preflight; it must not imply that a stale
+    # checked-in bundle can be reused or that the native daemon needs a JS
+    # runtime after installation.
+    --no-ui-stage|--no-ui-build) ui_stage=0; shift ;;
     --no-project-setup) project_setup=0; shift ;;
     -h|--help) usage; exit 0 ;;
     --) shift; break ;;
@@ -55,8 +59,13 @@ bin_dir=$prefix/bin
 say() { printf '%s\n' "$*"; }
 run() { if [ "$dry_run" -eq 1 ]; then say "dry-run: $*"; else "$@"; fi; }
 
-if [ "$ui_build" -eq 1 ]; then
-  command -v bun >/dev/null 2>&1 || { echo "Bun is required only to build the React UI. Use --no-ui-build to reuse staged assets." >&2; exit 127; }
+# The current Bazel UI action intentionally uses Bun to produce the Vite
+# archive at *build time*.  The installed Go binaries never invoke it.  Keep
+# this check unconditional so a fresh install fails clearly rather than later
+# inside Bazel; --no-ui-stage only skips a redundant diagnostic preflight.
+command -v bun >/dev/null 2>&1 || { echo "Bun is required to build the embedded React UI from source; installed native binaries do not require it." >&2; exit 127; }
+
+if [ "$ui_stage" -eq 1 ]; then
   if [ "$dry_run" -eq 1 ]; then
     say "dry-run: (cd $source_root && bash scripts/stage-ui-assets.sh)"
   else
