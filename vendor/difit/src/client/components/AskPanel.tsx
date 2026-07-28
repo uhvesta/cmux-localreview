@@ -212,10 +212,20 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
     const source = new EventSource(resolveEventSourceUrl(`/api/ask/conversations/${encodeURIComponent(id)}/events`));
     activeEventSourceRef.current = source;
     let settled = false;
+    let readySettled = false;
+    let stopWaitingForReady: ((reason: Error) => void) | null = null;
+    let closeStream: (() => void) | null = null;
     const ready = new Promise<void>((resolve, reject) => {
-      const timeout = window.setTimeout(() => reject(new Error('Timed out while connecting to the Copilot stream.')), 10_000);
-      source.addEventListener('status', () => { window.clearTimeout(timeout); resolve(); }, { once: true });
-      source.onerror = () => { window.clearTimeout(timeout); reject(new Error('Copilot stream disconnected before the question started.')); };
+      const finish = (reason?: Error) => {
+        if (readySettled) return;
+        readySettled = true;
+        window.clearTimeout(timeout);
+        if (reason) reject(reason); else resolve();
+      };
+      const timeout = window.setTimeout(() => finish(new Error('Timed out while connecting to the Copilot stream.')), 10_000);
+      stopWaitingForReady = (reason) => finish(reason);
+      source.addEventListener('status', () => finish(), { once: true });
+      source.onerror = () => finish(new Error('Copilot stream disconnected before the question started.'));
     });
     const streamed = new Promise<void>((resolve, reject) => {
       const close = (error?: Error) => {
@@ -225,7 +235,14 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
         if (activeEventSourceRef.current === source) activeEventSourceRef.current = null;
         error ? reject(error) : resolve();
       };
-      abortEventStreamRef.current = () => close(new DOMException('The /ask response was cancelled.', 'AbortError'));
+      closeStream = () => close();
+      // Cancelling before the EventSource has emitted its initial status used
+      // to leave `ready` pending for ten seconds. Resolve the stream and
+      // reject that connection wait together, so the UI always re-enables.
+      abortEventStreamRef.current = () => {
+        stopWaitingForReady?.(new DOMException('The /ask response was cancelled.', 'AbortError'));
+        closeStream?.();
+      };
       source.addEventListener('delta', (event) => {
         try {
           const payload = JSON.parse((event as MessageEvent).data) as { text?: string };
@@ -260,7 +277,8 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
       source.close();
       if (activeEventSourceRef.current === source) activeEventSourceRef.current = null;
       if (abortEventStreamRef.current) abortEventStreamRef.current = null;
-      setMessages((current) => current.map((message) => message.id === optimisticId ? { ...message, pending: false, body: message.body || 'Copilot did not complete this response.' } : message));
+      const cancelled = (err as { name?: string }).name === 'AbortError';
+      setMessages((current) => current.map((message) => message.id === optimisticId ? { ...message, pending: false, body: message.body || (cancelled ? 'Response cancelled before it completed.' : 'Copilot did not complete this response.') } : message));
       throw err;
     } finally { activeResponseRef.current = null; }
   }, [conversationId, createConversation, loadConversation]);
@@ -277,10 +295,19 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
   const cancel = useCallback(async () => {
     activeResponseRef.current?.abort();
     abortEventStreamRef.current?.(); abortEventStreamRef.current = null;
-    if (conversationId) await daemonFetch(`/api/ask/conversations/${encodeURIComponent(conversationId)}/cancel`, { method: 'POST' });
-    setSending(false);
-    setMessages((current) => current.map((message) => message.pending ? { ...message, pending: false } : message));
-  }, [conversationId]);
+    try {
+      if (!conversationId) return;
+      const response = await daemonFetch(`/api/ask/conversations/${encodeURIComponent(conversationId)}/cancel`, { method: 'POST' });
+      if (!response.ok) throw new Error('Copilot could not be cancelled.');
+      // The server owns the canonical terminal marker (including a partial
+      // response). Reload it rather than leaving an optimistic truncated row.
+      await loadConversation(conversationId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Copilot could not be cancelled.');
+    } finally {
+      setSending(false);
+    }
+  }, [conversationId, loadConversation]);
 
   const saveQuestionSet = useCallback(async () => {
     const questions = questionSetDraft.split(/\n\s*\n/).map((item) => item.trim()).filter(Boolean);
@@ -379,7 +406,7 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
   return <section style={{ position: 'fixed', right: 0, top: 0, bottom: 0, width: 390, zIndex: 56, display: 'flex', flexDirection: 'column', background: 'var(--bg-primary, #161b22)', borderLeft: '1px solid rgba(127,127,127,0.35)' }} aria-label="Copilot ask">
     <div style={{ display: 'flex', gap: 7, alignItems: 'center', padding: '9px 11px', borderBottom: '1px solid rgba(127,127,127,0.3)' }}>
       <strong style={{ fontSize: 13 }}>/ask</strong><span title="Fresh Copilot SDK chat, separate from ACP review feedback" style={{ fontSize: 10, opacity: 0.6 }}>fresh SDK chat</span>
-      <select aria-label="Copilot model" disabled={historicalConversation} value={model} onChange={(event) => chooseModel(event.target.value)} style={{ marginLeft: 'auto', maxWidth: 210, fontSize: 11, background: 'transparent', color: 'inherit' }}>
+      <select aria-label="Copilot model" disabled={historicalConversation || sending} title={sending ? 'Cancel or wait for Copilot before changing this conversation’s model.' : 'The next question starts a fresh SDK session with this model.'} value={model} onChange={(event) => chooseModel(event.target.value)} style={{ marginLeft: 'auto', maxWidth: 210, fontSize: 11, background: 'transparent', color: 'inherit' }}>
         {models.length === 0 && <option value="">{modelStatus === 'loading' ? 'Checking Copilot…' : 'Copilot unavailable'}</option>}
         {models.map((item) => <option key={item.id} value={item.id}>{item.name ?? item.id}</option>)}
       </select>
@@ -389,8 +416,8 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
       <button onClick={onToggleCollapsed} style={panelButton}>✕</button>
     </div>
     <div aria-label="Copilot model settings" style={{ padding: '6px 10px', display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', borderBottom: '1px solid rgba(127,127,127,0.22)', fontSize: 10 }}>
-      {supportedEfforts.length > 0 ? <label>Thinking <select aria-label="Thinking level" disabled={historicalConversation} value={reasoningEffort || selectedModel?.defaultReasoningEffort || supportedEfforts[0]} onChange={(event) => void updateSettings({ reasoningEffort: event.target.value as ReasoningEffort })} style={{ marginLeft: 3, fontSize: 10, background: 'transparent', color: 'inherit' }}>{supportedEfforts.map((effort) => <option key={effort} value={effort}>{effort}</option>)}</select></label> : <span title="This model does not expose a reasoning-effort control">Thinking: model default</span>}
-      <label>Context <select aria-label="Context window tier" disabled={historicalConversation} value={contextTier} onChange={(event) => void updateSettings({ contextTier: event.target.value as ContextTier })} style={{ marginLeft: 3, fontSize: 10, background: 'transparent', color: 'inherit' }}><option value="default">Default</option><option value="long_context">Long (if supported)</option></select></label>
+      {supportedEfforts.length > 0 ? <label>Thinking <select aria-label="Thinking level" disabled={historicalConversation || sending} value={reasoningEffort || selectedModel?.defaultReasoningEffort || supportedEfforts[0]} onChange={(event) => void updateSettings({ reasoningEffort: event.target.value as ReasoningEffort })} style={{ marginLeft: 3, fontSize: 10, background: 'transparent', color: 'inherit' }}>{supportedEfforts.map((effort) => <option key={effort} value={effort}>{effort}</option>)}</select></label> : <span title="This model does not expose a reasoning-effort control">Thinking: model default</span>}
+      <label>Context <select aria-label="Context window tier" disabled={historicalConversation || sending} value={contextTier} onChange={(event) => void updateSettings({ contextTier: event.target.value as ContextTier })} style={{ marginLeft: 3, fontSize: 10, background: 'transparent', color: 'inherit' }}><option value="default">Default</option><option value="long_context">Long (if supported)</option></select></label>
       <span title="The maximum context window is reported by the installed Copilot runtime">{maxContext && maxContext > 0 ? `${Math.round(maxContext / 1000)}k max context` : 'Context limit reported by runtime'}</span>
     </div>
     {historicalConversations.length > 0 && <label style={{ margin: '7px 10px 0', fontSize: 11, opacity: 0.78 }}><input type="checkbox" checked={showHistory} onChange={(event) => setShowHistory(event.target.checked)} /> Show previous Ask sessions ({historicalConversations.length})</label>}

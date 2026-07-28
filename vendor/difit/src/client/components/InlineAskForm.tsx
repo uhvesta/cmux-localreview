@@ -59,6 +59,7 @@ export function InlineAskForm({ location, initialPrompt, onInitialPromptSent, on
   const sentInitialPrompts = useRef(new Set<string>());
   const eventSourceRef = useRef<EventSource | null>(null);
   const abortStreamRef = useRef<(() => void) | null>(null);
+  const cancelRequestedRef = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -90,6 +91,7 @@ export function InlineAskForm({ location, initialPrompt, onInitialPromptSent, on
     if (!text || !conversationId || status === 'sending') return;
     const optimisticUser: AskMessage = { id: -Date.now(), role: 'user', body: text, pending: false, location };
     const optimisticAssistant: AskMessage = { id: -(Date.now() + 1), role: 'assistant', body: '', pending: true, location };
+    cancelRequestedRef.current = false;
     setMessages((current) => [...current, optimisticUser, optimisticAssistant]);
     setPrompt(''); setStatus('sending'); setActivity('Copilot is reading this code and the earlier conversation…'); setError(null);
     try {
@@ -99,6 +101,9 @@ export function InlineAskForm({ location, initialPrompt, onInitialPromptSent, on
       const source = new EventSource(resolveEventSourceUrl(`/api/ask/conversations/${encodeURIComponent(conversationId)}/events`));
       eventSourceRef.current = source;
       let closed = false;
+      let readySettled = false;
+      let stopWaitingForReady: ((reason: Error) => void) | null = null;
+      let closeStream: (() => void) | null = null;
       const close = (reason?: Error, resolve?: () => void, reject?: (error: Error) => void) => {
         if (closed) return;
         closed = true; source.close();
@@ -106,14 +111,25 @@ export function InlineAskForm({ location, initialPrompt, onInitialPromptSent, on
         if (reason) reject?.(reason); else resolve?.();
       };
       const ready = new Promise<void>((resolve, reject) => {
-        const timeout = window.setTimeout(() => reject(new Error('Timed out while opening Copilot streaming.')), 10_000);
-        source.addEventListener('status', () => { window.clearTimeout(timeout); resolve(); }, { once: true });
-        source.onerror = () => { window.clearTimeout(timeout); reject(new Error('Copilot stream disconnected before the question started.')); };
+        const finish = (reason?: Error) => {
+          if (readySettled) return;
+          readySettled = true;
+          window.clearTimeout(timeout);
+          if (reason) reject(reason); else resolve();
+        };
+        const timeout = window.setTimeout(() => finish(new Error('Timed out while opening Copilot streaming.')), 10_000);
+        stopWaitingForReady = (reason) => finish(reason);
+        source.addEventListener('status', () => finish(), { once: true });
+        source.onerror = () => finish(new Error('Copilot stream disconnected before the question started.'));
       });
       let finishStream: (() => void) | null = null;
       const streamed = new Promise<void>((resolve, reject) => {
         finishStream = () => close(undefined, resolve, reject);
-        abortStreamRef.current = () => close(new DOMException('The /ask response was cancelled.', 'AbortError'), resolve, reject);
+        closeStream = () => close(undefined, resolve, reject);
+        abortStreamRef.current = () => {
+          stopWaitingForReady?.(new DOMException('The /ask response was cancelled.', 'AbortError'));
+          closeStream?.();
+        };
         source.addEventListener('delta', (event) => {
           try {
             const payload = JSON.parse((event as MessageEvent).data) as { text?: string };
@@ -148,6 +164,7 @@ export function InlineAskForm({ location, initialPrompt, onInitialPromptSent, on
       setStatus('idle'); setActivity('');
     } catch (err) {
       eventSourceRef.current?.close(); eventSourceRef.current = null; abortStreamRef.current = null;
+      if ((err as { name?: string }).name === 'AbortError' && cancelRequestedRef.current) return;
       setMessages((current) => current.map((message) => message.id === optimisticAssistant.id ? { ...message, pending: false, body: message.body || 'Copilot did not complete this response.' } : message));
       setError(err instanceof Error ? err.message : 'Inline /ask failed.'); setStatus('error'); setActivity('Copilot stopped before completing the response.');
     }
@@ -155,6 +172,7 @@ export function InlineAskForm({ location, initialPrompt, onInitialPromptSent, on
 
   const cancel = async () => {
     if (!conversationId || (status !== 'sending' && status !== 'cancelling')) return;
+    cancelRequestedRef.current = true;
     setStatus('cancelling'); setActivity('Stopping Copilot’s response…');
     try {
       abortStreamRef.current?.(); abortStreamRef.current = null;
@@ -162,6 +180,13 @@ export function InlineAskForm({ location, initialPrompt, onInitialPromptSent, on
       const result = await response.json() as { cancelled?: boolean; error?: string };
       if (!response.ok) throw new Error(result.error ?? 'Could not stop Copilot.');
       if (!result.cancelled) setActivity('Copilot had already finished; restoring the transcript…');
+      const transcript = await daemonFetch(`/api/ask/conversations/${encodeURIComponent(conversationId)}`);
+      if (transcript.ok) {
+        const body = await transcript.json() as { messages?: AskMessage[] };
+        setMessages(Array.isArray(body.messages) ? body.messages : []);
+      }
+      window.dispatchEvent(new CustomEvent('cmux-localreview:ask-updated', { detail: { conversationId } }));
+      setStatus('idle'); setActivity('Response cancelled.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not stop Copilot.');
       setStatus('sending'); setActivity('Copilot is still responding…');
