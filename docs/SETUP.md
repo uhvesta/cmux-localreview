@@ -20,7 +20,11 @@ localreview daemon run --port 0
 ```
 
 The script does not install a package manager, change a shell profile, or
-handle credentials.
+handle credentials. It also writes compatibility launchers such as
+`queue-submit`, `localreview-submit`, `localreview-open`, and
+`localreview-reproduce` beside `localreview`. They dispatch to the same native
+Go CLI, so an installed Copilot skill and a release installation use identical
+workflows without Node or Bun.
 
 ### Build a checkout (macOS or Linux)
 
