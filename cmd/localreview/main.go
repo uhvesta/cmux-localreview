@@ -64,6 +64,18 @@ func runDaemon(args []string) error {
 	return d.Close()
 }
 
+func commandGroupHelp(name, usage, detail string) {
+	fmt.Fprintf(os.Stdout, "Usage: localreview %s %s\n", name, usage)
+	if detail != "" {
+		fmt.Fprintln(os.Stdout, "")
+		fmt.Fprintln(os.Stdout, detail)
+	}
+}
+
+func wantsHelp(args []string) bool {
+	return len(args) == 1 && (args[0] == "--help" || args[0] == "-h" || args[0] == "help")
+}
+
 // daemonCommand is intentionally a process-management command, not another
 // HTTP API. The discovery capability remains private to the daemon owner, and
 // stop verifies the serving process identity before delivering SIGTERM.
@@ -71,6 +83,10 @@ func runDaemon(args []string) error {
 // the Go cutover painless while `daemon run|status|stop` is the documented
 // stable interface.
 func daemonCommand(args []string) error {
+	if wantsHelp(args) {
+		commandGroupHelp("daemon", "<run|status|stop> [options]", "run starts the loopback daemon; status and stop operate on the owner-only discovery record. `localreview daemon --port 0` remains a compatible spelling of `daemon run`.")
+		return nil
+	}
 	if len(args) == 0 {
 		return runDaemon(nil)
 	}
@@ -377,6 +393,10 @@ func configureAuthCapability(capability, clientID string) error {
 }
 
 func authCommand(args []string) error {
+	if wantsHelp(args) {
+		commandGroupHelp("auth", "<login|status|logout> [options]", "login accepts --capability read|write|copilot, --client-id, --device or --loopback, --no-open, and --no-wait. Credentials stay in the OS secret store.")
+		return nil
+	}
 	if len(args) == 0 {
 		return errors.New("usage: localreview auth <login|status|logout> [options]")
 	}
@@ -496,6 +516,10 @@ func openExternalURL(value string) error {
 // every credential operation through the native auth surface. It never accepts
 // a token or OAuth client secret: the public client uses PKCE.
 func githubAppCommand(args []string) error {
+	if wantsHelp(args) {
+		commandGroupHelp("github-app", "<guide|configure|connect|status|disconnect> [options]", "This retained compatibility name configures dedicated GitHub OAuth App client IDs; it does not install a GitHub App. Run `localreview github-app guide` for the exact OAuth flow.")
+		return nil
+	}
 	if len(args) == 0 || args[0] == "guide" {
 		if len(args) > 1 {
 			return errors.New("usage: localreview github-app guide")
@@ -570,6 +594,10 @@ func githubAppCommand(args []string) error {
 }
 
 func remoteCommand(args []string) error {
+	if wantsHelp(args) {
+		commandGroupHelp("remote", "<daemon|submit|status> [options]", "remote daemon runs the same loopback-only native daemon on a worker; remote submit queues a GitHub PR after read capability is connected.")
+		return nil
+	}
 	if len(args) == 0 {
 		return errors.New("usage: localreview remote <daemon|submit|status> [options]")
 	}
@@ -612,6 +640,10 @@ func remoteCommand(args []string) error {
 }
 
 func federationCommand(args []string) error {
+	if wantsHelp(args) {
+		commandGroupHelp("federation", "<add|list|connect|disconnect|delete|queue|workspaces> [options]", "add requires --id, --label, --ssh, --port, and --token-stdin. Queue and workspace reads can use --refresh to bypass the short-lived cache.")
+		return nil
+	}
 	if len(args) == 0 {
 		return errors.New("usage: localreview federation <add|list|connect|disconnect|delete|queue|workspaces> [options]")
 	}

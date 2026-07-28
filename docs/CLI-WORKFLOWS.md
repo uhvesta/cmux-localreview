@@ -30,7 +30,10 @@ public OAuth client IDs later with `localreview github-app configure`.
 capability, embedded UI, Git diff operations, and SDK conversation runtime.
 `localreview` is the only operator CLI; it never opens the SQLite database
 directly. The command is self-describing: `localreview --help` prints the
-command groups and `localreview <command> --help` prints the accepted flags.
+command groups, while `localreview <group> --help` lists a command group's
+subcommands and stable semantics. Use the concrete subcommand (for example,
+`localreview setup --help` or `localreview federation add --help`) for its
+accepted flags.
 
 ## Start the daemon and open the UI
 

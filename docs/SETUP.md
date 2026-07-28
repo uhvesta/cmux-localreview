@@ -54,7 +54,9 @@ localreview daemon run --port 0
 
 `scripts/localreview-install.sh` builds `localreview` and `localreviewd`,
 installs them to `~/.local/bin` by default, and runs `localreview setup` for
-the optional project argument. Alternatives:
+the optional project argument. Its source-build preflight needs Bazel/Bazelisk
+and Bun even with `--dry-run`, because Bazel builds the embedded React archive
+at build time; it does not write files in dry-run mode. Alternatives:
 
 ```sh
 # Show every file/build action without changing anything.

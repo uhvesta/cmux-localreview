@@ -14,6 +14,7 @@ Install a released build on macOS or Linux:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/uhvesta/cmux-localreview/main/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"  # add through your own shell provisioning
 localreview daemon run --port 0
 localreview open
 ```

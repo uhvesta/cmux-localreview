@@ -55,6 +55,20 @@ func TestAuthAndRemoteCommandUsageIsValidatedBeforeDaemonAccess(t *testing.T) {
 	}
 }
 
+func TestCommandGroupHelpIsAcceptedWithoutDaemonAccess(t *testing.T) {
+	for name, command := range map[string]func([]string) error{
+		"daemon":     daemonCommand,
+		"auth":       authCommand,
+		"github-app": githubAppCommand,
+		"remote":     remoteCommand,
+		"federation": federationCommand,
+	} {
+		if err := command([]string{"--help"}); err != nil {
+			t.Fatalf("%s --help failed: %v", name, err)
+		}
+	}
+}
+
 func TestDaemonStatusVerifiesServingDiscoveryIdentity(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/health" {
