@@ -587,6 +587,39 @@ Not yet claimed:
   OAuth, remote SSH transport, or the required fresh full browser + Electron
   runs.
 
+## 2026-07-28 — Isolated local-browser multi-repository review pass
+
+Validated through an isolated Firefox profile against a freshly started native
+daemon and a disposable workspace containing two independently initialized Git
+repositories (`repo-alpha` and `services/repo-beta`). The test profile, daemon
+data directory, Git workspace, and copied Firefox application were distinct
+from the normal user profile and queue.
+
+- Queue Home captured one immutable multi-repository snapshot and showed its
+  queued card. Opening it rendered both repositories in the sidebar, each with
+  its own changed file and actual diff; switching the sidebar selected the
+  second repository rather than treating the workspace as one Git root.
+- Exercised split and unified diff modes, then **View Full File** and the
+  deleted-region expansion control. An inline formal comment added from the
+  expanded full-file line appeared in the normal diff thread after reopening.
+- Used the visible **Copy all comments to clipboard** action (which confirmed
+  `Copied.`). The native export endpoint for the same live review contained
+  `services/repo-beta/beta.md` and did not leak the snapshot/worktree absolute
+  path as a file path.
+- Restarted the daemon against the same disposable data directory, reopened
+  Queue Home with a new one-time local capability, and confirmed the active
+  workspace, both repositories, formal comment, and diff all reloaded without
+  duplicate comments or re-submission.
+- Opened Review controls, completed the item (active queued count became
+  zero), then requeued it. The browser showed it queued again, restored
+  **Open next queued review**, and retained two decision-history entries.
+
+Not yet claimed:
+
+- This credential-free local-browser pass does not replace live GitHub
+  publishing, loopback consent, authenticated `/ask`/model selection, remote
+  SSH transport, or either complete clean Phase-3 acceptance run.
+
 ## 2026-07-28 — Frozen WebSocket diff-invalidation replay
 
 Done:
