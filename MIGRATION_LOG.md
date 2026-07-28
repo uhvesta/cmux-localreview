@@ -388,3 +388,35 @@ Not yet claimed:
   GitHub/Copilot authorization grant. Actual device authorization, real SDK
   model enumeration, `/btw`, inline question click-through, Electron renderer
   click-through, and a second clean full Phase-3 run remain release gates.
+
+## 2026-07-28 — Native `/btw` and expanded `/ask` parity pass
+
+Done:
+
+- Removed the retired ACP/terminal payload from the reviewer `/btw` panel and
+  inline file action. Both now send the native `transport: "copilot"` request,
+  label the conversation as a private Copilot SDK side chat, surface pending
+  delivery, and retain a polling fallback for a completed response.
+- Added deterministic fixture coverage for inline `/ask` creation, anchored
+  context, event streaming, reopening the same location without replay, and
+  restart persistence.
+- Extended frozen native parity replay to cover `/ask` fresh/history, model
+  discovery, model/settings updates, and idle cancellation. Native picker
+  behavior intentionally preserves explicit thinking/context choices instead
+  of silently clearing them.
+
+Validated:
+
+- Live browser fixture review after rebuilding the embedded UI: opened `/btw`,
+  asked about `review.go`, observed a distinct streaming Copilot SDK response,
+  then observed its completion. The UI did not expose ACP or terminal target
+  controls.
+- The self-contained `/btw` component smoke, event-source URL tests,
+  TypeScript check, isolated Copilot fixture acceptance, and native frozen
+  parity matrix all passed.
+
+Not yet claimed:
+
+- This is still fixture-backed validation. A real authenticated SDK session,
+  all inline click targets, and the renderer-level Electron checklist remain
+  required in each of the two clean Phase-3 passes.
