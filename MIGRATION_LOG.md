@@ -870,3 +870,38 @@ Not yet claimed:
   clean-profile Phase-3 passes. The persisted/recovery behavior above is
   covered without treating a fixture or an unauthenticated error state as a
   substitute for it.
+
+## 2026-07-28 — Repeatable clean-profile Phase-3 evidence runner
+
+Done:
+
+- Added `scripts/phase3-acceptance.sh` to prepare one disposable acceptance
+  session containing a nested two-repository workspace (staged, unstaged, and
+  untracked changes), independent web/Electron data profiles, exact native
+  artifacts, launch helpers, the literal seven-item checklist, and an
+  append-only evidence ledger.
+- The runner is intentionally evidence-only: preparation, launch, and record
+  operations never authenticate, call Copilot, or mark a checklist item as
+  passed on the reviewer's behalf. Retried items retain earlier failures.
+- Ran the deterministic two-round fixture/RSS gate: round one was 31,040 KiB
+  idle / 35,472 KiB after checklist / 31,344 KiB after restart; round two was
+  31,168 KiB / 35,344 KiB / 31,296 KiB. Both stayed below 50 MiB and the
+  after-checklist delta was -128 KiB.
+- Tightened the future Phase-4 absence verifier using an isolated deletion
+  simulation. It now preserves `prism-svelte`, which remains a renderer import,
+  and rejects obsolete manifest scripts without self-matching its diagnostics.
+
+Validated:
+
+- `bash scripts/phase3-acceptance.sh --help`
+- `bash scripts/phase3-acceptance.sh prepare --skip-build --output <temp>`
+- `bash scripts/phase3-acceptance.sh status --session <temp>`
+- `bash scripts/verify-phase3-fixture-trend.sh`
+- `bash scripts/verify-phase4-absence.sh --predelete`
+- `git diff --check`
+
+Not yet claimed:
+
+- The generated ledger is intentionally all pending until a reviewer performs
+  each web and packaged-Electron item with real OAuth/Copilot services. It is
+  tooling for the two clean Phase-3 runs, not evidence that either run passed.
