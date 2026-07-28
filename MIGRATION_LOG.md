@@ -23,6 +23,14 @@ Done:
   read-only PR auth rejection, and `/btw` validation/list behavior. The
   fixture auth service uses an in-memory secret store and synthetic responses;
   no credential is captured or written to disk.
+- Extended it to 80 contracts with the real `/ask` model picker,
+  conversation/inline reuse, model/settings mutation, transcript/history,
+  cancel, and combined/sequential question-set SSE frames. A disposable
+  SDK-shaped session supplies deterministic deltas, so this captures the
+  frozen router's actual HTTP and streaming shape without launching Copilot.
+- The capture is repeatable: two consecutive runs produce byte-identical
+  `http.json`; UUIDs, hashes, temporary paths, timestamps, and snapshot
+  bundle names are normalized while response field presence is retained.
 - Fixed the Go developer build contract by generating a real Go module vendor
   tree alongside the existing `vendor/difit` and `vendor/cmux-hub` UI sources;
   plain `go build ./...` and `go test ./...` now work without a hidden

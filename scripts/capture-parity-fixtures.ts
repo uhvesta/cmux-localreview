@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
 import { startGlobalDaemon } from "../src/global-daemon.ts";
+import { AskService } from "../src/server/askRouter.ts";
 import { GitHubAuthService } from "../src/server/githubAuth.ts";
 import type { SecretStore } from "../src/server/secretStore.ts";
 
@@ -41,13 +42,23 @@ function makeRepo(path: string, filename: string, content: string): void {
 
 function scrub(value: unknown): unknown {
   if (typeof value === "string") {
-    return value.replaceAll(root, "<fixture-root>").replaceAll(workspace, "<workspace>");
+    return value
+      .replaceAll(root, "<fixture-root>")
+      .replaceAll(workspace, "<workspace>")
+      .replace(/\/(?:private\/)?var\/folders\/[^/]+\/[^/]+\/T\/cmux-localreview-parity-[^/]+/gi, "<fixture-root>")
+      // Queue IDs, conversation IDs, snapshot IDs, and repo public IDs are
+      // intentionally random. Their shape is contractual; their value is not.
+      .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, "<uuid>")
+      .replace(/\b[0-9a-f]{40}\b/gi, "<sha>")
+      .replace(/\b[0-9a-f]{12}\b/gi, "<short-id>")
+      .replace(/\b[0-9a-f]{7}\b/gi, "<short-sha>")
+      .replace(/workspace-[0-9a-f]+\.bundle/gi, "workspace-<bundle>.bundle");
   }
   if (Array.isArray(value)) return value.map(scrub);
   if (value && typeof value === "object") {
     return Object.fromEntries(Object.entries(value as Record<string, unknown>)
-      .filter(([key]) => !["pid", "createdAt", "updatedAt", "startedAt", "openedAt", "lastHeartbeatAt", "lastConnectedAt"].includes(key))
-      .map(([key, item]) => [key, scrub(item)]));
+      .filter(([key]) => !["pid", "createdAt", "updatedAt", "startedAt", "openedAt", "lastHeartbeatAt", "lastConnectedAt", "lastSeenAt", "expiresAt", "archivedAt", "capturedAt", "detectedAt", "removedAt"].includes(key))
+      .map(([key, item]) => [["repositoryId", "sourceFingerprint", "bundleSha256"].includes(key) ? key : key, ["repositoryId", "sourceFingerprint", "bundleSha256"].includes(key) ? "<hash>" : scrub(item)]));
   }
   return value;
 }
@@ -75,6 +86,36 @@ const githubFixtureFetch = (async (input: RequestInfo | URL) => {
   return new Response(JSON.stringify({ message: "unexpected fixture URL" }), { status: 404 });
 }) as typeof fetch;
 
+// The capture must include the actual router's SSE framing and persistence,
+// but it must never start Copilot CLI or consult a developer's credentials.
+// Patch only this disposable Bun process with the narrow SDK-shaped fake.
+const fixtureModels = [{
+  id: "fixture-model", name: "Fixture Model",
+  capabilities: { supports: { reasoningEffort: true } },
+  supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+}];
+(AskService.prototype as any).listModels = async () => fixtureModels;
+(AskService.prototype as any).sessionFor = async () => {
+  const listeners = new Map<string, Set<(event: any) => void>>();
+  const emit = (event: string, data: unknown) => listeners.get(event)?.forEach((listener) => listener({ data }));
+  const session = {
+    on: (event: string, listener: (event: any) => void) => {
+      const set = listeners.get(event) ?? new Set(); set.add(listener); listeners.set(event, set);
+      return () => set.delete(listener);
+    },
+    sendAndWait: async () => {
+      emit("assistant.message_delta", { deltaContent: "Fixture " });
+      emit("assistant.message_delta", { deltaContent: "Copilot answer." });
+      emit("assistant.message", { content: "Fixture Copilot answer." });
+      emit("session.idle", { aborted: false });
+      return { data: { content: "Fixture Copilot answer." } };
+    },
+    abort: async () => undefined,
+    setModel: async () => undefined,
+  };
+  return { session, model: "fixture-model", sending: false };
+};
+
 async function main(): Promise<void> {
   makeRepo(workspace, "root.ts", "export const root = 1;\n");
   makeRepo(join(workspace, "nested"), "nested.ts", "export const nested = 2;\n");
@@ -101,7 +142,7 @@ async function main(): Promise<void> {
     try { body = JSON.parse(text); } catch { /* plain-text contract */ }
     fixtures.push({
       name,
-      request: { method: init.method ?? "GET", path, ...(init.body ? { body: JSON.parse(String(init.body)) } : {}), authenticated },
+      request: { method: init.method ?? "GET", path: scrub(path) as string, ...(init.body ? { body: scrub(JSON.parse(String(init.body))) } : {}), authenticated },
       response: { status: response.status, contentType: response.headers.get("content-type"), body: scrub(body) },
     });
     return body as Record<string, unknown>;
@@ -153,7 +194,7 @@ async function main(): Promise<void> {
     await request("new_session", "/api/sessions/new", { method: "POST", body: JSON.stringify({ label: "fixture round" }) }, false);
     await request("comments_json", `/api/repos/${repo.id}/api/comments-json`, {}, false);
     await request("comments_output", `/api/repos/${repo.id}/api/comments-output`, {}, false);
-    await request("ask_models_offline", "/api/ask/models", {}, false);
+    await request("ask_models", "/api/ask/models", {}, false);
     await request("ask_conversations_empty", "/api/ask/conversations", {}, false);
     const questionSet = await request("ask_question_set_create", "/api/ask/question-sets", {
       method: "POST", body: JSON.stringify({ name: "fixture questions", questions: ["What changed?", "What should be tested?"] }),
@@ -164,6 +205,41 @@ async function main(): Promise<void> {
       method: "PUT", body: JSON.stringify({ name: "fixture questions", questions: ["What changed?", "What risks remain?"] }),
     }, false);
     await request("ask_question_set_delete", `/api/ask/question-sets/${questionSet.questionSet.id}`, { method: "DELETE" }, false);
+    const conversation = await request("ask_conversation_create", "/api/ask/conversations", {
+      method: "POST", body: JSON.stringify({ model: "fixture-model", reasoningEffort: "high", contextTier: "long_context" }),
+    }, false) as { conversation: { id: string } };
+    const conversationId = conversation.conversation.id;
+    await request("ask_conversation_get", `/api/ask/conversations/${conversationId}`, {}, false);
+    await request("ask_inline_conversation_reuses_context", "/api/ask/inline-conversations", {
+      method: "POST", body: JSON.stringify({ context: { repoId: repo.id, filePath: "root.ts", side: "current", startLine: 1, endLine: 1, selectedCode: "export const root = 3;" } }),
+    }, false);
+    await request("ask_conversation_model", `/api/ask/conversations/${conversationId}/model`, {
+      method: "POST", body: JSON.stringify({ model: "fixture-model" }),
+    }, false);
+    await request("ask_conversation_settings", `/api/ask/conversations/${conversationId}/settings`, {
+      method: "POST", body: JSON.stringify({ model: "fixture-model", reasoningEffort: "medium", contextTier: "long_context" }),
+    }, false);
+    await request("ask_conversation_message_sse", `/api/ask/conversations/${conversationId}/messages`, {
+      method: "POST", body: JSON.stringify({ prompt: "Explain this line", location: { repoId: repo.id, filePath: "root.ts", side: "current", startLine: 1, selectedCode: "export const root = 3;" } }),
+    }, false);
+    await request("ask_conversation_cancel_idle", `/api/ask/conversations/${conversationId}/cancel`, { method: "POST", body: JSON.stringify({}) }, false);
+    const sendingQuestionSet = await request("ask_question_set_for_send", "/api/ask/question-sets", {
+      method: "POST", body: JSON.stringify({ name: "send fixture", questions: ["What changed?", "What should be tested?"] }),
+    }, false) as { questionSet: { id: string } };
+    await request("ask_question_set_combined_sse", `/api/ask/question-sets/${sendingQuestionSet.questionSet.id}/send`, {
+      method: "POST", body: JSON.stringify({ conversationId, mode: "combined" }),
+    }, false);
+    await request("ask_question_set_sequential_sse", `/api/ask/question-sets/${sendingQuestionSet.questionSet.id}/send`, {
+      method: "POST", body: JSON.stringify({ conversationId, mode: "sequential" }),
+    }, false);
+    // Conversation history is ordered by millisecond timestamps. Ensure the
+    // archived conversation and fresh conversation never share a timestamp,
+    // which would make the frozen fixture ordering nondeterministic.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await request("ask_conversation_fresh", "/api/ask/conversations/fresh", {
+      method: "POST", body: JSON.stringify({ model: "fixture-model", reasoningEffort: "low", contextTier: "default" }),
+    }, false);
+    await request("ask_conversation_history", "/api/ask/conversations?history=true", {}, false);
 
     const queued = await request("queue_create_local", "/api/queue", {
       method: "POST", body: JSON.stringify({ workspacePath: workspace, title: "parity local review", topic: "fixture-topic" }),
