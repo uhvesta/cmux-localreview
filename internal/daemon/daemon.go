@@ -811,6 +811,19 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 	if d.handleRemoteLifecycle(w, r, remoteParts) {
 		return
 	}
+	// Hunk review plans are a native control-plane route, not part of the
+	// retained difit compatibility surface below. Keep it early so an explicit
+	// plan request cannot fall through to the generic migration placeholder.
+	if len(remoteParts) >= 4 && remoteParts[0] == "repos" && remoteParts[2] == "api" && strings.HasPrefix(remoteParts[3], "hunk-review-plan") {
+		review, repo, ok := d.reviewContext(remoteParts[1])
+		if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "Unknown review repository"})
+			return
+		}
+		if d.hunkPlanHandler(w, r, review, repo) {
+			return
+		}
+	}
 	if path == "/watch" && r.Method == http.MethodGet {
 		d.serveWatch(w, r)
 		return
@@ -1319,16 +1332,6 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 	// sibling routes (comments/blobs/revisions) are ported independently.
 	if strings.HasPrefix(path, "/repos/") {
 		parts := strings.Split(strings.Trim(path, "/"), "/")
-		if len(parts) >= 4 && parts[0] == "repos" && parts[2] == "api" && strings.HasPrefix(parts[3], "hunk-review-plan") {
-			review, repo, ok := d.reviewContext(parts[1])
-			if !ok {
-				writeJSON(w, http.StatusNotFound, map[string]string{"error": "Unknown review repository"})
-				return
-			}
-			if d.hunkPlanHandler(w, r, review, repo) {
-				return
-			}
-		}
 		if len(parts) == 4 && parts[0] == "repos" && parts[2] == "api" && parts[3] == "comment-imports" && r.Method == http.MethodPost {
 			review, repo, ok := d.reviewContext(parts[1])
 			if !ok {

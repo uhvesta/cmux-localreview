@@ -105,7 +105,9 @@ func hunkPatch(chunk gitdiff.Chunk) string {
 }
 
 func (d *Daemon) hunkPlanHandler(w http.ResponseWriter, r *http.Request, review workspaceReview, repo reviewRepo) bool {
-	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	// apiHandler hands this method the native `/api/...` request while the
+	// direct deterministic route tests use `/repos/...`; normalize both forms.
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api"), "/"), "/")
 	// Canonical GET /.../hunk-review-plan/{planID}/ask-context is only a
 	// persisted-plan lookup. Keep the prior query form as a compatibility alias
 	// for a bundled UI that may still be open during a daemon upgrade.
