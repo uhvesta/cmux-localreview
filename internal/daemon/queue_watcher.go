@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -36,6 +37,8 @@ type queueWatchInput struct {
 	CopilotSessionID string          `json:"copilotSessionId"`
 	FeedbackTarget   string          `json:"feedbackTarget"`
 	Provenance       json.RawMessage `json:"provenance"`
+	Topic            string          `json:"topic"`
+	IdentityKey      string          `json:"identityKey"`
 	LastQueueItemID  string          `json:"lastQueueItemId"`
 	LastFingerprint  string          `json:"lastFingerprint"`
 }
@@ -171,16 +174,47 @@ func (d *Daemon) enqueueQueueSnapshot(workspace string, input queueWatchInput, m
 	if err != nil {
 		return nil, false, err
 	}
+	provenance := nullableRaw(input.Provenance)
+	if provenance == nil {
+		provenance, _ = d.defaultQueueProvenance(workspace, mechanism)
+	}
+	if err := snapshot.SetProvenance(manifestPath, &manifest, provenance); err != nil {
+		return nil, false, err
+	}
 	encodedManifest, err := json.Marshal(manifest)
 	if err != nil {
 		return nil, false, err
 	}
-	provenance := nullableRaw(input.Provenance)
-	if provenance == nil {
-		provenance, _ = json.Marshal(map[string]any{"version": 1, "workspacePath": workspace, "autoQueue": map[string]string{"mechanism": mechanism}})
-	}
 	workspaceHash := fmt.Sprintf("%x", sha256.Sum256([]byte(workspace)))
-	return queueStore.Enqueue(d.db, queueStore.EnqueueInput{Title: firstNonEmpty(input.Title, "Review "+workspace), Body: input.Body, WorkspacePath: workspace, IdempotentKey: mechanism + ":" + workspaceHash + ":" + fingerprint, AgentID: input.AgentID, AgentProvider: input.AgentProvider, CopilotSessionID: input.CopilotSessionID, FeedbackTarget: input.FeedbackTarget, BaseRef: input.Base, Provenance: provenance, SourceFingerprint: fingerprint, SupersedesID: priorID, SnapshotManifestPath: manifestPath, SnapshotManifest: encodedManifest})
+	return queueStore.Enqueue(d.db, queueStore.EnqueueInput{Title: firstNonEmpty(input.Title, "Review "+workspace), Body: input.Body, WorkspacePath: workspace, IdempotentKey: firstNonEmpty(input.IdentityKey, mechanism+":"+workspaceHash+":"+fingerprint), AgentID: input.AgentID, AgentProvider: input.AgentProvider, CopilotSessionID: input.CopilotSessionID, FeedbackTarget: input.FeedbackTarget, BaseRef: input.Base, Provenance: provenance, SourceFingerprint: fingerprint, SupersedesID: priorID, SnapshotManifestPath: manifestPath, SnapshotManifest: encodedManifest, ReviewTopic: input.Topic, IdentityKey: input.IdentityKey})
+}
+
+// defaultQueueProvenance gives a direct Queue Home submission the same
+// reproduce/review trace as CLI and watcher submissions. It intentionally
+// records only availability of cmux—not a terminal handle or any secret.
+func (d *Daemon) defaultQueueProvenance(workspace, mechanism string) (json.RawMessage, error) {
+	cwd, _ := os.Getwd()
+	socket := d.cmuxSocketPath
+	if socket == "" {
+		socket = defaultCmuxSocket()
+	}
+	available := false
+	cmuxError := "cmux socket is unavailable"
+	if _, err := os.Stat(socket); err == nil {
+		available = true
+		cmuxError = ""
+	}
+	return json.Marshal(map[string]any{
+		"version":       1,
+		"workspacePath": workspace,
+		"caller": map[string]any{
+			"cwd":             cwd,
+			"cmuxSurfaceId":   nil,
+			"cmuxWorkspaceId": nil,
+		},
+		"cmux":       map[string]any{"available": available, "surfaces": []any{}, "error": cmuxError},
+		"submission": map[string]any{"mechanism": mechanism},
+	})
 }
 
 func (d *Daemon) startQueueWatcher(workspace string, interval time.Duration) {

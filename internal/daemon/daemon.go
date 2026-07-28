@@ -34,6 +34,7 @@ import (
 	"github.com/uhvesta/cmux-localreview/internal/githubauth"
 	"github.com/uhvesta/cmux-localreview/internal/githubreview"
 	queueStore "github.com/uhvesta/cmux-localreview/internal/queue"
+	"github.com/uhvesta/cmux-localreview/internal/snapshot"
 	"github.com/uhvesta/cmux-localreview/internal/store"
 	"github.com/uhvesta/cmux-localreview/internal/webassets"
 	"github.com/uhvesta/cmux-localreview/internal/wshub"
@@ -1690,7 +1691,19 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 					commits = append(commits, map[string]string{"hash": fields[0], "shortHash": fields[1], "message": fields[2]})
 				}
 			}
-			writeJSON(w, http.StatusOK, map[string]any{"specialOptions": []map[string]string{{"value": ".", "label": "Working Directory"}, {"value": "staged", "label": "Staging Area"}}, "branches": branches, "commits": commits})
+			// Keep the reviewer revision contract explicit even for a local-only
+			// repository with no origin.  Empty originDefaultBranch means there is
+			// no remote default to select; resolvedBase is the nearest committed
+			// revision the UI can use as a stable compare base.
+			originDefaultBranch := ""
+			if output, originErr := gitOutput(repo.AbsolutePath, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"); originErr == nil {
+				originDefaultBranch = strings.TrimSpace(output)
+			}
+			resolvedBase := ""
+			if len(commits) > 0 {
+				resolvedBase = commits[0]["shortHash"]
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"specialOptions": []map[string]string{{"value": ".", "label": "All Uncommitted Changes"}, {"value": "staged", "label": "Staging Area"}, {"value": "working", "label": "Working Directory"}}, "branches": branches, "commits": commits, "originDefaultBranch": originDefaultBranch, "resolvedBase": resolvedBase})
 			return
 		}
 	}
@@ -1796,7 +1809,22 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 			if strings.TrimSpace(input.RemoteURL) != "" || input.Kind == "remote" {
 				item, created, err = d.enqueueRemotePullRequest(r.Context(), input, request.Snapshot == nil || *request.Snapshot)
 			} else {
-				item, created, err = queueStore.Enqueue(d.db, input)
+				// Queue Home is a submission boundary, not merely a to-do list:
+				// an existing Git worktree gets an immutable bundle by default. Keep
+				// explicit manifest submissions and non-Git callers compatible with
+				// the lightweight control-plane route used by integrations.
+				workspace, workspaceErr := safeWorkspacePath(input.WorkspacePath)
+				captureLocal := workspaceErr == nil && input.SnapshotManifestPath == "" && len(input.SnapshotManifest) == 0 && (request.Snapshot == nil || *request.Snapshot)
+				if captureLocal {
+					if _, gitErr := gitOutput(workspace, "rev-parse", "--git-dir"); gitErr != nil {
+						captureLocal = false
+					}
+				}
+				if captureLocal {
+					item, created, err = d.enqueueQueueSnapshot(workspace, queueWatchInput{WorkspacePath: workspace, Title: input.Title, Body: input.Body, Base: input.BaseRef, AgentID: input.AgentID, AgentProvider: input.AgentProvider, CopilotSessionID: input.CopilotSessionID, FeedbackTarget: input.FeedbackTarget, Provenance: input.Provenance, Topic: input.ReviewTopic, IdentityKey: input.IdentityKey}, "submit")
+				} else {
+					item, created, err = queueStore.Enqueue(d.db, input)
+				}
 			}
 			if err != nil {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -2113,20 +2141,48 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if parts[2] == "open" {
-			if _, err := os.Stat(item.WorkspacePath); err == nil {
-				if _, err := d.activateWorkspace(item.WorkspacePath, item.Title); err != nil {
-					writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-					return
+			workspace, sourceWorkspace, openErr := d.materializeQueueWorkspace(item)
+			if openErr != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": openErr.Error()})
+				return
+			}
+			if _, err := d.activateWorkspace(workspace, item.Title); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+			d.mu.Lock()
+			review := d.review
+			d.mu.Unlock()
+			repos := []map[string]string{}
+			if review != nil {
+				for _, repo := range review.Repos {
+					repos = append(repos, map[string]string{"id": repo.ID, "path": repo.WorkspaceRelativePath})
 				}
 			}
-			writeJSON(w, http.StatusOK, map[string]any{"item": item, "reviewUrl": "/review?queueItem=" + item.ID})
+			writeJSON(w, http.StatusOK, map[string]any{"item": item, "sourceWorkspacePath": sourceWorkspace, "workspacePath": workspace, "repos": repos, "reviewUrl": "/review?queueItem=" + item.ID})
+			return
+		}
+		if parts[2] == "requeue" {
+			decisions, decisionErr := queueStore.DecisionsForItem(d.db, item.ID)
+			if decisionErr != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": decisionErr.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"item": item, "decisions": decisions})
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"item": item})
 		return
 	}
 	if len(parts) == 2 && parts[0] == "queue" && r.Method == http.MethodDelete {
-		item, err := queueStore.Remove(d.db, parts[1], "")
+		var input struct {
+			Reason string `json:"reason"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid queue removal input"})
+			return
+		}
+		item, err := queueStore.Remove(d.db, parts[1], input.Reason)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -2139,6 +2195,36 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "Go daemon API migration in progress: this route is not implemented"})
+}
+
+// materializeQueueWorkspace is intentionally immutable: a queued Git review
+// opens from its retained bundle, never the changing source worktree. Reopen
+// reuses the already materialized, item-scoped checkout, so it cannot create a
+// new snapshot or alter the provenance captured at submission time.
+func (d *Daemon) materializeQueueWorkspace(item *queueStore.Item) (workspace, source string, err error) {
+	if item == nil {
+		return "", "", errors.New("queue item is required")
+	}
+	source = item.WorkspacePath
+	if item.SnapshotManifestPath == nil || strings.TrimSpace(*item.SnapshotManifestPath) == "" {
+		if _, statErr := os.Stat(source); statErr != nil {
+			return "", "", errors.New("queue item has no retained snapshot or available workspace")
+		}
+		return source, source, nil
+	}
+	workspace = filepath.Join(d.dataDir, "review-workspaces", item.ID)
+	if entries, readErr := os.ReadDir(workspace); readErr == nil && len(entries) > 0 {
+		return workspace, source, nil
+	} else if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+		return "", "", readErr
+	}
+	if err := os.MkdirAll(filepath.Dir(workspace), 0o700); err != nil {
+		return "", "", err
+	}
+	if _, err := snapshot.Materialize(*item.SnapshotManifestPath, workspace); err != nil {
+		return "", "", fmt.Errorf("materialize immutable queue snapshot: %w", err)
+	}
+	return workspace, source, nil
 }
 
 func nullableString(value sql.NullString) any {

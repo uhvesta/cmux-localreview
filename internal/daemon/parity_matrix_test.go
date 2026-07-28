@@ -83,7 +83,7 @@ var parityMatrix = map[string]parityDisposition{
 	"new_session":                 {Execute: true, ForceDaemonCapability: true, Reason: "Native capability boundary is intentionally stricter than frozen TS."},
 	"sessions":                    {Execute: true, ForceDaemonCapability: true, Reason: "Native capability boundary is intentionally stricter than frozen TS."},
 
-	"repo_revisions":                         {Reason: "Native revision payload is implemented but awaits a normalized branch/remote fixture with no host Git configuration dependency."},
+	"repo_revisions":                         {Execute: true, ForceDaemonCapability: true, Reason: "Replayed with the daemon capability: native reviewer reads are deliberately capability-protected."},
 	"repo_comments_empty":                    {Reason: "Legacy difit comment-empty 404 semantics are intentionally replaced by durable native comment collections; dedicated comment tests cover the native contract."},
 	"create_comment":                         {Reason: "Frozen request uses legacy difit comment schema; native durable-thread migration is covered by daemon comment tests until an adapter fixture is added."},
 	"repo_comments_saved":                    {Reason: "Frozen request uses legacy difit comment schema; native durable-thread migration is covered by daemon comment tests until an adapter fixture is added."},
@@ -113,31 +113,35 @@ var parityMatrix = map[string]parityDisposition{
 	"ask_question_set_sequential_sse":        {Reason: "Native stream events use an EventSource endpoint after accepted submission, intentionally replacing TS POST-SSE framing."},
 	"ask_conversation_fresh":                 {Reason: "Native conversation lifecycle is covered by ask store/route tests; fixture replay is pending deterministic SDK stream coverage."},
 	"ask_conversation_history":               {Reason: "Native conversation lifecycle is covered by ask store/route tests; fixture replay is pending deterministic SDK stream coverage."},
-	"queue_create_local":                     {Reason: "Snapshot capture has its own hermetic integration fixture because queue IDs and bundle hashes are intentionally nondeterministic."},
-	"queue_list_with_item":                   {Reason: "Queue lifecycle is covered by queue control-plane tests; fixture projection needs normalized snapshot bundle metadata."},
-	"queue_detail":                           {Reason: "Queue lifecycle is covered by queue control-plane tests; fixture projection needs normalized snapshot bundle metadata."},
-	"queue_reorder":                          {Reason: "Queue lifecycle is covered by queue control-plane tests; fixture projection needs normalized snapshot bundle metadata."},
-	"queue_add_feedback":                     {Reason: "Queue lifecycle is covered by queue control-plane tests; fixture projection needs normalized snapshot bundle metadata."},
-	"queue_feedback_prompt":                  {Reason: "Queue lifecycle is covered by queue control-plane tests; fixture projection needs normalized snapshot bundle metadata."},
-	"queue_reproduce":                        {Reason: "Queue lifecycle is covered by queue control-plane tests; fixture projection needs normalized snapshot bundle metadata."},
-	"queue_export":                           {Reason: "Queue lifecycle is covered by queue control-plane tests; fixture projection needs normalized snapshot bundle metadata."},
-	"queue_open":                             {Reason: "Queue lifecycle is covered by queue control-plane tests; fixture projection needs normalized snapshot bundle metadata."},
-	"queue_complete":                         {Reason: "Queue lifecycle is covered by queue control-plane tests; fixture projection needs normalized snapshot bundle metadata."},
-	"queue_requeue":                          {Reason: "Queue lifecycle is covered by queue control-plane tests; fixture projection needs normalized snapshot bundle metadata."},
-	"queue_delete":                           {Reason: "Queue lifecycle is covered by queue control-plane tests; fixture projection needs normalized snapshot bundle metadata."},
-	"queue_history":                          {Reason: "Queue lifecycle is covered by queue control-plane tests; fixture projection needs normalized snapshot bundle metadata."},
-	"queue_watch_enable":                     {Reason: "Queue watch requires a wall-clock polling fixture and is covered by queue watcher tests."},
-	"queue_watch_disable":                    {Reason: "Queue watch requires a wall-clock polling fixture and is covered by queue watcher tests."},
-	"queue_hook":                             {Reason: "Hook discovery is CLI-facing and has a dedicated native CLI test."},
-	"agent_register":                         {Reason: "Native agent lifecycle is covered by agent API tests; frozen ACP fields are intentionally absent."},
-	"agent_list":                             {Reason: "Native agent lifecycle is covered by agent API tests; frozen ACP fields are intentionally absent."},
-	"agent_heartbeat":                        {Reason: "Native agent lifecycle is covered by agent API tests; frozen ACP fields are intentionally absent."},
-	"agent_reconnect":                        {Reason: "Native agent lifecycle is covered by agent API tests; frozen ACP fields are intentionally absent."},
-	"federation_node_create":                 {Reason: "Frozen TS fixture predates native SSH transport; hermetic loopback tunnel API tests cover the stronger native contract."},
-	"federation_node_status":                 {Reason: "Frozen TS fixture predates native SSH transport; hermetic loopback tunnel API tests cover the stronger native contract."},
-	"federation_node_disconnect":             {Reason: "Frozen TS fixture predates native SSH transport; hermetic loopback tunnel API tests cover the stronger native contract."},
-	"federation_aggregate_queue":             {Reason: "Frozen TS fixture predates native SSH transport; hermetic loopback tunnel API tests cover the stronger native contract."},
-	"federation_node_delete":                 {Reason: "Frozen TS fixture predates native SSH transport; hermetic loopback tunnel API tests cover the stronger native contract."},
+	"queue_create_local":                     {Execute: true},
+	"queue_list_with_item":                   {Execute: true},
+	"queue_detail":                           {Execute: true},
+	"queue_reorder":                          {Execute: true},
+	"queue_add_feedback":                     {Execute: true},
+	"queue_feedback_prompt":                  {Execute: true},
+	// ACP is a deliberate non-goal of the Go migration. The native reproduce
+	// plan exposes a fresh SDK-native /ask session instead of advertising a
+	// resumable terminal protocol that no longer exists; see
+	// TestQueueControlPlaneLifecycle and TestNativeReproducePlan.
+	"queue_reproduce":            {Reason: "Native reproduce intentionally omits retired ACP resume fields (existingAcp/freshAcp) and gives an explicit fresh SDK /ask plan; daemon lifecycle tests verify the substitution."},
+	"queue_export":               {Execute: true},
+	"queue_open":                 {Execute: true},
+	"queue_complete":             {Execute: true},
+	"queue_requeue":              {Execute: true},
+	"queue_delete":               {Execute: true},
+	"queue_history":              {Execute: true},
+	"queue_watch_enable":         {Reason: "Queue watch requires a wall-clock polling fixture and is covered by queue watcher tests."},
+	"queue_watch_disable":        {Reason: "Queue watch requires a wall-clock polling fixture and is covered by queue watcher tests."},
+	"queue_hook":                 {Reason: "Hook discovery is CLI-facing and has a dedicated native CLI test."},
+	"agent_register":             {Execute: true},
+	"agent_list":                 {Execute: true},
+	"agent_heartbeat":            {Execute: true},
+	"agent_reconnect":            {Execute: true},
+	"federation_node_create":     {Reason: "Frozen TS fixture predates native SSH transport; hermetic loopback tunnel API tests cover the stronger native contract."},
+	"federation_node_status":     {Reason: "Frozen TS fixture predates native SSH transport; hermetic loopback tunnel API tests cover the stronger native contract."},
+	"federation_node_disconnect": {Reason: "Frozen TS fixture predates native SSH transport; hermetic loopback tunnel API tests cover the stronger native contract."},
+	"federation_aggregate_queue": {Reason: "Frozen TS fixture predates native SSH transport; hermetic loopback tunnel API tests cover the stronger native contract."},
+	"federation_node_delete":     {Reason: "Frozen TS fixture predates native SSH transport; hermetic loopback tunnel API tests cover the stronger native contract."},
 }
 
 func TestFrozenTypeScriptParityMatrix(t *testing.T) {
@@ -161,13 +165,15 @@ func TestFrozenTypeScriptParityMatrix(t *testing.T) {
 
 	workspace := makeFrozenFixtureWorkspace(t)
 	d := startFrozenParityDaemon(t)
-	state := map[string]string{"<fixture-root>/workspace": workspace}
+	state := map[string]string{"<fixture-root>": filepath.Dir(workspace), "<fixture-root>/workspace": workspace}
 	for _, name := range []string{
 		"health", "unauthenticated_queue", "browser_session_exchange",
 		"github_auth_status", "github_auth_configure", "github_auth_device_start", "github_auth_device_poll", "github_auth_authenticated_status", "github_auth_disconnect",
 		"local_pr_requires_read_auth", "workspaces_empty", "queue_empty", "federation_nodes_empty", "open_workspace", "repos",
-		"repo_diff", "repo_diff_ignore_whitespace", "repo_line_count", "repo_blob", "repo_generated_status", "repo_fullfile",
+		"repo_diff", "repo_diff_ignore_whitespace", "repo_revisions", "repo_line_count", "repo_blob", "repo_generated_status", "repo_fullfile",
 		"ui_state_empty", "ui_state_put", "export_prompt", "sessions", "new_session",
+		"queue_create_local", "queue_list_with_item", "queue_detail", "queue_reorder", "queue_add_feedback", "queue_feedback_prompt", "queue_export", "queue_open", "queue_complete", "queue_requeue", "queue_delete", "queue_history",
+		"agent_register", "agent_list", "agent_heartbeat", "agent_reconnect",
 	} {
 		fixture := byName[name]
 		disposition := parityMatrix[name]
@@ -183,6 +189,9 @@ func TestFrozenTypeScriptParityMatrix(t *testing.T) {
 				t.Fatalf("repos did not yield a replayable repository id: %v %s", err, response.Body.String())
 			}
 			state["<short-id>"] = body.Repos[0].ID
+		}
+		if name == "queue_create_local" {
+			state["<uuid>"] = frozenResponseID(t, name, response.Body.Bytes(), "item")
 		}
 	}
 }
@@ -336,6 +345,28 @@ func assertFrozenFixtureResponse(t *testing.T, fixture frozenParityFixture, actu
 		}
 		assertJSONShape(t, fixture.Name, fixture.Response.Body, got)
 	}
+}
+
+// frozenResponseID bridges the deliberately opaque IDs in the captured TS
+// corpus. The rest of a lifecycle remains an ordinary frozen replay: later
+// rows use the ID emitted by the native daemon instead of a brittle literal.
+// Keeping this at the corpus boundary means queue/agent workflows exercise
+// the same route ordering and request payloads the TypeScript capture used.
+func frozenResponseID(t *testing.T, name string, response []byte, field string) string {
+	t.Helper()
+	var body map[string]any
+	if err := json.Unmarshal(response, &body); err != nil {
+		t.Fatalf("%s: decode lifecycle response: %v", name, err)
+	}
+	value, ok := body[field].(map[string]any)
+	if !ok {
+		t.Fatalf("%s: response has no object %q: %s", name, field, response)
+	}
+	id, ok := value["id"].(string)
+	if !ok || strings.TrimSpace(id) == "" {
+		t.Fatalf("%s: response %q has no non-empty id: %s", name, field, response)
+	}
+	return id
 }
 
 // assertJSONShape compares response structure without copying volatile IDs,

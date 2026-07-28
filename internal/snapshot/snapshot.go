@@ -25,11 +25,27 @@ type Repo struct {
 	BundleSHA256          string  `json:"bundleSha256"`
 }
 type Manifest struct {
-	Version       int    `json:"version"`
-	ID            string `json:"id"`
-	WorkspacePath string `json:"workspacePath"`
-	CreatedAt     string `json:"createdAt"`
-	Repos         []Repo `json:"repos"`
+	Version       int             `json:"version"`
+	ID            string          `json:"id"`
+	WorkspacePath string          `json:"workspacePath"`
+	CreatedAt     string          `json:"createdAt"`
+	Provenance    json.RawMessage `json:"provenance,omitempty"`
+	Repos         []Repo          `json:"repos"`
+}
+
+// SetProvenance records the submission context alongside an immutable bundle.
+// It changes only manifest metadata; ReadVerified continues to verify every
+// retained Git bundle digest before any reproduce/export operation.
+func SetProvenance(manifestPath string, manifest *Manifest, provenance json.RawMessage) error {
+	if manifest == nil || len(provenance) == 0 {
+		return nil
+	}
+	manifest.Provenance = append(json.RawMessage(nil), provenance...)
+	encoded, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(manifestPath, append(encoded, '\n'), 0o600)
 }
 
 func run(dir string, env []string, args ...string) (string, error) {
