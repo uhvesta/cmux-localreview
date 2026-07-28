@@ -61,11 +61,24 @@ function isLoopbackRequest(req: Request): boolean {
   return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
 }
 
-function requireAuth(token: string) {
+const BROWSER_SESSION_COOKIE = "cmux_localreview_browser_session";
+const BROWSER_SESSION_TTL_MS = 8 * 60 * 60 * 1_000;
+
+function cookie(req: Request, name: string): string | undefined {
+  const value = req.header("cookie");
+  if (!value) return undefined;
+  return value.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${name}=`))?.slice(name.length + 1);
+}
+
+function requireAuth(token: string, browserSessions: Map<string, number>) {
   return (req: Request, res: Response, next: () => void) => {
     if (req.path === "/health") return next();
     const header = req.header("authorization");
-    if (header !== `Bearer ${token}`) { res.status(401).json({ error: "Bearer token required" }); return; }
+    const browserSession = cookie(req, BROWSER_SESSION_COOKIE);
+    const expiresAt = browserSession ? browserSessions.get(browserSession) : undefined;
+    if (expiresAt && expiresAt <= Date.now()) browserSessions.delete(browserSession!);
+    const hasBrowserSession = Boolean(expiresAt && expiresAt > Date.now());
+    if (header !== `Bearer ${token}` && !hasBrowserSession) { res.status(401).json({ error: "A local browser session or daemon capability is required" }); return; }
     next();
   };
 }
@@ -77,6 +90,10 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
   const federation = new FederationTunnelManager(db);
   const githubAuth = options.githubAuthService ?? new GitHubAuthService();
   const token = options.token ?? newDaemonToken();
+  // Browser sessions are deliberately opaque, short-lived capabilities. The
+  // daemon master token is exchanged once and is never persisted in browser
+  // storage or exposed to JavaScript after that exchange.
+  const browserSessions = new Map<string, number>();
   const app = express();
   app.use(express.json({ limit: "2mb" }));
   app.get("/health", (_req, res) => res.json({ ok: true, version: VERSION, pid: process.pid }));
@@ -85,7 +102,7 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
   // by the active workspace app and deliberately remain local-browser usable.
   // Only the daemon control plane is bearer-protected.
   api.use((req, res, next) => {
-    if (/^\/(workspaces|queue|agents|packages|federation|github)(?:\/|$)/.test(req.path)) return requireAuth(token)(req, res, next);
+    if (/^\/(browser\/session|workspaces|queue|agents|packages|federation|github)(?:\/|$)/.test(req.path)) return requireAuth(token, browserSessions)(req, res, next);
     next();
   });
   app.use("/api", api);
@@ -98,6 +115,24 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
   // two simultaneous HTTP requests can both read the same undelivered rows
   // before either marks them delivered and send duplicate instructions.
   const feedbackDeliveries = new Map<string, Promise<unknown>>();
+
+  /**
+   * Exchanges the owner-only discovery capability for an HttpOnly, local
+   * browser-session cookie. This is intentionally the *only* route which
+   * accepts the long-lived daemon token from browser JavaScript.
+   */
+  api.post("/browser/session", (req, res) => {
+    if (req.header("authorization") !== `Bearer ${token}`) { res.status(401).json({ error: "Daemon capability required to create a browser session" }); return; }
+    const now = Date.now();
+    for (const [id, expiresAt] of browserSessions) if (expiresAt <= now) browserSessions.delete(id);
+    const id = newDaemonToken();
+    browserSessions.set(id, now + BROWSER_SESSION_TTL_MS);
+    // `Secure` cannot be required because the loopback daemon intentionally
+    // uses HTTP. It is still loopback-only; HttpOnly and SameSite prevent the
+    // token from entering browser JS or cross-site requests.
+    res.cookie(BROWSER_SESSION_COOKIE, id, { httpOnly: true, sameSite: "strict", path: "/api", maxAge: BROWSER_SESSION_TTL_MS });
+    res.status(204).end();
+  });
 
   // Dedicated, GitHub-App credentials are owned by this daemon's OS-secret
   // store. The browser sees device codes and status only—never user tokens.

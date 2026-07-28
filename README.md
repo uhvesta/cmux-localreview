@@ -172,8 +172,10 @@ bun src/localreview-github-app.ts connect --capability read
 
 The daemon keeps issued access and refresh tokens only in macOS Keychain or
 Linux libsecret, under its own service name. The browser receives a short-lived
-device code, never a GitHub token. The public App client IDs are the only values
-written to daemon configuration. See [the operator setup guide](docs/SETUP.md)
+device code, never a GitHub token. Its local daemon capability is immediately
+exchanged for an `HttpOnly; SameSite=Strict` loopback session cookie; it is not
+written to web storage. The public App client IDs are the only values written
+to daemon configuration. See [the operator setup guide](docs/SETUP.md)
 for exact permissions and headless setup.
 
 The daemon resolves the PR's repository plus base/head SHAs before cloning,

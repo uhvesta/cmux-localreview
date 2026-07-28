@@ -58,6 +58,9 @@ bun src/localreview-github-app.ts status
 `connect` opens GitHub’s device-flow page and waits locally. It stores tokens
 only under the `cmux-localreview.github-app` system-secret service. It never
 uses `gh`, a PAT, environment token, or Copilot CLI credential fallback.
+The browser never stores a GitHub token. Its one-time loopback daemon
+capability is exchanged for an `HttpOnly; SameSite=Strict` cookie instead of
+localStorage, sessionStorage, IndexedDB, or a readable cookie.
 
 The daemon always binds to `127.0.0.1`. Use SSH local forwarding for a remote
 daemon or ACP listener; do not make either service public.

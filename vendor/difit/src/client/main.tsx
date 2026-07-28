@@ -14,8 +14,8 @@ if (!rootElement) {
 }
 
 // Queue Home and the workspace reviewer issue authenticated daemon requests
-// during their first effects. Move a fragment token into session storage before
-// React renders so those requests cannot race a later capture effect.
+// during their first effects. Capture the fragment capability before React
+// renders; daemonFetch exchanges it for an HttpOnly session cookie on demand.
 captureDaemonTokenFromLocation();
 
 ReactDOM.createRoot(rootElement).render(

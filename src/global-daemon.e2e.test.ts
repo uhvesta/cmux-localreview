@@ -48,6 +48,16 @@ describe("global daemon authenticated queue lifecycle", () => {
       const initial = await (await authed("/api/github/auth/status")).json() as { provider: string; capabilities: { read: { configured: boolean } } };
       expect(initial.provider).toBe("github-app-device-flow");
       expect(initial.capabilities.read.configured).toBe(false);
+      const session = await authed("/api/browser/session", { method: "POST" });
+      expect(session.status).toBe(204);
+      const browserCookie = session.headers.get("set-cookie");
+      expect(browserCookie).toContain("HttpOnly");
+      expect(browserCookie).toContain("SameSite=Strict");
+      expect(browserCookie).not.toContain("github-app-e2e");
+      const cookieHeader = browserCookie!.split(";", 1)[0]!;
+      // A browser session authorizes Queue Home without re-sending the daemon
+      // master capability, exactly as a real HttpOnly cookie would.
+      expect((await fetch(`http://127.0.0.1:${daemon.discovery.port}/api/github/auth/status`, { headers: { cookie: cookieHeader } })).status).toBe(200);
       const configured = await authed("/api/github/auth/configure", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ capability: "read", clientId: "Iv1.fixtureRead" }) });
       expect(configured.status).toBe(204);
       const statusText = await (await authed("/api/github/auth/status")).text();

@@ -1,10 +1,12 @@
-const DAEMON_TOKEN_STORAGE_KEY = 'cmux-localreview.daemon-token';
+let pendingDaemonCapability: string | undefined;
+let browserSessionExchange: Promise<void> | undefined;
 
 /**
  * The global daemon is intentionally token-protected. `localreview-open`
  * hands the token to the browser in the URL fragment (which is never sent to
- * the server); this helper immediately moves it into sessionStorage so normal
- * same-origin API calls can authenticate for the lifetime of this tab.
+ * the server). It stays in memory only long enough to exchange for a scoped,
+ * HttpOnly browser-session cookie. It is never written to localStorage,
+ * sessionStorage, IndexedDB, or a JavaScript-readable cookie.
  */
 export function captureDaemonTokenFromLocation(): void {
   if (typeof window === 'undefined') return;
@@ -15,7 +17,7 @@ export function captureDaemonTokenFromLocation(): void {
     const token = params.get('daemonToken');
     if (!token) return;
 
-    window.sessionStorage.setItem(DAEMON_TOKEN_STORAGE_KEY, token);
+    pendingDaemonCapability = token;
     params.delete('daemonToken');
     const remainingHash = params.toString();
     window.history.replaceState(
@@ -24,36 +26,40 @@ export function captureDaemonTokenFromLocation(): void {
       `${window.location.pathname}${window.location.search}${remainingHash ? `#${remainingHash}` : ''}`,
     );
   } catch {
-    // Storage can be disabled in hardened browser profiles. The app remains
-    // usable for unprotected standalone-server routes in that case.
+    // A malformed fragment should not stop the read-only reviewer from
+    // rendering. Protected daemon controls will show their recovery state.
   }
 }
 
-/** Save a loopback daemon token after an explicit local-user recovery action. */
+/** Accept a local recovery capability only in memory, pending cookie exchange. */
 export function saveDaemonToken(token: string): boolean {
   const normalized = token.trim();
   if (!normalized || typeof window === 'undefined') return false;
-  try {
-    window.sessionStorage.setItem(DAEMON_TOKEN_STORAGE_KEY, normalized);
-    return true;
-  } catch {
-    return false;
-  }
+  pendingDaemonCapability = normalized;
+  browserSessionExchange = undefined;
+  return true;
 }
 
-export function daemonAuthHeaders(headers?: HeadersInit): Headers {
-  const merged = new Headers(headers);
-  if (typeof window === 'undefined') return merged;
+async function exchangeBrowserSession(): Promise<void> {
+  if (!pendingDaemonCapability || typeof window === 'undefined') return;
+  const capability = pendingDaemonCapability;
+  const response = await fetch('/api/browser/session', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${capability}` },
+    credentials: 'same-origin',
+  });
+  if (!response.ok) throw new Error('Could not create a local browser session. Open Queue Home again with localreview-open.');
+  // Clear it only after the exchange succeeded. A failed exchange can be
+  // retried without putting the capability into persistent web storage.
+  if (pendingDaemonCapability === capability) pendingDaemonCapability = undefined;
+}
 
-  try {
-    const token = window.sessionStorage.getItem(DAEMON_TOKEN_STORAGE_KEY);
-    if (token) merged.set('Authorization', `Bearer ${token}`);
-  } catch {
-    // See captureDaemonTokenFromLocation.
-  }
-  return merged;
+async function ensureBrowserSession(): Promise<void> {
+  if (!pendingDaemonCapability) return;
+  if (!browserSessionExchange) browserSessionExchange = exchangeBrowserSession().finally(() => { browserSessionExchange = undefined; });
+  await browserSessionExchange;
 }
 
 export function daemonFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
-  return fetch(input, { ...init, headers: daemonAuthHeaders(init.headers) });
+  return ensureBrowserSession().then(() => fetch(input, { ...init, credentials: 'same-origin' }));
 }
