@@ -1,2 +1,15 @@
-load("@rules_go//go:def.bzl", "go_library")
-go_library(name="agent",srcs=["agent.go"],importpath="github.com/uhvesta/cmux-localreview/internal/agent",visibility=["//visibility:public"])
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "agent",
+    srcs = ["agent.go"],
+    importpath = "github.com/uhvesta/cmux-localreview/internal/agent",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "agent_test",
+    srcs = ["agent_test.go"],
+    embed = [":agent"],
+    deps = ["//internal/store"],
+)

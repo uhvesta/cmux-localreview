@@ -57,6 +57,31 @@ func digest(path string) (string, error) {
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:]), nil
 }
+
+// ReadVerified reads a retained manifest and verifies every bundle recorded
+// alongside it.  Exporters use this before copying a snapshot so a portable
+// package cannot silently preserve corrupt or substituted review state.
+func ReadVerified(manifestPath string) (Manifest, error) {
+	contents, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return Manifest{}, err
+	}
+	var manifest Manifest
+	if err = json.Unmarshal(contents, &manifest); err != nil || manifest.Version != 1 {
+		return Manifest{}, errors.New("invalid snapshot manifest")
+	}
+	parent := filepath.Dir(manifestPath)
+	for _, repo := range manifest.Repos {
+		if filepath.Base(repo.Bundle) != repo.Bundle || repo.Bundle == "." || repo.Bundle == "" {
+			return Manifest{}, fmt.Errorf("invalid snapshot bundle name: %q", repo.Bundle)
+		}
+		sum, err := digest(filepath.Join(parent, repo.Bundle))
+		if err != nil || sum != repo.BundleSHA256 {
+			return Manifest{}, fmt.Errorf("snapshot bundle hash mismatch: %s", repo.Bundle)
+		}
+	}
+	return manifest, nil
+}
 func Capture(workspace, artifacts, base string) (Manifest, string, error) {
 	workspace, err := filepath.Abs(workspace)
 	if err != nil {
@@ -178,13 +203,9 @@ func first(v, f string) string {
 // Materialize verifies retained bundle digests and reconstructs every
 // workspace-relative repository into an empty review destination.
 func Materialize(manifestPath, destination string) (Manifest, error) {
-	contents, err := os.ReadFile(manifestPath)
+	manifest, err := ReadVerified(manifestPath)
 	if err != nil {
 		return Manifest{}, err
-	}
-	var manifest Manifest
-	if err = json.Unmarshal(contents, &manifest); err != nil || manifest.Version != 1 {
-		return Manifest{}, errors.New("invalid snapshot manifest")
 	}
 	if err = os.MkdirAll(destination, 0700); err != nil {
 		return Manifest{}, err
@@ -192,25 +213,21 @@ func Materialize(manifestPath, destination string) (Manifest, error) {
 	parent := filepath.Dir(manifestPath)
 	for _, repo := range manifest.Repos {
 		bundle := filepath.Join(parent, repo.Bundle)
-		sum, e := digest(bundle)
-		if e != nil || sum != repo.BundleSHA256 {
-			return Manifest{}, fmt.Errorf("snapshot bundle hash mismatch: %s", repo.Bundle)
-		}
 		target := destination
 		if repo.WorkspaceRelativePath != "." {
 			target = filepath.Join(destination, repo.WorkspaceRelativePath)
 		}
-		if e = os.MkdirAll(target, 0700); e != nil {
-			return Manifest{}, e
+		if err = os.MkdirAll(target, 0700); err != nil {
+			return Manifest{}, err
 		}
-		if _, e = run(target, nil, "init"); e != nil {
-			return Manifest{}, e
+		if _, err = run(target, nil, "init"); err != nil {
+			return Manifest{}, err
 		}
-		if _, e = run(target, nil, "fetch", bundle, repo.SnapshotSHA); e != nil {
-			return Manifest{}, e
+		if _, err = run(target, nil, "fetch", bundle, repo.SnapshotSHA); err != nil {
+			return Manifest{}, err
 		}
-		if _, e = run(target, nil, "checkout", "-B", "localreview/review-"+manifest.ID[:8], repo.SnapshotSHA); e != nil {
-			return Manifest{}, e
+		if _, err = run(target, nil, "checkout", "-B", "localreview/review-"+manifest.ID[:8], repo.SnapshotSHA); err != nil {
+			return Manifest{}, err
 		}
 	}
 	return manifest, nil

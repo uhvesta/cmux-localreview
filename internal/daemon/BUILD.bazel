@@ -9,6 +9,7 @@ go_library(
         "btw.go",
         "comment_imports.go",
         "daemon.go",
+		"export.go",
         "federation_api.go",
         "queue_watcher.go",
 		"queue_delivery.go",
@@ -37,16 +38,21 @@ go_library(
 go_test(
     name = "daemon_test",
     srcs = [
+		"agent_test.go",
         "ask_runtime_test.go",
         "ask_test.go",
         "btw_test.go",
-        "daemon_test.go",
+		"daemon_test.go",
+		"export_test.go",
         "federation_api_test.go",
 		"queue_delivery_test.go",
     ],
     embed = [":daemon"],
     deps = [
+		"//internal/agent",
         "//internal/askruntime",
-        "//internal/copilot",
+		"//internal/copilot",
+		"//internal/queue",
+		"//internal/snapshot",
     ],
 )

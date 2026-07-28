@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -49,6 +50,10 @@ type Options struct {
 	// AskRuntimeFactory builds the official SDK runtime lazily on the first
 	// explicit prompt. It owns the dedicated Copilot credential boundary.
 	AskRuntimeFactory *AskRuntimeFactory
+	// CmuxSocketPath is optional and is primarily useful for a controlled
+	// local cmux installation or deterministic integration tests.  An empty
+	// value follows cmux's standard discovery-file/fallback convention.
+	CmuxSocketPath string
 }
 
 type discovery struct {
@@ -84,6 +89,7 @@ type Daemon struct {
 	askWatchers     map[string]map[chan askruntime.Delta]struct{}
 	queueDeliveryMu sync.Mutex
 	queueDeliveries map[string]struct{}
+	cmuxSocketPath  string
 }
 
 func browserOpener(rawURL string) error {
@@ -1100,6 +1106,34 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(prompt))
 		return
 	}
+	if path == "/export" && r.Method == http.MethodPost {
+		d.mu.Lock()
+		review := d.review
+		d.mu.Unlock()
+		if review == nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "No workspace is open"})
+			return
+		}
+		var input struct {
+			Destination string `json:"destination"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&input); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid export input"})
+			return
+		}
+		sessionID := sessionForExport(review, r.URL.Query().Get("sessionId"))
+		content, err := d.exportFormalFeedback(sessionID, input.Destination)
+		if err != nil {
+			status := http.StatusBadRequest
+			if input.Destination == "cmux" {
+				status = http.StatusBadGateway
+			}
+			writeJSON(w, status, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"success": true, "content": content})
+		return
+	}
 	if path == "/sessions/new" && r.Method == http.MethodPost {
 		d.mu.Lock()
 		review := d.review
@@ -1604,6 +1638,53 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 	if d.handleFederation(w, r, path) {
 		return
 	}
+	if strings.HasPrefix(path, "/agents/") {
+		parts := strings.Split(strings.Trim(path, "/"), "/")
+		if len(parts) == 3 && parts[0] == "agents" && r.Method == http.MethodPost {
+			id, operation := parts[1], parts[2]
+			switch operation {
+			case "heartbeat":
+				var input agent.Record
+				if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+					writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid agent heartbeat"})
+					return
+				}
+				item, err := agent.Heartbeat(d.db, id, input)
+				if errors.Is(err, sql.ErrNoRows) {
+					writeJSON(w, http.StatusNotFound, map[string]string{"error": "Unknown agent"})
+					return
+				}
+				if err != nil {
+					writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+					return
+				}
+				writeJSON(w, http.StatusOK, map[string]any{"agent": item})
+				return
+			case "reconnect":
+				// Consume a small JSON body for API compatibility (including the
+				// legacy dryRun flag). Native reconnect is a safe rendezvous: it
+				// never attempts terminal keystroke injection.
+				var ignored struct {
+					DryRun bool `json:"dryRun"`
+				}
+				if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&ignored); err != nil && !errors.Is(err, io.EOF) {
+					writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid reconnect request"})
+					return
+				}
+				item, err := agent.Reconnect(d.db, id)
+				if errors.Is(err, sql.ErrNoRows) {
+					writeJSON(w, http.StatusNotFound, map[string]string{"error": "Unknown agent"})
+					return
+				}
+				if err != nil {
+					writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+					return
+				}
+				writeJSON(w, http.StatusOK, map[string]any{"agent": item})
+				return
+			}
+		}
+	}
 	if path == "/agents" {
 		switch r.Method {
 		case http.MethodGet:
@@ -1782,6 +1863,31 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusCreated, map[string]any{"feedback": feedback})
 		return
 	}
+	if len(parts) == 3 && parts[0] == "queue" && r.Method == http.MethodPost && parts[2] == "export" {
+		item, err := queueStore.Get(d.db, parts[1])
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if item == nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "Unknown queue item"})
+			return
+		}
+		var input struct {
+			Destination string `json:"destination"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&input); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid review package export input"})
+			return
+		}
+		packagePath, err := d.exportQueueReviewPackage(item, input.Destination)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]string{"packagePath": packagePath})
+		return
+	}
 	if len(parts) == 3 && parts[0] == "queue" && r.Method == http.MethodPost && parts[2] == "deliver-feedback" {
 		d.handleQueueFeedbackDelivery(w, r, parts[1])
 		return
@@ -1953,7 +2059,7 @@ func Start(ctx context.Context, options Options) (*Daemon, error) {
 		}
 		github = githubauth.New(secrets, githubauth.NewFileConfigStore(filepath.Join(dir, "github-apps.json")), http.DefaultClient, browserOpener)
 	}
-	d := &Daemon{listener: listener, dataDir: dir, token: token, sessions: make(map[string]time.Time), watches: make(map[chan string]struct{}), queueWatches: make(map[string]context.CancelFunc), authFlows: make(map[githubauth.Capability]*githubauth.LoopbackFlow), askRuntime: options.AskRuntime, askFactory: options.AskRuntimeFactory, askWatchers: make(map[string]map[chan askruntime.Delta]struct{}), queueDeliveries: make(map[string]struct{}), db: db, github: github, ws: wshub.New(wshub.Options{Path: "/ws"})}
+	d := &Daemon{listener: listener, dataDir: dir, token: token, sessions: make(map[string]time.Time), watches: make(map[chan string]struct{}), queueWatches: make(map[string]context.CancelFunc), authFlows: make(map[githubauth.Capability]*githubauth.LoopbackFlow), askRuntime: options.AskRuntime, askFactory: options.AskRuntimeFactory, askWatchers: make(map[string]map[chan askruntime.Delta]struct{}), queueDeliveries: make(map[string]struct{}), cmuxSocketPath: options.CmuxSocketPath, db: db, github: github, ws: wshub.New(wshub.Options{Path: "/ws"})}
 	if err := d.restoreActiveWorkspace(); err != nil {
 		// Persisted active workspace state is best-effort at startup. An absent
 		// worktree must not prevent Queue Home from recovering it or opening a

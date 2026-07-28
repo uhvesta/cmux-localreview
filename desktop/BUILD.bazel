@@ -15,18 +15,17 @@ genrule(
 set -euo pipefail
 command -v npm >/dev/null || { echo 'npm is required to package Electron' >&2; exit 1; }
 test -x desktop/node_modules/.bin/electron-builder || { echo 'run npm --prefix desktop install before bazel build //desktop:app' >&2; exit 1; }
-stage=\"$(@D)/desktop-stage\"
+stage=\"$$PWD/$(@D)/desktop-stage\"
 rm -rf \"$$stage\"
 mkdir -p \"$$stage\"
 cp $(location main.mjs) \"$$stage/main.mjs\"
 cp $(location package.json) \"$$stage/package.json\"
 cp $(location //cmd/localreviewd:localreviewd) \"$$stage/localreviewd\"
 chmod 0755 \"$$stage/localreviewd\"
-cd desktop
-./node_modules/.bin/electron-builder --project \"$$stage\" --dir --config.extraResources.from=\"$$stage/localreviewd\" --config.extraResources.to=localreviewd
+./desktop/node_modules/.bin/electron-builder --project \"$$stage\" --dir --config.extraResources.from=\"$$stage/localreviewd\" --config.extraResources.to=localreviewd
 artifact=$$(find \"$$stage/dist\" -maxdepth 1 -type d -name '*unpacked' -print -quit)
 test -n \"$$artifact\"
-tar -C \"$$(dirname \"$$artifact\")\" -czf \"$@\" \"$$(basename \"$$artifact\")\"
+tar -C \"$$(dirname \"$$artifact\")\" -czf \"$$PWD/$@\" \"$$(basename \"$$artifact\")\"
 """,
     visibility = ["//visibility:public"],
 )

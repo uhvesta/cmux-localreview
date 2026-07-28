@@ -1,5 +1,8 @@
 {
   "name": "cmux-localreview-desktop",
+  "version": "0.1.0",
+  "description": "Local-first review queue for cmux and Copilot",
+  "author": "cmux-localreview contributors",
   "private": true,
   "type": "module",
   "main": "main.mjs",
@@ -10,8 +13,8 @@
     "package:dir": "electron-builder --dir"
   },
   "devDependencies": {
-    "electron": "^40.0.0",
-    "electron-builder": "^26.0.0"
+    "electron": "40.10.6",
+    "electron-builder": "26.15.3"
   },
   "build": {
     "appId": "com.uhvesta.cmuxlocalreview",
