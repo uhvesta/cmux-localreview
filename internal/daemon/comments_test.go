@@ -33,7 +33,8 @@ func TestCommentSnapshotsAreDurableConcurrentAndKeepAskSeparate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	d, err := Start(context.Background(), Options{DataDir: t.TempDir(), UIDir: filepath.Join(t.TempDir(), "missing-ui")})
+	data := t.TempDir()
+	d, err := Start(context.Background(), Options{DataDir: data, UIDir: filepath.Join(data, "missing-ui")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,6 +79,24 @@ func TestCommentSnapshotsAreDurableConcurrentAndKeepAskSeparate(t *testing.T) {
 	if status != http.StatusOK || !strings.Contains(string(body), `"version":1`) || !strings.Contains(string(body), `"channel":"ask"`) {
 		t.Fatalf("ask comment status=%d body=%s", status, body)
 	}
+	status, body = call(http.MethodGet, commentsPath, "")
+	if status != http.StatusOK || !strings.Contains(string(body), `"orphaned":false`) {
+		t.Fatalf("fresh anchor was unexpectedly orphaned: status=%d body=%s", status, body)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "review.go"), []byte("package review\nconst rewritten = 3\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	status, body = call(http.MethodGet, commentsPath, "")
+	if status != http.StatusOK || !strings.Contains(string(body), `"orphaned":true`) {
+		t.Fatalf("changed anchor was not marked orphaned: status=%d body=%s", status, body)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "review.go"), []byte("package review\nconst changed = 2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	status, body = call(http.MethodGet, commentsPath, "")
+	if status != http.StatusOK || !strings.Contains(string(body), `"orphaned":false`) {
+		t.Fatalf("restored anchor did not reattach: status=%d body=%s", status, body)
+	}
 	status, body = call(http.MethodGet, "/api/export/prompt", "")
 	if status != http.StatusOK || strings.Contains(string(body), "why is this safe") {
 		t.Fatalf("/ask leaked into formal export: status=%d body=%s", status, body)
@@ -104,5 +123,21 @@ func TestCommentSnapshotsAreDurableConcurrentAndKeepAskSeparate(t *testing.T) {
 	status, body = call(http.MethodPost, commentsPath, ask)
 	if status != http.StatusConflict || strings.Contains(string(body), `"ask-inline"`) {
 		t.Fatalf("stale replay resurrected resolved ask thread: status=%d body=%s", status, body)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "review.go"), []byte("package review\nconst changed_after_restart = 4\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	d, err = Start(context.Background(), Options{DataDir: data, UIDir: filepath.Join(data, "missing-ui")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	base = fmt.Sprintf("http://127.0.0.1:%d", d.Port())
+	status, body = call(http.MethodGet, commentsPath, "")
+	if status != http.StatusOK || !strings.Contains(string(body), `"ask-import"`) || !strings.Contains(string(body), `"orphaned":true`) {
+		t.Fatalf("restart did not retain/recompute anchor state: status=%d body=%s", status, body)
 	}
 }

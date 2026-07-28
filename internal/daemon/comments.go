@@ -70,10 +70,78 @@ func commentChannel(requested string, messages []durableCommentMessage) string {
 	return "formal"
 }
 
+// refreshCommentOrphans mirrors the frozen comments-store behavior. A comment
+// remains attached only while the exact saved code snapshot still occupies its
+// original line range. We intentionally do not search elsewhere in the file:
+// silently moving a review thread would make an old observation look current.
+// Old-side anchors are read from HEAD, matching the diff's base-side contract;
+// new-side anchors come from the working tree.
+func (d *Daemon) refreshCommentOrphans(review workspaceReview, repo reviewRepo) error {
+	rows, err := d.db.Query(`SELECT thread_id,file_path,side,start_line,end_line,anchor_content
+		FROM comments WHERE session_id=? AND repo_id=?`, review.SessionID, repo.DBID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	type anchor struct {
+		threadID string
+		filePath string
+		side     string
+		start    int
+		end      int
+		content  sql.NullString
+	}
+	items := []anchor{}
+	for rows.Next() {
+		var item anchor
+		if err := rows.Scan(&item.threadID, &item.filePath, &item.side, &item.start, &item.end, &item.content); err != nil {
+			return err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, item := range items {
+		orphaned := false
+		if item.content.Valid {
+			ref := "."
+			if item.side == "old" {
+				ref = "HEAD"
+			}
+			contents, readErr := readRepoFile(repo, item.filePath, ref)
+			if readErr != nil {
+				orphaned = true
+			} else {
+				lines := strings.Split(strings.TrimSuffix(string(contents), "\n"), "\n")
+				if item.start < 1 || item.end < item.start || item.end > len(lines) {
+					orphaned = true
+				} else {
+					orphaned = strings.Join(lines[item.start-1:item.end], "\n") != item.content.String
+				}
+			}
+		}
+		if _, err := d.db.Exec(`UPDATE comments SET orphaned=? WHERE session_id=? AND repo_id=? AND thread_id=?`, boolToInt(orphaned), review.SessionID, repo.DBID, item.threadID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func boolToInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
 // commentThreads is deliberately the one projection used by both GET and a
 // stale POST response.  The channel is persisted rather than inferred at
 // export time: /ask content can therefore never leak into formal feedback.
 func (d *Daemon) commentThreads(review workspaceReview, repo reviewRepo) ([]map[string]any, error) {
+	if err := d.refreshCommentOrphans(review, repo); err != nil {
+		return nil, err
+	}
 	rows, err := d.db.Query(`SELECT thread_id,file_path,side,start_line,end_line,messages_json,created_at,updated_at,anchor_content,channel,orphaned
 		FROM comments WHERE session_id=? AND repo_id=? ORDER BY created_at,id`, review.SessionID, repo.DBID)
 	if err != nil {
