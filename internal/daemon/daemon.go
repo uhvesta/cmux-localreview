@@ -585,6 +585,78 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	if path == "/sessions" && r.Method == http.MethodGet {
+		d.mu.Lock()
+		review := d.review
+		d.mu.Unlock()
+		if review == nil {
+			writeJSON(w, http.StatusOK, map[string]any{"sessions": []any{}, "activeSessionId": nil})
+			return
+		}
+		rows, err := d.db.Query(`SELECT id,label,started_at,frozen_at FROM sessions ORDER BY started_at DESC`)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		defer rows.Close()
+		sessions := []map[string]any{}
+		for rows.Next() {
+			var id int64
+			var label sql.NullString
+			var started int64
+			var frozen sql.NullInt64
+			if err := rows.Scan(&id, &label, &started, &frozen); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			sessions = append(sessions, map[string]any{"id": id, "label": nullableString(label), "startedAt": started, "frozenAt": func() any {
+				if frozen.Valid {
+					return frozen.Int64
+				}
+				return nil
+			}()})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions, "activeSessionId": review.SessionID})
+		return
+	}
+	if path == "/review-history/comments" && r.Method == http.MethodGet {
+		d.mu.Lock()
+		review := d.review
+		d.mu.Unlock()
+		if review == nil {
+			writeJSON(w, http.StatusOK, map[string]any{"comments": []any{}})
+			return
+		}
+		rows, err := d.db.Query(`SELECT s.id,s.label,r.workspace_relative_path,c.file_path,c.side,c.start_line,c.end_line,c.messages_json,c.orphaned FROM comments c JOIN sessions s ON s.id=c.session_id JOIN repos r ON r.id=c.repo_id WHERE c.session_id<>? ORDER BY s.started_at DESC,c.created_at ASC`, review.SessionID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		defer rows.Close()
+		comments := []map[string]any{}
+		for rows.Next() {
+			var session int64
+			var label, file, side, messages sql.NullString
+			var root string
+			var start, end int64
+			var orphan int
+			if err := rows.Scan(&session, &label, &root, &file, &side, &start, &end, &messages, &orphan); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			var line any = start
+			if start != end {
+				line = map[string]int64{"start": start, "end": end}
+			}
+			var parsed any = []any{}
+			if messages.Valid {
+				_ = json.Unmarshal([]byte(messages.String), &parsed)
+			}
+			comments = append(comments, map[string]any{"reviewSessionId": session, "reviewLabel": nullableString(label), "workspaceRelativePath": root, "filePath": file.String, "position": map[string]any{"side": side.String, "line": line}, "messages": parsed, "orphaned": orphan != 0})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"comments": comments})
+		return
+	}
 	// The React reviewer scopes all repository API calls below this prefix.
 	// Start with `/api/diff`, whose response is the primary rendering contract;
 	// sibling routes (comments/blobs/revisions) are ported independently.

@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "federation",
+    srcs = ["federation.go"],
+    importpath = "github.com/uhvesta/cmux-localreview/internal/federation",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "federation_test",
+    srcs = ["federation_test.go"],
+    embed = [":federation"],
+    deps = ["//internal/store"],
+)
