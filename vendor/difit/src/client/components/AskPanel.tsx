@@ -4,14 +4,24 @@ import remarkGfm from 'remark-gfm';
 
 import { daemonFetch } from '../services/daemonAuth';
 
-interface AskModel { id: string; name?: string; }
-interface AskMessage { id: string; role: 'user' | 'assistant' | 'system'; body: string; pending: boolean; createdAt: number; }
-interface AskConversation { id: string; model?: string | null; updatedAt?: number; }
+type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
+type ContextTier = 'default' | 'long_context';
+interface AskModel {
+  id: string;
+  name?: string;
+  capabilities?: { supports?: { reasoningEffort?: boolean }; limits?: { max_context_window_tokens?: number } };
+  supportedReasoningEfforts?: ReasoningEffort[];
+  defaultReasoningEffort?: ReasoningEffort;
+}
+interface AskMessage { id: string; role: 'user' | 'assistant' | 'system'; body: string; pending: boolean; createdAt: number; location?: { filePath?: string; startLine?: number } | null; }
+interface AskConversation { id: string; model?: string | null; reasoningEffort?: ReasoningEffort | null; contextTier?: ContextTier | null; context?: { filePath?: string } | null; updatedAt?: number; }
 interface QuestionSet { id: string; name: string; questions: { body: string }[]; }
 
 interface AskPanelProps {
   collapsed: boolean;
   onToggleCollapsed: () => void;
+  requestedConversationId?: string;
+  onRequestedConversationOpened?: () => void;
 }
 
 const ASK_DRAFT_STORAGE_KEY = 'cmux-localreview.ask-draft-v1';
@@ -25,7 +35,7 @@ function storedDraft(): string {
 }
 
 /** A review-scoped, persisted Copilot conversation. It never shares /btw messages. */
-export function AskPanel({ collapsed, onToggleCollapsed }: AskPanelProps) {
+export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId, onRequestedConversationOpened }: AskPanelProps) {
   const [models, setModels] = useState<AskModel[]>([]);
   const [conversations, setConversations] = useState<AskConversation[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -35,20 +45,31 @@ export function AskPanel({ collapsed, onToggleCollapsed }: AskPanelProps) {
   const [questionSetName, setQuestionSetName] = useState('');
   const [questionSetDraft, setQuestionSetDraft] = useState('');
   const [model, setModel] = useState('');
+  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort | ''>('');
+  const [contextTier, setContextTier] = useState<ContextTier>('default');
   const [prompt, setPrompt] = useState(storedDraft);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modelStatus, setModelStatus] = useState<'loading' | 'available' | 'unavailable'>('loading');
   const [editingQuestionSet, setEditingQuestionSet] = useState(false);
   const activeResponseRef = useRef<AbortController | null>(null);
+  // Several entry points can restore a transcript at once (panel refresh,
+  // finished inline turn, and “Open full /ask chat”). Only the newest result
+  // may update the panel; otherwise an earlier response can hide a just-made
+  // inline question until the reviewer reloads the page.
+  const transcriptLoadSequence = useRef(0);
 
   const loadConversation = useCallback(async (id: string) => {
+    const sequence = ++transcriptLoadSequence.current;
     const response = await daemonFetch(`/api/ask/conversations/${encodeURIComponent(id)}`);
     if (!response.ok) throw new Error('Failed to load this /ask conversation.');
     const data = (await response.json()) as { conversation?: AskConversation; messages?: AskMessage[] };
+    if (sequence !== transcriptLoadSequence.current) return;
     setConversationId(id);
     setMessages(Array.isArray(data.messages) ? data.messages : []);
     if (data.conversation?.model) setModel(data.conversation.model);
+    setReasoningEffort(data.conversation?.reasoningEffort ?? '');
+    setContextTier(data.conversation?.contextTier ?? 'default');
   }, []);
 
   const refresh = useCallback(async () => {
@@ -75,11 +96,27 @@ export function AskPanel({ collapsed, onToggleCollapsed }: AskPanelProps) {
       const nextConversations = Array.isArray(conversationData.conversations) ? conversationData.conversations : [];
       setConversations(nextConversations);
       const selected = conversationId && nextConversations.some((item) => item.id === conversationId)
-        ? conversationId : nextConversations[0]?.id;
+        ? conversationId : nextConversations.find((item) => !item.context?.filePath)?.id ?? nextConversations[0]?.id;
       if (selected) await loadConversation(selected);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to load /ask.');
     }
+  }, [conversationId, loadConversation]);
+
+  useEffect(() => {
+    if (!requestedConversationId || collapsed) return;
+    void loadConversation(requestedConversationId)
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Could not open the inline /ask conversation.'))
+      .finally(() => onRequestedConversationOpened?.());
+  }, [collapsed, loadConversation, onRequestedConversationOpened, requestedConversationId]);
+
+  useEffect(() => {
+    const refreshTranscript = (event: Event) => {
+      const id = (event as CustomEvent<{ conversationId?: string | null }>).detail?.conversationId;
+      if (id && id === conversationId) void loadConversation(id).catch(() => undefined);
+    };
+    window.addEventListener('cmux-localreview:ask-updated', refreshTranscript);
+    return () => window.removeEventListener('cmux-localreview:ask-updated', refreshTranscript);
   }, [conversationId, loadConversation]);
 
   const refreshQuestionSets = useCallback(async () => {
@@ -105,7 +142,7 @@ export function AskPanel({ collapsed, onToggleCollapsed }: AskPanelProps) {
 
   const createConversation = useCallback(async (): Promise<string> => {
     const response = await daemonFetch('/api/ask/conversations', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: model || undefined }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: model || undefined, reasoningEffort: reasoningEffort || undefined, contextTier }),
     });
     if (!response.ok) throw new Error('Could not start a /ask conversation.');
     const data = (await response.json()) as { conversation?: AskConversation };
@@ -114,18 +151,23 @@ export function AskPanel({ collapsed, onToggleCollapsed }: AskPanelProps) {
     setConversationId(data.conversation.id);
     setMessages([]);
     return data.conversation.id;
-  }, [model]);
+  }, [contextTier, model, reasoningEffort]);
 
-  const updateModel = useCallback(async (nextModel: string) => {
-    setModel(nextModel);
+  const updateSettings = useCallback(async (next: { model?: string; reasoningEffort?: ReasoningEffort | ''; contextTier?: ContextTier }) => {
+    const nextModel = next.model ?? model;
+    const nextEffort = next.reasoningEffort ?? reasoningEffort;
+    const nextTier = next.contextTier ?? contextTier;
+    setModel(nextModel); setReasoningEffort(nextEffort); setContextTier(nextTier);
     if (!conversationId) return;
     try {
-      const response = await daemonFetch(`/api/ask/conversations/${encodeURIComponent(conversationId)}/model`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: nextModel }),
+      const response = await daemonFetch(`/api/ask/conversations/${encodeURIComponent(conversationId)}/settings`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: nextModel, reasoningEffort: nextEffort || undefined, contextTier: nextTier }),
       });
-      if (!response.ok) throw new Error('Unable to set this model.');
-    } catch (err) { setError(err instanceof Error ? err.message : 'Unable to set this model.'); }
-  }, [conversationId]);
+      if (!response.ok) throw new Error('Unable to update Copilot settings.');
+      const data = (await response.json()) as { conversation?: AskConversation };
+      if (data.conversation) setConversations((current) => current.map((item) => item.id === data.conversation!.id ? data.conversation! : item));
+    } catch (err) { setError(err instanceof Error ? err.message : 'Unable to update Copilot settings.'); }
+  }, [contextTier, conversationId, model, reasoningEffort]);
 
   const send = useCallback(async () => {
     const text = prompt.trim();
@@ -229,18 +271,34 @@ export function AskPanel({ collapsed, onToggleCollapsed }: AskPanelProps) {
     finally { setSending(false); }
   }, [conversationId, createConversation, loadConversation, questionSetId]);
 
+  const selectedModel = models.find((candidate) => candidate.id === model);
+  const supportedEfforts = selectedModel?.supportedReasoningEfforts ?? [];
+  const maxContext = selectedModel?.capabilities?.limits?.max_context_window_tokens;
+  const chooseModel = (nextModel: string) => {
+    const selected = models.find((candidate) => candidate.id === nextModel);
+    const nextEffort = selected?.supportedReasoningEfforts?.includes(reasoningEffort as ReasoningEffort)
+      ? reasoningEffort
+      : selected?.defaultReasoningEffort ?? '';
+    void updateSettings({ model: nextModel, reasoningEffort: nextEffort });
+  };
+
   if (collapsed) return <button onClick={onToggleCollapsed} title="Open /ask panel" style={{ ...panelButton, position: 'fixed', right: 86, bottom: 12, zIndex: 60, borderRadius: 20 }}>/ask</button>;
 
   return <section style={{ position: 'fixed', right: 0, top: 0, bottom: 0, width: 390, zIndex: 56, display: 'flex', flexDirection: 'column', background: 'var(--bg-primary, #161b22)', borderLeft: '1px solid rgba(127,127,127,0.35)' }} aria-label="Copilot ask">
     <div style={{ display: 'flex', gap: 7, alignItems: 'center', padding: '9px 11px', borderBottom: '1px solid rgba(127,127,127,0.3)' }}>
       <strong style={{ fontSize: 13 }}>/ask</strong><span title="Fresh Copilot SDK chat, separate from ACP review feedback" style={{ fontSize: 10, opacity: 0.6 }}>fresh SDK chat</span>
-      <select value={model} onChange={(event) => void updateModel(event.target.value)} style={{ marginLeft: 'auto', maxWidth: 210, fontSize: 11, background: 'transparent', color: 'inherit' }}>
+      <select aria-label="Copilot model" value={model} onChange={(event) => chooseModel(event.target.value)} style={{ marginLeft: 'auto', maxWidth: 210, fontSize: 11, background: 'transparent', color: 'inherit' }}>
         {models.length === 0 && <option value="">{modelStatus === 'loading' ? 'Checking Copilot…' : 'Copilot unavailable'}</option>}
         {models.map((item) => <option key={item.id} value={item.id}>{item.name ?? item.id}</option>)}
       </select>
       {questionSets.length > 0 && <select aria-label="Question set" value={questionSetId} onChange={(event) => selectQuestionSet(event.target.value)} style={{ maxWidth: 120, fontSize: 11, background: 'transparent', color: 'inherit' }}>{questionSets.map((set) => <option key={set.id} value={set.id}>{set.name}</option>)}</select>}
       <button onClick={() => void createConversation()} style={panelButton}>New</button>
       <button onClick={onToggleCollapsed} style={panelButton}>✕</button>
+    </div>
+    <div aria-label="Copilot model settings" style={{ padding: '6px 10px', display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', borderBottom: '1px solid rgba(127,127,127,0.22)', fontSize: 10 }}>
+      {supportedEfforts.length > 0 ? <label>Thinking <select aria-label="Thinking level" value={reasoningEffort || selectedModel?.defaultReasoningEffort || supportedEfforts[0]} onChange={(event) => void updateSettings({ reasoningEffort: event.target.value as ReasoningEffort })} style={{ marginLeft: 3, fontSize: 10, background: 'transparent', color: 'inherit' }}>{supportedEfforts.map((effort) => <option key={effort} value={effort}>{effort}</option>)}</select></label> : <span title="This model does not expose a reasoning-effort control">Thinking: model default</span>}
+      <label>Context <select aria-label="Context window tier" value={contextTier} onChange={(event) => void updateSettings({ contextTier: event.target.value as ContextTier })} style={{ marginLeft: 3, fontSize: 10, background: 'transparent', color: 'inherit' }}><option value="default">Default</option><option value="long_context">Long (if supported)</option></select></label>
+      <span title="The maximum context window is reported by the installed Copilot runtime">{maxContext && maxContext > 0 ? `${Math.round(maxContext / 1000)}k max context` : 'Context limit reported by runtime'}</span>
     </div>
     {conversations.length > 1 && <select aria-label="Ask conversation" value={conversationId ?? ''} onChange={(event) => void loadConversation(event.target.value)} style={{ margin: '7px 10px 0', fontSize: 11, background: 'transparent', color: 'inherit' }}>{conversations.map((item) => <option key={item.id} value={item.id}>{item.id.slice(0, 8)} {item.model ? `· ${item.model}` : ''}</option>)}</select>}
     {error && <div role="alert" style={{ padding: '7px 10px', color: '#e5534b', fontSize: 11 }}>{error} <button onClick={() => void refresh()} style={{ ...panelButton, marginLeft: 5 }}>Retry</button></div>}
@@ -251,8 +309,8 @@ export function AskPanel({ collapsed, onToggleCollapsed }: AskPanelProps) {
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 5 }}><button onClick={() => void (questionSetId ? updateQuestionSet() : saveQuestionSet())} style={panelButton}>Save set</button>{questionSetId && <button onClick={() => void deleteSelectedQuestionSet()} style={panelButton}>Delete</button>}<button onClick={() => setEditingQuestionSet(false)} style={panelButton}>Done</button></div>
     </div>}
     <div style={{ flex: 1, overflowY: 'auto', padding: 11, display: 'flex', flexDirection: 'column', gap: 9 }}>
-      {messages.length === 0 && <div style={{ fontSize: 12, opacity: 0.65 }}>Ask about the workspace with a read-only Copilot context. This is separate from /btw.</div>}
-      {messages.map((message) => <article key={message.id} style={{ alignSelf: message.role === 'user' ? 'flex-end' : 'stretch', maxWidth: message.role === 'user' ? '88%' : undefined, border: '1px solid rgba(127,127,127,0.28)', borderRadius: 6, padding: '7px 9px', fontSize: 12, background: message.role === 'user' ? 'rgba(127,127,127,0.12)' : 'transparent' }}><div style={{ fontSize: 10, opacity: 0.58, marginBottom: 4 }}>{message.role}{message.pending ? ' · thinking…' : ''}</div><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.body || (message.pending ? '_thinking…_' : '')}</ReactMarkdown></article>)}
+      {messages.length === 0 && <div style={{ fontSize: 12, opacity: 0.65 }}>Ask about the workspace with a read-only Copilot context. Inline `/ask` questions and answers also appear here; this is separate from /btw.</div>}
+      {messages.map((message) => <article key={message.id} style={{ alignSelf: message.role === 'user' ? 'flex-end' : 'stretch', maxWidth: message.role === 'user' ? '88%' : undefined, border: '1px solid rgba(127,127,127,0.28)', borderRadius: 6, padding: '7px 9px', fontSize: 12, background: message.role === 'user' ? 'rgba(127,127,127,0.12)' : 'transparent' }}><div style={{ fontSize: 10, opacity: 0.58, marginBottom: 4 }}>{message.role === 'assistant' ? 'Copilot · shared SDK chat' : message.role}{message.location?.filePath ? ` · ${message.location.filePath}:${message.location.startLine ?? '?'}` : ''}{message.pending ? ' · thinking…' : ''}</div><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.body || (message.pending ? '_thinking…_' : '')}</ReactMarkdown></article>)}
     </div>
     <div style={{ padding: 10, borderTop: '1px solid rgba(127,127,127,0.3)' }}>
       <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') void send(); }} rows={3} placeholder="Ask about this review…" disabled={sending} style={{ width: '100%', resize: 'vertical', fontSize: 12, padding: 6, background: 'transparent', border: '1px solid rgba(127,127,127,0.4)', borderRadius: 4, color: 'inherit' }} />

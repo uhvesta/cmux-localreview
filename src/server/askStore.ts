@@ -21,6 +21,8 @@ export interface AskConversation {
   id: string;
   queueItemId: string | null;
   model: string | null;
+  reasoningEffort: "low" | "medium" | "high" | "xhigh" | null;
+  contextTier: "default" | "long_context" | null;
   copilotSessionId: string | null;
   context: AskLocation | null;
   createdAt: number;
@@ -41,6 +43,8 @@ interface AskConversationRow {
   id: string;
   queue_item_id: string | null;
   model: string | null;
+  reasoning_effort: "low" | "medium" | "high" | "xhigh" | null;
+  context_tier: "default" | "long_context" | null;
   copilot_session_id: string | null;
   context_json: string | null;
   created_at: number;
@@ -62,6 +66,8 @@ function conversationFromRow(row: AskConversationRow): AskConversation {
     id: row.id,
     queueItemId: row.queue_item_id,
     model: row.model,
+    reasoningEffort: row.reasoning_effort,
+    contextTier: row.context_tier,
     copilotSessionId: row.copilot_session_id,
     context: parseLocation(row.context_json),
     createdAt: row.created_at,
@@ -93,14 +99,14 @@ function messageFromRow(row: AskMessageRow): AskMessage {
 
 export function createAskConversation(
   db: Database,
-  input: { queueItemId?: string; model?: string; copilotSessionId?: string; context?: AskLocation },
+  input: { queueItemId?: string; model?: string; reasoningEffort?: AskConversation["reasoningEffort"]; contextTier?: AskConversation["contextTier"]; copilotSessionId?: string; context?: AskLocation },
 ): AskConversation {
   const now = Date.now();
   const id = randomUUID();
   db.query(
-    `INSERT INTO ask_conversations(id, queue_item_id, model, copilot_session_id, context_json, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(id, input.queueItemId ?? null, input.model ?? null, input.copilotSessionId ?? null, input.context ? JSON.stringify(input.context) : null, now, now);
+    `INSERT INTO ask_conversations(id, queue_item_id, model, reasoning_effort, context_tier, copilot_session_id, context_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(id, input.queueItemId ?? null, input.model ?? null, input.reasoningEffort ?? null, input.contextTier ?? null, input.copilotSessionId ?? null, input.context ? JSON.stringify(input.context) : null, now, now);
   return getAskConversation(db, id)!;
 }
 
@@ -125,15 +131,26 @@ export function listAskConversations(db: Database, queueItemId?: string): AskCon
 export function updateAskConversation(
   db: Database,
   id: string,
-  input: { model?: string; copilotSessionId?: string },
+  input: { model?: string | null; reasoningEffort?: AskConversation["reasoningEffort"]; contextTier?: AskConversation["contextTier"]; copilotSessionId?: string | null },
 ): AskConversation | undefined {
   const current = getAskConversation(db, id);
   if (!current) return undefined;
+  // `undefined` means leave the saved choice alone; explicit `null` clears a
+  // previously selected optional setting when the reviewer switches models.
+  const pick = <T>(key: keyof typeof input, fallback: T): T =>
+    Object.hasOwn(input, key) ? input[key] as T : fallback;
   db.query(
     `UPDATE ask_conversations
-       SET model = ?, copilot_session_id = ?, updated_at = ?
+       SET model = ?, reasoning_effort = ?, context_tier = ?, copilot_session_id = ?, updated_at = ?
      WHERE id = ?`,
-  ).run(input.model ?? current.model, input.copilotSessionId ?? current.copilotSessionId, Date.now(), id);
+  ).run(
+    pick("model", current.model),
+    pick("reasoningEffort", current.reasoningEffort),
+    pick("contextTier", current.contextTier),
+    pick("copilotSessionId", current.copilotSessionId),
+    Date.now(),
+    id,
+  );
   return getAskConversation(db, id);
 }
 

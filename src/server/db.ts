@@ -359,6 +359,16 @@ const MIGRATIONS: Migration[] = [
       )`);
     },
   },
+  {
+    // Persist /ask model controls with the long-lived conversation. Inline
+    // anchors remain message metadata, so every code location shares the
+    // same Copilot context without losing its precise display location.
+    version: 15,
+    up: (db) => {
+      db.run(`ALTER TABLE ask_conversations ADD COLUMN reasoning_effort TEXT`);
+      db.run(`ALTER TABLE ask_conversations ADD COLUMN context_tier TEXT`);
+    },
+  },
 ];
 
 export function runMigrations(db: Database): void {

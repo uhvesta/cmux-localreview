@@ -142,9 +142,20 @@ export function WorkspaceShell() {
   const [btwRefreshNonce, setBtwRefreshNonce] = useState(0);
   const [btwPanelCollapsed, setBtwPanelCollapsed] = useState(initialUiState.btwPanelCollapsed ?? true);
   const [askPanelCollapsed, setAskPanelCollapsed] = useState(initialUiState.askPanelCollapsed ?? true);
+  const [askConversationToOpen, setAskConversationToOpen] = useState<string | undefined>();
   const [reviewControlsCollapsed, setReviewControlsCollapsed] = useState(
     initialUiState.reviewControlsCollapsed ?? true,
   );
+
+  useEffect(() => {
+    const openAsk = (event: Event) => {
+      const conversationId = (event as CustomEvent<{ conversationId?: string | null }>).detail?.conversationId;
+      setAskConversationToOpen(conversationId ?? undefined);
+      setAskPanelCollapsed(false);
+    };
+    window.addEventListener('cmux-localreview:open-ask', openAsk);
+    return () => window.removeEventListener('cmux-localreview:open-ask', openAsk);
+  }, []);
 
   useEffect(() => {
     const value = {
@@ -533,6 +544,8 @@ export function WorkspaceShell() {
       <AskPanel
         collapsed={askPanelCollapsed}
         onToggleCollapsed={() => setAskPanelCollapsed((v) => !v)}
+        requestedConversationId={askConversationToOpen}
+        onRequestedConversationOpened={() => setAskConversationToOpen(undefined)}
       />
       {!localQuestionOnly && <ReviewControlPanel
         collapsed={reviewControlsCollapsed}

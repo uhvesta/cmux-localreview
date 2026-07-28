@@ -52,7 +52,7 @@ describe("/ask HTTP integration with an injected Copilot boundary", () => {
     expect(formatted).toEndWith("Could this throw path be simplified?");
   });
 
-  test("persists question sets and inline conversations without requiring a real Copilot login", async () => {
+  test("persists question sets and one shared inline conversation without requiring a real Copilot login", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
     const app = express();
@@ -110,16 +110,24 @@ describe("/ask HTTP integration with an injected Copilot boundary", () => {
         body: JSON.stringify({ model: "fixture-model", context: inlineContext }),
       });
       expect(createdConversation.status).toBe(201);
-      const conversation = (await createdConversation.json() as { conversation: { id: string; context: unknown }; reused: boolean }).conversation;
-      expect(conversation.context).toEqual(inlineContext);
+      const conversation = (await createdConversation.json() as { conversation: { id: string; context: unknown }; reused: boolean; shared: boolean }).conversation;
+      expect(conversation.context).toBeNull();
 
       const reusedConversation = await fetch(`${baseUrl}/api/ask/inline-conversations`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ model: "fixture-model", context: inlineContext }),
       });
-      expect((await reusedConversation.json() as { conversation: { id: string }; reused: boolean })).toMatchObject({
-        conversation: { id: conversation.id }, reused: true,
+      expect((await reusedConversation.json() as { conversation: { id: string }; reused: boolean; shared: boolean })).toMatchObject({
+        conversation: { id: conversation.id }, reused: true, shared: true,
+      });
+
+      const otherLocation = { ...inlineContext, filePath: "src/other.ts", startLine: 3, endLine: 3, selectedCode: "return input;" };
+      const otherInline = await fetch(`${baseUrl}/api/ask/inline-conversations`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ context: otherLocation }),
+      });
+      expect((await otherInline.json() as { conversation: { id: string }; reused: boolean; shared: boolean })).toMatchObject({
+        conversation: { id: conversation.id }, reused: true, shared: true,
       });
 
       const inlineReply = await fetch(`${baseUrl}/api/ask/conversations/${conversation.id}/messages`, {
@@ -149,8 +157,14 @@ describe("/ask HTTP integration with an injected Copilot boundary", () => {
         conversation: { context: unknown };
         messages: { role: string; body: string; location: unknown }[];
       };
-      expect(transcript.conversation.context).toEqual(inlineContext);
+      expect(transcript.conversation.context).toBeNull();
       expect(transcript.messages[0]).toMatchObject({ role: "user", body: "Could this throw path be simplified?", location: inlineContext });
+
+      const settings = await fetch(`${baseUrl}/api/ask/conversations/${conversation.id}/settings`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: "fixture-model", contextTier: "long_context" }),
+      });
+      expect(settings.status).toBe(200);
+      expect((await settings.json() as { conversation: { model: string } }).conversation).toMatchObject({ model: "fixture-model" });
 
       // Formal review feedback lives in a completely separate table and this
       // flow must not create any queue feedback as a side effect.

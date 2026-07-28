@@ -22,6 +22,8 @@ import {
 } from "./askQuestionSetStore.ts";
 import type { AskLocation } from "./askStore.ts";
 
+type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
+type ContextTier = "default" | "long_context";
 type ActiveAsk = { session: CopilotSession; model: string | null; sending: boolean };
 
 export interface AskRouterOptions {
@@ -138,6 +140,8 @@ export class AskService {
     await this.client.start();
     const config = {
       model: conversation.model ?? undefined,
+      reasoningEffort: conversation.reasoningEffort ?? undefined,
+      contextTier: conversation.contextTier ?? undefined,
       onPermissionRequest: this.readOnlyPermissions,
       enableConfigDiscovery: false,
       skipCustomInstructions: true,
@@ -205,21 +209,42 @@ export class AskService {
     }
   }
 
-  async setModel(conversationId: string, model: string): Promise<void> {
+  async setModel(conversationId: string, model: string, settings: { reasoningEffort?: ReasoningEffort; contextTier?: ContextTier } = {}): Promise<void> {
     const conversation = getAskConversation(this.db, conversationId);
     if (!conversation) throw new Error("Unknown /ask conversation");
     const active = this.active.get(conversationId);
     if (active) {
       if (active.sending) throw new Error("Cannot change models while /ask is responding");
-      await active.session.setModel(model);
+      await active.session.setModel(model, settings);
       active.model = model;
     }
-    updateAskConversation(this.db, conversationId, { model });
+    updateAskConversation(this.db, conversationId, {
+      model,
+      reasoningEffort: settings.reasoningEffort ?? null,
+      contextTier: settings.contextTier ?? null,
+    });
   }
 }
 
 function bodyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function reasoningEffort(value: unknown): ReasoningEffort | undefined {
+  return value === "low" || value === "medium" || value === "high" || value === "xhigh" ? value : undefined;
+}
+
+function contextTier(value: unknown): ContextTier | undefined {
+  return value === "default" || value === "long_context" ? value : undefined;
+}
+
+function validateModelSettings(models: ModelInfo[], model: string, effort?: ReasoningEffort): string | undefined {
+  const selected = models.find((candidate) => candidate.id === model);
+  if (!selected) return `Unknown Copilot model: ${model}`;
+  if (effort && (!selected.capabilities?.supports?.reasoningEffort || !selected.supportedReasoningEfforts?.includes(effort))) {
+    return `${selected.name ?? selected.id} does not support ${effort} reasoning.`;
+  }
+  return undefined;
 }
 
 const MAX_QUESTION_SET_QUESTIONS = 100;
@@ -336,24 +361,28 @@ export function createAskRouter(options: AskRouterOptions): { router: Router; as
 
   router.post("/api/ask/conversations", async (req, res) => {
     const model = bodyString(req.body?.model);
+    const effort = reasoningEffort(req.body?.reasoningEffort);
+    const tier = contextTier(req.body?.contextTier);
     const queueItemId = bodyString(req.body?.queueItemId);
     const context = askLocation(req.body?.context);
     try {
       if (model) {
         const available = await askService.listModels();
-        if (!available.some((candidate) => candidate.id === model)) {
-          res.status(400).json({ error: `Unknown Copilot model: ${model}` });
+        const validation = validateModelSettings(available, model, effort);
+        if (validation) {
+          res.status(400).json({ error: validation });
           return;
         }
       }
-      res.status(201).json({ conversation: createAskConversation(options.db, { model, queueItemId, context }) });
+      res.status(201).json({ conversation: createAskConversation(options.db, { model, reasoningEffort: effort, contextTier: tier, queueItemId, context }) });
     } catch (error) {
       res.status(503).json({ error: `Unable to initialize Copilot: ${String(error)}` });
     }
   });
 
-  // Inline questions reuse one durable /ask conversation per exact code
-  // location. This route is deliberately not connected to queue feedback.
+  // Every inline question shares one durable review conversation. Location
+  // remains on each message (for exact inline rendering), while one Copilot
+  // session retains the context of questions asked anywhere in the review.
   router.post("/api/ask/inline-conversations", async (req, res) => {
     const context = askLocation(req.body?.context);
     const model = bodyString(req.body?.model);
@@ -361,26 +390,21 @@ export function createAskRouter(options: AskRouterOptions): { router: Router; as
       res.status(400).json({ error: "An inline /ask conversation needs filePath and startLine" });
       return;
     }
-    const sameLocation = (candidate: AskLocation | null): boolean => Boolean(candidate
-      && candidate.repoId === context.repoId
-      && candidate.filePath === context.filePath
-      && candidate.side === context.side
-      && candidate.startLine === context.startLine
-      && candidate.endLine === context.endLine);
-    const existing = listAskConversations(options.db).find((conversation) => sameLocation(conversation.context));
+    const existing = listAskConversations(options.db).find((conversation) => !conversation.context?.filePath);
     if (existing) {
-      res.json({ conversation: existing, reused: true });
+      res.json({ conversation: existing, reused: true, shared: true });
       return;
     }
     try {
       if (model) {
         const available = await askService.listModels();
-        if (!available.some((candidate) => candidate.id === model)) {
-          res.status(400).json({ error: `Unknown Copilot model: ${model}` });
+        const validation = validateModelSettings(available, model);
+        if (validation) {
+          res.status(400).json({ error: validation });
           return;
         }
       }
-      res.status(201).json({ conversation: createAskConversation(options.db, { model, context }), reused: false });
+      res.status(201).json({ conversation: createAskConversation(options.db, { model }), reused: false, shared: true });
     } catch (error) {
       res.status(503).json({ error: `Unable to initialize Copilot: ${String(error)}` });
     }
@@ -403,11 +427,39 @@ export function createAskRouter(options: AskRouterOptions): { router: Router; as
     }
     try {
       const models = await askService.listModels();
-      if (!models.some((candidate) => candidate.id === model)) {
-        res.status(400).json({ error: `Unknown Copilot model: ${model}` });
+      const validation = validateModelSettings(models, model);
+      if (validation) {
+        res.status(400).json({ error: validation });
         return;
       }
       await askService.setModel(req.params.id, model);
+      res.json({ conversation: getAskConversation(options.db, req.params.id) });
+    } catch (error) {
+      res.status(400).json({ error: String(error) });
+    }
+  });
+
+  router.post("/api/ask/conversations/:id/settings", async (req, res) => {
+    const conversation = getAskConversation(options.db, req.params.id);
+    const model = bodyString(req.body?.model) ?? conversation?.model ?? "auto";
+    if (!conversation) {
+      res.status(404).json({ error: "Unknown /ask conversation" });
+      return;
+    }
+    const effort = Object.hasOwn(req.body ?? {}, "reasoningEffort")
+      ? reasoningEffort(req.body?.reasoningEffort)
+      : conversation.reasoningEffort ?? undefined;
+    const tier = Object.hasOwn(req.body ?? {}, "contextTier")
+      ? contextTier(req.body?.contextTier)
+      : conversation.contextTier ?? undefined;
+    try {
+      const models = await askService.listModels();
+      const validation = validateModelSettings(models, model, effort);
+      if (validation) {
+        res.status(400).json({ error: validation });
+        return;
+      }
+      await askService.setModel(req.params.id, model, { reasoningEffort: effort, contextTier: tier });
       res.json({ conversation: getAskConversation(options.db, req.params.id) });
     } catch (error) {
       res.status(400).json({ error: String(error) });

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
 import { runMigrations } from "./db.ts";
-import { createAskConversation, insertAskMessage, listAskMessages } from "./askStore.ts";
+import { createAskConversation, insertAskMessage, listAskMessages, updateAskConversation } from "./askStore.ts";
 
 describe("inline /ask persistence", () => {
   test("retains an exact diff range, selected code, and transcript without entering review tables", () => {
@@ -23,5 +23,16 @@ describe("inline /ask persistence", () => {
     ]);
     expect(db.query("SELECT count(*) AS count FROM queue_feedback").get()).toEqual({ count: 0 });
     expect(db.query("SELECT count(*) AS count FROM comments").get()).toEqual({ count: 0 });
+  });
+});
+
+describe("shared /ask settings", () => {
+  test("persists model, thinking level, and context tier with a conversation", () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const conversation = createAskConversation(db, { model: "gpt-5", reasoningEffort: "high", contextTier: "long_context" });
+    expect(conversation).toMatchObject({ model: "gpt-5", reasoningEffort: "high", contextTier: "long_context" });
+    expect(updateAskConversation(db, conversation.id, { model: "gpt-5-mini", reasoningEffort: "medium", contextTier: "default" }))
+      .toMatchObject({ model: "gpt-5-mini", reasoningEffort: "medium", contextTier: "default" });
   });
 });
