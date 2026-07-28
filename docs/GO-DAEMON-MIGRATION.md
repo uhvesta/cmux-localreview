@@ -40,6 +40,7 @@ are deliberately small but real:
 ```sh
 bazel run //cmd/localreview -- daemon --port 57992
 bazel run //cmd/localreview -- open
+bazel run //cmd/localreview -- open /path/to/workspace
 bazel run //cmd/localreview -- queue-submit --title "Parser" --topic parser /path/to/workspace
 ```
 

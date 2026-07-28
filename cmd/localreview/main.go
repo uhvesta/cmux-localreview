@@ -149,18 +149,38 @@ func reproduce(args []string) error {
 // HttpOnly, same-origin cookie.
 func openHome(args []string) error {
 	flags := flag.NewFlagSet("open", flag.ContinueOnError)
-	noOpen := flags.Bool("no-open", false, "print the Queue Home URL without launching a browser")
+	noOpen := flags.Bool("no-open", false, "print the Queue Home or workspace-review URL without launching a browser")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if flags.NArg() != 0 {
-		return errors.New("usage: localreview open [--no-open]")
+	if flags.NArg() > 1 {
+		return errors.New("usage: localreview open [--no-open] [workspace-path]")
 	}
 	d, err := discovered()
 	if err != nil {
 		return err
 	}
-	url := fmt.Sprintf("http://127.0.0.1:%d/#daemonToken=%s", d.Port, d.Token)
+	path := "/"
+	if flags.NArg() == 1 {
+		workspace, err := filepath.Abs(flags.Arg(0))
+		if err != nil {
+			return err
+		}
+		payload, _ := json.Marshal(map[string]string{"workspacePath": workspace})
+		request, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/api/workspaces/open", d.Port), bytes.NewReader(payload))
+		request.Header.Set("Authorization", "Bearer "+d.Token)
+		request.Header.Set("Content-Type", "application/json")
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			return err
+		}
+		defer response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			return fmt.Errorf("workspace activation failed: %s", response.Status)
+		}
+		path = "/review"
+	}
+	url := fmt.Sprintf("http://127.0.0.1:%d%s#daemonToken=%s", d.Port, path, d.Token)
 	fmt.Println(url)
 	if *noOpen {
 		return nil
