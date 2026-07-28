@@ -54,3 +54,63 @@ review consent carefully; a future GitHub-App migration is needed for truly
 fine-grained repository selection. See GitHub’s [OAuth authorization
 guidance](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps)
 and [OAuth scope documentation](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/scopes-for-oauth-apps).
+
+## Operator runbook
+
+Use this checklist on the machine that runs the daemon. It is intentionally
+safe to repeat: configuring a different client ID deletes the old token for
+that capability rather than reusing it under a new registration.
+
+1. For `/ask`, install a current Copilot CLI binary and confirm that the daemon
+   can find it. The SDK starts that binary as an isolated runtime, but does not
+   reuse its local login:
+
+   ```sh
+   copilot --version
+   ```
+
+2. Create/configure the capability and complete browser OAuth. The normal
+   command waits for the callback; add `--no-wait` only when another terminal
+   or automation will poll status afterward.
+
+   ```sh
+   localreview auth login --capability copilot --client-id YOUR_COPILOT_CLIENT_ID
+   localreview auth status
+   ```
+
+3. Add `read` only when reviewing GitHub pull requests, and `write` only when
+   deliberately publishing GitHub review feedback:
+
+   ```sh
+   localreview auth login --capability read --client-id YOUR_READ_CLIENT_ID
+   localreview auth login --capability write --client-id YOUR_WRITE_CLIENT_ID
+   localreview auth status
+   ```
+
+4. If port `8787` is already in use, stop the conflicting local listener or
+   use device flow. Device flow is for a daemon with no usable local browser;
+   it still stores the completed credential only on that host.
+
+   ```sh
+   localreview auth login --capability copilot --client-id YOUR_COPILOT_CLIENT_ID --device
+   ```
+
+`auth status` reports configuration and connection state only. It never prints
+an access token, refresh token, browser capability, or OAuth callback URL with
+state.
+
+## Important current limitation
+
+The capability names (`read`, `write`, and `copilot`) are separate local
+storage and routing boundaries; they are **not** GitHub OAuth scopes. The
+current native authorization request deliberately does not add a `scope`
+parameter, and this repository has not validated a real GitHub API call or a
+real Copilot completion against a self-hosted registration. Do not treat a
+successful browser callback or an `authenticated` status as proof that private
+repository access, GitHub publishing, or Copilot inference will succeed.
+
+After connecting, test only the action you intend to use and inspect the
+token-free error state: open a read-only PR locally, load `/ask` models, or
+publish an explicitly disposable review. Never work around an authorization
+failure by pasting a PAT, `gh` credential, or Copilot CLI token into
+cmux-localreview; none is a supported fallback.

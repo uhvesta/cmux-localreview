@@ -35,6 +35,33 @@ old sessions only to read history. Inline questions across files use the same
 chosen conversation when the reviewer selects it; they retain their exact code
 anchor without resending prior transcript messages.
 
+### Practical multi-session runbook
+
+There are two intentionally different forms of parallelism:
+
+| You need | Supported setup | What is not connected automatically |
+| --- | --- | --- |
+| Parallel coding agents | Run one Copilot CLI in each branch/worktree/cmux surface. Run `localreview setup` in each project before submitting its snapshot. | The daemon never reads, resumes, or sends prompts to those terminal sessions. |
+| Parallel review research | Submit distinct workspace/topic queue items and create a `/ask` conversation for each review item. | A reopened item reads its transcript only; it does not replay a question or copy context into another item. |
+| Parallel machines | Run one loopback daemon and one local secure-store authorization per machine, then add the remote daemon through SSH federation. | OAuth credentials, daemon discovery tokens, and Copilot CLI sessions are never copied across hosts. |
+
+For a remote worker that also needs `/ask`, authorize its daemon on that
+worker—normally with device flow—and install the Copilot CLI there. A local
+daemon's `copilot` credential is not a remote credential:
+
+```sh
+# On the remote worker, after installing localreview and Copilot CLI.
+localreview remote daemon run --port 4311 --data-dir /srv/cmux-localreview
+localreview auth login --capability copilot --client-id YOUR_REMOTE_COPILOT_CLIENT_ID --device
+localreview auth status
+```
+
+Keep each daemon's data directory private to that host. The native runtime can
+keep durable conversations for multiple review items, but users should not
+infer a throughput guarantee or that an existing Copilot CLI terminal session
+will be reused. Use Queue Home's busy/error state and explicit retry/cancel
+controls for each review turn.
+
 ## Formal feedback delivery
 
 Formal comments remain separate from `/ask`. The reviewer can copy a review
@@ -87,3 +114,12 @@ configures a dedicated GitHub OAuth App client rather than a GitHub App
 installation. Tokens live only in OS secure storage. The browser UI gets an
 HttpOnly local session, not an OAuth token. `gh`, environment variables, PATs,
 and an existing Copilot CLI credential are intentionally not fallbacks.
+
+## Validation boundary
+
+The deterministic `localreviewd-e2e` fixture exercises queue, transcript,
+streaming, and multi-conversation UI mechanics without contacting GitHub or
+Copilot. It is not evidence that a self-hosted OAuth registration can obtain
+private repository access or that Copilot will complete a real turn. Follow
+[GitHub OAuth setup](GITHUB-OAUTH-SETUP.md#important-current-limitation) for
+the production preflight and test the exact intended capability on each host.
