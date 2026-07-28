@@ -95,9 +95,11 @@ localreview remote submit https://github.com/OWNER/REPOSITORY/pull/123
 
 Typical causes are an incorrect canonical PR URL, missing OAuth application
 access, or a new PR head. Refresh the remote item rather than reviewing an old
-head. **Publish to GitHub** is currently unavailable by design: the native
-daemon rejects it clearly and does not turn it into a local decision. Choose
-the plainly labelled local save action instead.
+head. **Publish to GitHub** needs both connected `read` and `write` App
+capabilities. It checks the saved snapshot head against GitHub immediately
+before creating a review; a changed or closed PR returns a stale-head error
+and does not write or save a local decision. Choose **Save locally** when no
+GitHub write is intended.
 
 ## Feedback delivery is unavailable or already running
 

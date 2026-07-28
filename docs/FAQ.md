@@ -74,10 +74,13 @@ localreview open --pr https://github.com/OWNER/REPOSITORY/pull/123
 ```
 
 This opens the local diff and `/ask` without creating a queue item or a
-publication path. A `write` capability is not needed for
-local review. Native GitHub-review publishing is currently intentionally
-rejected rather than silently saved as a local review; save locally if that is
-the intended outcome.
+publication path. A `write` capability is not needed for local review.
+
+For a queued remote PR, **Save locally** records a local queue decision only.
+**Publish to GitHub** is a separate, opt-in action that requires both the
+dedicated `read` and `write` GitHub App capabilities. Before it writes, the
+daemon re-resolves the PR and refuses to publish if its head SHA changed or
+the PR is no longer open. A failed publication never becomes a local decision.
 
 ## How do I reproduce a submitted review?
 

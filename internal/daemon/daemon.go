@@ -31,6 +31,7 @@ import (
 	"github.com/uhvesta/cmux-localreview/internal/askruntime"
 	"github.com/uhvesta/cmux-localreview/internal/gitdiff"
 	"github.com/uhvesta/cmux-localreview/internal/githubauth"
+	"github.com/uhvesta/cmux-localreview/internal/githubreview"
 	queueStore "github.com/uhvesta/cmux-localreview/internal/queue"
 	"github.com/uhvesta/cmux-localreview/internal/store"
 	"github.com/uhvesta/cmux-localreview/internal/webassets"
@@ -1876,12 +1877,15 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 			// must never turn a requested publish into a misleading local-only
 			// success.
 			Publish bool `json:"publish"`
+			// PublishGitHub is the frozen TypeScript spelling. Keep it as a
+			// compatibility alias while the native UI uses the shorter Publish.
+			PublishGitHub bool `json:"publishGitHub"`
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&input); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid decision"})
 			return
 		}
-		if input.Publish {
+		if input.Publish || input.PublishGitHub {
 			item, getErr := queueStore.Get(d.db, parts[1])
 			if getErr != nil {
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": getErr.Error()})
@@ -1900,15 +1904,34 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 				})
 				return
 			}
-			// The native daemon deliberately has no GitHub review-write adapter
-			// yet.  Do this check before queueStore.Decide so an explicit publish
-			// request cannot be recorded as a local decision by accident.
-			writeJSON(w, http.StatusNotImplemented, map[string]any{
-				"error":              "GitHub review publishing is not available in the native daemon yet. No local decision was saved; choose Save locally to record this review without publishing it.",
-				"code":               "github_review_publish_unsupported",
-				"publishRequested":   true,
-				"localDecisionSaved": false,
-			})
+			if input.Decision != string(queueStore.Approved) && input.Decision != string(queueStore.ChangesRequested) {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"error": "Only approve or request changes can be published to GitHub. No local decision was saved.", "code": "github_review_publish_invalid_decision", "publishRequested": true, "localDecisionSaved": false})
+				return
+			}
+			kind := githubreview.Approve
+			if input.Decision == string(queueStore.ChangesRequested) {
+				kind = githubreview.RequestChanges
+			}
+			remoteReview, publishErr := d.publishRemoteReview(r.Context(), item, kind, input.Body)
+			if publishErr != nil {
+				status, code := http.StatusBadGateway, "github_review_publish_failed"
+				var stale *githubreview.StaleHeadError
+				if errors.As(publishErr, &stale) {
+					status, code = http.StatusConflict, "github_review_publish_stale_head"
+				}
+				writeJSON(w, status, map[string]any{"error": publishErr.Error(), "code": code, "publishRequested": true, "localDecisionSaved": false, "item": item})
+				return
+			}
+			updated, decideErr := queueStore.Decide(d.db, parts[1], queueStore.Status(input.Decision), input.Body)
+			if decideErr != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": decideErr.Error()})
+				return
+			}
+			if updated == nil {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": "Queue item changed before its published decision could be saved; GitHub review was published, refresh Queue Home."})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"item": updated, "remoteReview": remoteReview, "published": true, "localDecisionSaved": true})
 			return
 		}
 		item, err := queueStore.Decide(d.db, parts[1], queueStore.Status(input.Decision), input.Body)

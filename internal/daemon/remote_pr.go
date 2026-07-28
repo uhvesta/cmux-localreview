@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/uhvesta/cmux-localreview/internal/githubauth"
+	"github.com/uhvesta/cmux-localreview/internal/githubreview"
 	queueStore "github.com/uhvesta/cmux-localreview/internal/queue"
 	"github.com/uhvesta/cmux-localreview/internal/remotepr"
 	"github.com/uhvesta/cmux-localreview/internal/snapshot"
@@ -42,6 +44,37 @@ func remotePRFromQueueItem(item *queueStore.Item) (remotepr.PullRequest, bool) {
 		return remotepr.PullRequest{}, false
 	}
 	return envelope.PullRequest, true
+}
+
+// publishRemoteReview intentionally has a small authority surface: the
+// immutable PR metadata is read from the queued snapshot, the read capability
+// is used to prove that head is still current, and only then is the separate
+// write capability used for the single GitHub Reviews API mutation.
+func (d *Daemon) publishRemoteReview(ctx context.Context, item *queueStore.Item, decision githubreview.Decision, body string) (githubreview.Result, error) {
+	if item == nil || item.Kind != "remote" || item.RemoteURL == nil {
+		return githubreview.Result{}, errors.New("GitHub publishing can only be requested for a remote pull-request queue item")
+	}
+	pr, ok := remotePRFromQueueItem(item)
+	if !ok {
+		return githubreview.Result{}, errors.New("This remote item has no immutable PR snapshot. Refresh it before publishing a review")
+	}
+	readToken, err := d.github.Token(ctx, githubauth.Read)
+	if err != nil {
+		return githubreview.Result{}, fmt.Errorf("GitHub read capability: %w", err)
+	}
+	writeToken, err := d.github.Token(ctx, githubauth.Write)
+	if err != nil {
+		return githubreview.Result{}, fmt.Errorf("GitHub write capability: %w", err)
+	}
+	feedback, err := queueStore.FeedbackForItem(d.db, item.ID, false)
+	if err != nil {
+		return githubreview.Result{}, err
+	}
+	entries := make([]githubreview.Feedback, 0, len(feedback))
+	for _, entry := range feedback {
+		entries = append(entries, githubreview.Feedback{Body: entry.Body, Path: entry.Path, Line: entry.Line, Side: entry.Side})
+	}
+	return (githubreview.Client{HTTP: d.github.HTTP}).Publish(ctx, pr, decision, body, entries, readToken, writeToken)
 }
 
 func (d *Daemon) openReadOnlyPullRequest(ctx context.Context, remoteURL string) (map[string]any, error) {

@@ -94,7 +94,7 @@ The native daemon has three separate capabilities:
 | Capability | Needed for | Not used for |
 | --- | --- | --- |
 | `read` | resolving/mirroring a GitHub PR for local review | publishing feedback |
-| `write` | future explicit GitHub review publishing | PR read or `/ask` |
+| `write` | explicit opt-in GitHub review publication | PR read or `/ask` |
 | `copilot` | fresh SDK-native `/ask` and formal delivery | GitHub review publication |
 
 Create the appropriate GitHub OAuth application registrations and configure

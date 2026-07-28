@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "githubreview",
+    srcs = ["publish.go"],
+    importpath = "github.com/uhvesta/cmux-localreview/internal/githubreview",
+    visibility = ["//visibility:public"],
+    deps = ["//internal/remotepr"],
+)
+
+go_test(
+    name = "githubreview_test",
+    srcs = ["publish_test.go"],
+    embed = [":githubreview"],
+)

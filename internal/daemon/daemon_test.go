@@ -468,24 +468,47 @@ func TestQueueControlPlaneHTTPContract(t *testing.T) {
 	}
 }
 
-// An explicit GitHub publish request must never degrade into a local queue
-// decision.  Native review-write support is intentionally not present yet, so
-// the caller receives an actionable 501 and can deliberately choose a local
-// decision instead.
-func TestRemotePublishDecisionIsRejectedWithoutSavingLocalDecision(t *testing.T) {
+// An explicit GitHub App publication first verifies the immutable snapshot
+// head with read authority, then publishes exactly once with write authority,
+// and only then records the local transition.
+func TestRemotePublishDecisionUsesDedicatedWriteCapability(t *testing.T) {
 	dir := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	d, err := Start(ctx, Options{DataDir: dir, UIDir: filepath.Join(dir, "missing-ui")})
+	head := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	base := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	var published string
+	auth := githubauth.New(authSecrets{
+		githubauth.Service + "/github.com:read":  `{"accessToken":"read-token","clientId":"read-client-id"}`,
+		githubauth.Service + "/github.com:write": `{"accessToken":"write-token","clientId":"write-client-id"}`,
+	}, authConfig{githubauth.Read: "read-client-id", githubauth.Write: "write-client-id"}, authTransport(func(request *http.Request) (*http.Response, error) {
+		if request.Method == http.MethodGet && request.URL.Path == "/repos/acme/widget/pulls/7" {
+			if request.Header.Get("Authorization") != "Bearer read-token" {
+				t.Fatalf("read authorization=%q", request.Header.Get("Authorization"))
+			}
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"number":7,"html_url":"https://github.com/acme/widget/pull/7","title":"Remote PR","state":"open","draft":false,"head":{"sha":"` + head + `","ref":"feature"},"base":{"sha":"` + base + `","ref":"main","repo":{"full_name":"acme/widget","clone_url":"https://github.com/acme/widget.git"}}}`))}, nil
+		}
+		if request.Method == http.MethodPost && request.URL.Path == "/repos/acme/widget/pulls/7/reviews" {
+			if request.Header.Get("Authorization") != "Bearer write-token" {
+				t.Fatalf("write authorization=%q", request.Header.Get("Authorization"))
+			}
+			body, _ := io.ReadAll(request.Body)
+			published = string(body)
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"id":41}`))}, nil
+		}
+		return nil, fmt.Errorf("unexpected GitHub request %s %s", request.Method, request.URL)
+	}), nil)
+	d, err := Start(ctx, Options{DataDir: dir, UIDir: filepath.Join(dir, "missing-ui"), GitHubAuth: auth})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer d.Close()
 	item, created, err := queueStore.Enqueue(d.db, queueStore.EnqueueInput{
-		Title:         "Remote PR",
-		WorkspacePath: filepath.Join(dir, "remote-worktree"),
-		Kind:          "remote",
-		RemoteURL:     "https://github.com/acme/widget/pull/7",
+		Title:            "Remote PR",
+		WorkspacePath:    filepath.Join(dir, "remote-worktree"),
+		Kind:             "remote",
+		RemoteURL:        "https://github.com/acme/widget/pull/7",
+		SnapshotManifest: json.RawMessage(`{"remotePullRequest":{"url":"https://github.com/acme/widget/pull/7","number":7,"title":"Remote PR","body":"","state":"OPEN","isDraft":false,"repository":"acme/widget","repositoryUrl":"https://github.com/acme/widget.git","headRefName":"feature","headSha":"` + head + `","baseRefName":"main","baseSha":"` + base + `"}}`),
 	})
 	if err != nil || !created {
 		t.Fatalf("enqueue remote: item=%#v created=%v err=%v", item, created, err)
@@ -505,16 +528,64 @@ func TestRemotePublishDecisionIsRejectedWithoutSavingLocalDecision(t *testing.T)
 	}
 	body, _ := io.ReadAll(response.Body)
 	response.Body.Close()
-	if response.StatusCode != http.StatusNotImplemented || !strings.Contains(string(body), "No local decision was saved") || !strings.Contains(string(body), "github_review_publish_unsupported") {
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), `"published":true`) || !strings.Contains(published, `"event":"APPROVE"`) || !strings.Contains(published, `"commit_id":"`+head+`"`) {
 		t.Fatalf("publish response=%d %s", response.StatusCode, body)
 	}
 	persisted, err := queueStore.Get(d.db, item.ID)
+	if err != nil || persisted == nil || persisted.Status != queueStore.Approved {
+		t.Fatalf("published decision must become approved: item=%#v err=%v", persisted, err)
+	}
+	decisions, err := queueStore.DecisionsForItem(d.db, item.ID)
+	if err != nil || len(decisions) != 1 || decisions[0].Status != string(queueStore.Approved) {
+		t.Fatalf("published decision history=%#v err=%v", decisions, err)
+	}
+}
+
+func TestRemotePublishStaleHeadSavesNoLocalDecision(t *testing.T) {
+	dir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	head := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	base := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	writes := 0
+	auth := githubauth.New(authSecrets{githubauth.Service + "/github.com:read": `{"accessToken":"read-token","clientId":"read-client-id"}`, githubauth.Service + "/github.com:write": `{"accessToken":"write-token","clientId":"write-client-id"}`}, authConfig{githubauth.Read: "read-client-id", githubauth.Write: "write-client-id"}, authTransport(func(request *http.Request) (*http.Response, error) {
+		if request.Method == http.MethodPost {
+			writes++
+			return nil, errors.New("write must not happen")
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"number":7,"html_url":"https://github.com/acme/widget/pull/7","title":"Remote PR","state":"open","draft":false,"head":{"sha":"cccccccccccccccccccccccccccccccccccccccc","ref":"feature"},"base":{"sha":"` + base + `","ref":"main","repo":{"full_name":"acme/widget","clone_url":"https://github.com/acme/widget.git"}}}`))}, nil
+	}), nil)
+	d, err := Start(ctx, Options{DataDir: dir, UIDir: filepath.Join(dir, "missing-ui"), GitHubAuth: auth})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	item, _, err := queueStore.Enqueue(d.db, queueStore.EnqueueInput{Title: "Remote PR", WorkspacePath: filepath.Join(dir, "remote"), Kind: "remote", RemoteURL: "https://github.com/acme/widget/pull/7", SnapshotManifest: json.RawMessage(`{"remotePullRequest":{"url":"https://github.com/acme/widget/pull/7","number":7,"title":"Remote PR","body":"","state":"OPEN","isDraft":false,"repository":"acme/widget","repositoryUrl":"https://github.com/acme/widget.git","headRefName":"feature","headSha":"` + head + `","baseRefName":"main","baseSha":"` + base + `"}}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queueStore.Open(d.db, item.ID); err != nil {
+		t.Fatal(err)
+	}
+	request, _ := http.NewRequest(http.MethodPost, "http://127.0.0.1:"+strconv.Itoa(d.Port())+"/api/queue/"+item.ID+"/decision", strings.NewReader(`{"decision":"changes_requested","publishGitHub":true}`))
+	request.Header.Set("Authorization", "Bearer "+d.token)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusConflict || !strings.Contains(string(body), "github_review_publish_stale_head") || writes != 0 {
+		t.Fatalf("status=%d body=%s writes=%d", response.StatusCode, body, writes)
+	}
+	persisted, err := queueStore.Get(d.db, item.ID)
 	if err != nil || persisted == nil || persisted.Status != queueStore.InReview {
-		t.Fatalf("publish must leave item in review: item=%#v err=%v", persisted, err)
+		t.Fatalf("item=%#v err=%v", persisted, err)
 	}
 	decisions, err := queueStore.DecisionsForItem(d.db, item.ID)
 	if err != nil || len(decisions) != 0 {
-		t.Fatalf("publish must not create local history: decisions=%#v err=%v", decisions, err)
+		t.Fatalf("decisions=%#v err=%v", decisions, err)
 	}
 }
 
