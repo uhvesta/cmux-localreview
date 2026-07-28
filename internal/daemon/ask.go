@@ -32,6 +32,40 @@ func askError(w http.ResponseWriter, err error) {
 // free and cannot replay a prompt.
 func (d *Daemon) handleAsk(w http.ResponseWriter, r *http.Request, path string) bool {
 	ctx := r.Context()
+	if path == "/ask/models" && r.Method == http.MethodGet {
+		// A model catalogue can be read without constructing a Copilot runtime.
+		// Until the authenticated SDK client is connected, expose one explicit
+		// offline choice rather than pretending a live model is available.
+		writeJSON(w, http.StatusOK, map[string]any{"models": []map[string]any{{"id": "auto", "name": "Copilot default (connect to load models)", "capabilities": map[string]any{"supports": map[string]bool{"reasoningEffort": true, "contextTier": true}}}}, "state": "unauthenticated"})
+		return true
+	}
+	if path == "/ask/inline-conversations" && r.Method == http.MethodPost {
+		var in struct {
+			Model   string        `json:"model"`
+			Context *ask.Location `json:"context"`
+		}
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in) != nil || in.Context == nil || strings.TrimSpace(in.Context.FilePath) == "" || in.Context.StartLine < 1 {
+			askError(w, errors.New("An inline /ask conversation needs filePath and startLine"))
+			return true
+		}
+		session := d.askSessionID()
+		conversations, err := ask.ListConversations(ctx, d.db, session, false)
+		if err != nil {
+			askError(w, err)
+			return true
+		}
+		if len(conversations) > 0 {
+			writeJSON(w, http.StatusOK, map[string]any{"conversation": conversations[0], "reused": true, "shared": true})
+			return true
+		}
+		conversation, err := ask.CreateConversation(ctx, d.db, ask.CreateConversationInput{ReviewSessionID: session, Model: in.Model})
+		if err != nil {
+			askError(w, err)
+		} else {
+			writeJSON(w, http.StatusCreated, map[string]any{"conversation": conversation, "reused": false, "shared": true})
+		}
+		return true
+	}
 	if path == "/ask/conversations" && r.Method == http.MethodGet {
 		items, err := ask.ListConversations(ctx, d.db, d.askSessionID(), r.URL.Query().Get("includeArchived") == "true")
 		if err != nil {
