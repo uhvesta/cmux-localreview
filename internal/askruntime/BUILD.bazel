@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "askruntime",
+    srcs = ["runtime.go"],
+    importpath = "github.com/uhvesta/cmux-localreview/internal/askruntime",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//internal/copilot",
+        "@com_github_github_copilot_sdk_go//:go_default_library",
+    ],
+)
+
+go_test(
+    name = "askruntime_test",
+    srcs = ["runtime_test.go"],
+    embed = [":askruntime"],
+    deps = ["@com_github_github_copilot_sdk_go//:go_default_library"],
+)
