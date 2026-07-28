@@ -63,6 +63,9 @@ does not modify shell profiles or copy credentials. See
 - [Copilot sessions](docs/COPILOT-ACP-SESSIONS.md) — what native SDK sessions
   support today, and the intentionally unsupported ACP transport.
 - [Demo](docs/DEMO.md) — credential-free browser smoke test.
+- [CLI workflows](docs/CLI-WORKFLOWS.md#deterministic-ask-and-btw-acceptance-fixture-source-checkouts-only)
+  also documents the isolated, non-release Copilot streaming fixture used for
+  repeatable browser and Electron acceptance testing.
 - [Go migration](docs/GO-DAEMON-MIGRATION.md) and
   [cutover audit](docs/CUTOVER-AUDIT.md) — engineering migration evidence.
 

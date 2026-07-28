@@ -222,6 +222,48 @@ localreview github-app disconnect --capability copilot
 uses a confidential client, add `--client-secret-stdin` and pipe the secret;
 never place it in a shell history or argument list.
 
+### Deterministic `/ask` and `/btw` acceptance fixture (source checkouts only)
+
+Use the separate `localreviewd-e2e` Bazel target when validating the browser
+or Electron UX without contacting GitHub or Copilot. It exposes three fixed
+SDK-shaped models and sends visibly delayed streaming responses, so model
+selection, live status, cancellation, `/btw`, and durable transcript reloads
+exercise the same Go route/SSE/SQLite code as a real session.
+
+It is **not** an authentication mode, credential fallback, or release feature:
+the production `localreviewd` binary has no fixture flag, and release archives
+and the packaged Electron sidecar do not contain this target.
+
+```sh
+# Terminal 1: keep this running and use a disposable profile.
+fixture_data="$(mktemp -d /tmp/cmux-localreview-e2e.XXXXXX)"
+CMUX_LOCALREVIEW_DATA_DIR="$fixture_data" \
+  sh scripts/run-e2e-copilot-fixture.sh --port 0
+
+# Terminal 2: open Queue Home in Firefox/Chrome (or print the authenticated URL).
+CMUX_LOCALREVIEW_DATA_DIR="$fixture_data" \
+  bazel run //cmd/localreview:localreview -- open --no-open
+```
+
+Submit/open a disposable Git workspace, open **/ask**, select a fixture model,
+send a question, and use **Stop response** while words are streaming. Reload
+to verify that the durable transcript returns without a second prompt. Open
+the `/btw` panel and send an explicit Copilot question to exercise its separate
+thread. To use the Electron shell against this test daemon, build the fixture
+then launch Electron with `LOCALREVIEWD_PATH` set to the resulting
+`bazel-bin/cmd/localreviewd-e2e/localreviewd-e2e_/localreviewd-e2e` path and a
+fresh `CMUX_LOCALREVIEW_DATA_DIR`; this is a developer-only test invocation.
+The repeatable route-level acceptance gate is:
+
+```sh
+scripts/verify-e2e-copilot-fixture.sh
+```
+
+It covers queue/open, the browser capability exchange, live SSE deltas,
+per-conversation model settings, cancellation, separate `/btw`, and restart
+transcript persistence. It does not represent an OAuth success or validate an
+external Copilot service; run the dedicated real-auth pass separately.
+
 ## File-change reload workflow
 
 When an opened workspace changes, the daemon fingerprints both Git status and

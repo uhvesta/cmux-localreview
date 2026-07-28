@@ -24,6 +24,12 @@ fi
 # The two release binaries must be buildable without Node/Bun on PATH. This
 # check is intentionally structural; the UI build remains a separate
 # build-time concern and release archives embed its already-built assets.
-bazel query 'kind(go_binary, //cmd/...)' >/dev/null || fail 'Bazel cannot resolve native binaries'
+bazel query 'kind(go_binary, //cmd/localreview/... union //cmd/localreviewd/...)' >/dev/null || fail 'Bazel cannot resolve released native binaries'
+
+# The deterministic E2E fixture is intentionally a *different* binary. It
+# must never enter release archive inputs or Electron's packaged sidecar.
+if rg -n 'localreviewd-e2e|e2ecopilot' release desktop .github/workflows/release.yml --glob 'BUILD.bazel' --glob '*.yml' --glob '*.yaml'; then
+  fail 'E2E Copilot fixture leaked into a release payload'
+fi
 
 printf '%s\n' 'native Go runtime boundary is clean'

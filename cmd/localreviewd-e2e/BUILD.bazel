@@ -1,0 +1,20 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "localreviewd_e2e_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/uhvesta/cmux-localreview/cmd/localreviewd-e2e",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//internal/askruntime",
+        "//internal/copilot",
+        "//internal/daemon",
+        "//internal/e2ecopilot",
+    ],
+)
+
+go_binary(
+    name = "localreviewd-e2e",
+    embed = [":localreviewd_e2e_lib"],
+    visibility = ["//visibility:public"],
+)

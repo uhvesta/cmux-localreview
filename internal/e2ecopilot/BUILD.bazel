@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "e2ecopilot",
+    srcs = ["fixture.go"],
+    importpath = "github.com/uhvesta/cmux-localreview/internal/e2ecopilot",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//internal/askruntime",
+        "//internal/copilot",
+        "@com_github_github_copilot_sdk_go//:go_default_library",
+    ],
+)
+
+go_test(
+    name = "e2ecopilot_test",
+    srcs = ["fixture_test.go"],
+    embed = [":e2ecopilot"],
+)

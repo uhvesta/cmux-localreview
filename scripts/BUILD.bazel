@@ -3,4 +3,6 @@ exports_files([
     "verify-frozen-parity-corpus.sh",
     "legacy-bin.mjs",
     "stage-ui-assets.sh",
+    "run-e2e-copilot-fixture.sh",
+    "verify-e2e-copilot-fixture.sh",
 ])
