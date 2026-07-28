@@ -1544,9 +1544,7 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 					}
 					start, end = span.Start, span.End
 				}
-				var messages []struct {
-					Body string `json:"body"`
-				}
+				var messages []durableCommentMessage
 				_ = json.Unmarshal(thread.Messages, &messages)
 				body := ""
 				if len(messages) > 0 {
@@ -1558,7 +1556,8 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				hash := sha256.Sum256([]byte(thread.CodeSnapshot.Content))
-				_, err = tx.Exec(`INSERT INTO comments(session_id,repo_id,file_path,side,start_line,end_line,body,anchor_content_hash,created_at,updated_at,thread_id,messages_json,anchor_content,channel) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?, 'formal') ON CONFLICT(session_id,repo_id,thread_id) DO UPDATE SET file_path=excluded.file_path,side=excluded.side,start_line=excluded.start_line,end_line=excluded.end_line,body=excluded.body,anchor_content_hash=excluded.anchor_content_hash,updated_at=excluded.updated_at,messages_json=excluded.messages_json,anchor_content=excluded.anchor_content`, review.SessionID, repo.DBID, thread.FilePath, thread.Position.Side, start, end, body, fmt.Sprintf("%x", hash[:]), now, now, thread.ID, string(thread.Messages), nullable(thread.CodeSnapshot.Content))
+				channel := commentChannel(thread.Channel, messages)
+				_, err = tx.Exec(`INSERT INTO comments(session_id,repo_id,file_path,side,start_line,end_line,body,anchor_content_hash,created_at,updated_at,thread_id,messages_json,anchor_content,channel) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(session_id,repo_id,thread_id) DO UPDATE SET file_path=excluded.file_path,side=excluded.side,start_line=excluded.start_line,end_line=excluded.end_line,body=excluded.body,anchor_content_hash=excluded.anchor_content_hash,updated_at=excluded.updated_at,messages_json=excluded.messages_json,anchor_content=excluded.anchor_content,channel=excluded.channel`, review.SessionID, repo.DBID, thread.FilePath, thread.Position.Side, start, end, body, fmt.Sprintf("%x", hash[:]), now, now, thread.ID, string(thread.Messages), nullable(thread.CodeSnapshot.Content), channel)
 				if err != nil {
 					_ = tx.Rollback()
 					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -1569,7 +1568,12 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 				return
 			}
-			writeJSON(w, http.StatusOK, map[string]any{"success": true, "merged": false, "version": now})
+			threads, err := d.commentThreads(review, repo)
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"success": true, "merged": false, "version": version, "threads": threads})
 			return
 		}
 		if len(parts) == 5 && parts[0] == "repos" && parts[2] == "api" && parts[3] == "comments" && r.Method == http.MethodDelete {
@@ -1589,6 +1593,12 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 				return
 			}
+			version, stale, err := advanceCommentRevision(tx, review.SessionID, repo.DBID, nil)
+			if err != nil || stale {
+				_ = tx.Rollback()
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to advance comment revision"})
+				return
+			}
 			result, err := tx.Exec(`DELETE FROM comments WHERE session_id=? AND repo_id=? AND thread_id=?`, review.SessionID, repo.DBID, threadID)
 			if err == nil {
 				_, err = tx.Exec(`INSERT INTO comment_tombstones(session_id,repo_id,thread_id,deleted_at) VALUES(?,?,?,?) ON CONFLICT(session_id,repo_id,thread_id) DO UPDATE SET deleted_at=excluded.deleted_at`, review.SessionID, repo.DBID, threadID, now)
@@ -1603,7 +1613,7 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			deleted, _ := result.RowsAffected()
-			writeJSON(w, http.StatusOK, map[string]any{"success": true, "deleted": deleted > 0, "threadId": threadID, "version": now})
+			writeJSON(w, http.StatusOK, map[string]any{"success": true, "deleted": deleted > 0, "threadId": threadID, "version": version})
 			return
 		}
 		if len(parts) == 4 && parts[0] == "repos" && parts[2] == "api" && parts[3] == "diff" && r.Method == http.MethodGet {
