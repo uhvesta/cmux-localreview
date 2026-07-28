@@ -6,6 +6,7 @@ go_library(
     importpath = "github.com/uhvesta/cmux-localreview/internal/daemon",
     visibility = ["//visibility:public"],
     deps = [
+        "//internal/agent",
         "//internal/queue",
         "//internal/store",
     ],

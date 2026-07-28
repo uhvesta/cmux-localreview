@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/uhvesta/cmux-localreview/internal/agent"
 	queueStore "github.com/uhvesta/cmux-localreview/internal/queue"
 	"github.com/uhvesta/cmux-localreview/internal/store"
 )
@@ -152,6 +153,33 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 // explicitly; they never fall back to a Node process behind the caller.
 func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api")
+	if path == "/agents" {
+		switch r.Method {
+		case http.MethodGet:
+			items, err := agent.List(d.db)
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"agents": items})
+		case http.MethodPost:
+			var input agent.Record
+			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&input); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid agent"})
+				return
+			}
+			item, err := agent.Register(d.db, input)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusCreated, map[string]any{"agent": item})
+		default:
+			w.Header().Set("Allow", "GET, POST")
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+		return
+	}
 	if path == "/queue" {
 		switch r.Method {
 		case http.MethodGet:
