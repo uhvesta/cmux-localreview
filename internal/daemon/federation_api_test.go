@@ -22,6 +22,16 @@ func (m memoryFederationSecrets) Get(s, a string) (string, error) { return m[m.k
 func (m memoryFederationSecrets) Set(s, a, v string) error        { m[m.key(s, a)] = v; return nil }
 func (m memoryFederationSecrets) Delete(s, a string) error        { delete(m, m.key(s, a)); return nil }
 
+type unavailableFederationSecrets struct{}
+
+func (unavailableFederationSecrets) Get(string, string) (string, error) {
+	return "", errors.New("keychain locked")
+}
+func (unavailableFederationSecrets) Set(string, string, string) error {
+	return errors.New("keychain locked")
+}
+func (unavailableFederationSecrets) Delete(string, string) error { return nil }
+
 type fakeFederationTunnel struct {
 	endpoint federation.TunnelEndpoint
 	closed   bool
@@ -154,6 +164,26 @@ func TestFederationNodeCRUDAndNativeLoopbackTransport(t *testing.T) {
 	missing := federationRequest(t, d, http.MethodGet, "/api/federation/nodes/lab/status", "")
 	if missing.Code != http.StatusNotFound {
 		t.Fatalf("missing=%d %s", missing.Code, missing.Body.String())
+	}
+}
+
+func TestFederationNodeSecretStoreFailureIsActionable(t *testing.T) {
+	d, err := Start(t.Context(), Options{
+		DataDir:           t.TempDir(),
+		UIDir:             filepath.Join(t.TempDir(), "missing-ui"),
+		FederationSecrets: unavailableFederationSecrets{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	response := federationRequest(t, d, http.MethodPost, "/api/federation/nodes", `{"label":"Locked keychain","sshTarget":"reviewer@example.test","remotePort":57140,"token":"not-for-the-browser"}`)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "Unlock or enable your OS credential store") || strings.Contains(response.Body.String(), "not-for-the-browser") {
+		t.Fatalf("response is not safe/actionable: %s", response.Body.String())
 	}
 }
 

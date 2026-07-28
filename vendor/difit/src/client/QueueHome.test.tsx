@@ -61,4 +61,23 @@ describe('Queue Home lifecycle recovery', () => {
     expect(screen.queryByRole('textbox', { name: /secret/i })).toBeNull();
     expect(screen.getByText(/gh login/i)).not.toBeNull();
   });
+
+  it('shows a remote tunnel cache state rather than hiding lazy federation reads', async () => {
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.includes('/api/github/auth/status')) return Promise.resolve({ ok: true, status: 200, json: async () => ({ provider: 'github-oauth-pkce', capabilities: {
+        read: { configured: false, authenticated: false, loginState: 'idle' },
+        write: { configured: false, authenticated: false, loginState: 'idle' },
+        copilot: { configured: false, authenticated: false, loginState: 'idle' },
+      } }) });
+      if (path.includes('/api/queue')) return Promise.resolve({ ok: true, status: 200, json: async () => ({ items: [] }) });
+      if (path.includes('/api/workspaces')) return Promise.resolve({ ok: true, status: 200, json: async () => ({ activeWorkspace: null }) });
+      if (path.endsWith('/api/federation/nodes')) return Promise.resolve({ ok: true, status: 200, json: async () => ({ nodes: [{ id: 'lab', label: 'Lab', sshTarget: 'reviewer@example.test', remotePort: 57140, enabled: true }] }) });
+      if (path.endsWith('/api/federation/queue')) return Promise.resolve({ ok: true, status: 200, json: async () => ({ nodes: [{ node: { id: 'lab', label: 'Lab', sshTarget: 'reviewer@example.test', remotePort: 57140, enabled: true }, items: [], runtime: { state: 'connected', localPort: 49222, cachedResponses: 1, available: true, message: 'SSH loopback federation available' } }] }) });
+      if (path.includes('/api/federation/nodes/lab/status')) return Promise.resolve({ ok: true, status: 200, json: async () => ({ runtime: { state: 'connected', localPort: 49222, cachedResponses: 1, available: true, message: 'SSH loopback federation available' } }) });
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({}) });
+    }));
+    render(<QueueHome />);
+    expect(await screen.findByText('connected · localhost:49222 · 1 cached response')).not.toBeNull();
+  });
 });

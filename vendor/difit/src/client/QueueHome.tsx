@@ -107,7 +107,11 @@ export function QueueCard({ item, remoteNode, onOpenWorkspace, onRequeue, onRemo
 
 function runtimeLabel(runtime?: FederationRuntime): string {
   if (!runtime) return 'not checked';
-  if (runtime.state === 'connected') return runtime.localPort ? `connected · localhost:${runtime.localPort}` : 'connected';
+  if (runtime.state === 'connected') {
+    const endpoint = runtime.localPort ? `connected · localhost:${runtime.localPort}` : 'connected';
+    const cache = runtime.cachedResponses > 0 ? ` · ${runtime.cachedResponses} cached response${runtime.cachedResponses === 1 ? '' : 's'}` : '';
+    return `${endpoint}${cache}`;
+  }
   if (runtime.state === 'connecting') return 'connecting…';
   if (runtime.state === 'error') return 'needs attention';
   return runtime.state;

@@ -142,11 +142,15 @@ func (d *Daemon) handleFederation(w http.ResponseWriter, r *http.Request, path s
 				enabled = *input.Enabled
 			}
 			if d.federationSecrets == nil {
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "system secret store is unavailable"})
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "The system secret store is unavailable. Unlock or enable your OS credential store, then retry Add node."})
 				return true
 			}
 			if err := d.federationSecrets.Set(federationSecretService, federationSecretAccount(id), input.Token); err != nil {
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not save remote daemon capability"})
+				// The capability must never fall back to SQLite or a browser-readable
+				// location.  Do give the reviewer an actionable recovery path: on
+				// macOS this usually means unlocking the login keychain; on Linux it
+				// means starting an unlocked Secret Service session.
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Could not save the remote daemon capability in the system secret store. Unlock or enable your OS credential store, then retry Add node."})
 				return true
 			}
 			node, err := federation.Upsert(d.db, federation.Config{ID: id, Label: input.Label, SSHTarget: input.SSHTarget, RemotePort: input.RemotePort, Token: input.Token, Enabled: enabled})

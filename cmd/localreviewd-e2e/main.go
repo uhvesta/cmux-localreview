@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"sync"
 	"syscall"
 	"time"
 
@@ -20,6 +21,34 @@ import (
 	"github.com/uhvesta/cmux-localreview/internal/daemon"
 	"github.com/uhvesta/cmux-localreview/internal/e2ecopilot"
 )
+
+// fixtureSecrets keeps test-only daemon capabilities out of both SQLite and
+// the operator's real OS credential store. The released localreviewd always
+// uses the platform secret store; this implementation exists solely so the
+// credential-free UI fixture can cover federation add/connect/remove.
+type fixtureSecrets struct {
+	mu     sync.Mutex
+	values map[string]string
+}
+
+func (s *fixtureSecrets) key(service, account string) string { return service + "/" + account }
+func (s *fixtureSecrets) Get(service, account string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.values[s.key(service, account)], nil
+}
+func (s *fixtureSecrets) Set(service, account, value string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.values[s.key(service, account)] = value
+	return nil
+}
+func (s *fixtureSecrets) Delete(service, account string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.values, s.key(service, account))
+	return nil
+}
 
 func main() {
 	var port int
@@ -44,7 +73,13 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	ctx = watchParent(ctx, parentPID)
-	d, err := daemon.Start(ctx, daemon.Options{Port: port, DataDir: dataDir, UIDir: uiDir, AskRuntimeFactory: factory})
+	d, err := daemon.Start(ctx, daemon.Options{
+		Port:              port,
+		DataDir:           dataDir,
+		UIDir:             uiDir,
+		AskRuntimeFactory: factory,
+		FederationSecrets: &fixtureSecrets{values: map[string]string{}},
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
