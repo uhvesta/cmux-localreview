@@ -81,6 +81,26 @@ describe("managed remote PR workspaces", () => {
       .not.toBe(remoteWorkspacePaths({ ...common, url: "https://github.example/acme/widget/pull/1" }).mirrorPath);
   });
 
+  test("uses GitHub.com's root REST path and refuses to send its token to an arbitrary host", async () => {
+    const { resolveRemotePullRequest, setGitHubFetchForTests } = await import("./remotePr.ts");
+    const urls: string[] = [];
+    setGitHubFetchForTests(async (input) => {
+      urls.push(String(input));
+      return new Response(JSON.stringify({
+        number: 1, html_url: "https://github.com/acme/widget/pull/1", title: "Widget", body: "", state: "OPEN", draft: false,
+        head: { sha: "a".repeat(40), ref: "feature" },
+        base: { sha: "b".repeat(40), ref: "main", repo: { full_name: "acme/widget", clone_url: "https://github.com/acme/widget.git" } },
+      }));
+    });
+    try {
+      await resolveRemotePullRequest("https://github.com/acme/widget/pull/1", "read-token");
+      await expect(resolveRemotePullRequest("https://github.example/acme/widget/pull/1", "read-token")).rejects.toThrow("host-scoped credentials");
+      expect(urls).toEqual([
+        "https://api.github.com/repos/acme/widget/pulls/1",
+      ]);
+    } finally { setGitHubFetchForTests(); }
+  });
+
   test("refuses to publish a decision when the opened PR head is stale", async () => {
     const root = tempRoot();
     const { setGitHubFetchForTests, submitRemoteDecision } = await import("./remotePr.ts");
@@ -88,14 +108,14 @@ describe("managed remote PR workspaces", () => {
     setGitHubFetchForTests(async (input) => {
       calls.push(String(input));
       return new Response(JSON.stringify({
-        number: 42, html_url: "https://github.example/acme/widget/pull/42", title: "Widget", body: "", state: "OPEN", draft: false,
+        number: 42, html_url: "https://github.com/acme/widget/pull/42", title: "Widget", body: "", state: "OPEN", draft: false,
         head: { sha: "2".repeat(40), ref: "feature" },
         base: { sha: "b".repeat(40), ref: "main", repo: { full_name: "acme/widget", clone_url: "https://github.example/acme/widget.git" } },
       }), { status: 200 });
     });
     try {
       const pr = {
-        url: "https://github.example/acme/widget/pull/42", number: 42, title: "Widget", body: "", state: "OPEN", isDraft: false,
+        url: "https://github.com/acme/widget/pull/42", number: 42, title: "Widget", body: "", state: "OPEN", isDraft: false,
         repository: "acme/widget", repositoryUrl: "https://github.example/acme/widget.git", headRefName: "feature",
         headSha: "1".repeat(40), baseRefName: "main", baseSha: "b".repeat(40),
       };
@@ -105,7 +125,7 @@ describe("managed remote PR workspaces", () => {
       } as any;
       await expect(submitRemoteDecision(item, "changes_requested", [{ body: "Bad edge case", path: "src/a.ts", line: 4 }], { read: "read-token", write: "write-token" }))
         .rejects.toThrow("refresh the queue before publishing a review");
-      expect(calls).toEqual(["https://github.example/api/v3/repos/acme/widget/pulls/42"]);
+      expect(calls).toEqual(["https://api.github.com/repos/acme/widget/pulls/42"]);
     } finally {
       setGitHubFetchForTests();
     }

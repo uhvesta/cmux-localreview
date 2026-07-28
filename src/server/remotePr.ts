@@ -63,7 +63,19 @@ function pullRequestTarget(remoteUrl: string): { host: string; repository: strin
   try { url = new URL(remoteUrl); } catch { throw new Error(`Invalid GitHub pull-request URL: ${remoteUrl}`); }
   const parts = url.pathname.split("/").filter(Boolean);
   if (parts.length < 4 || parts[2] !== "pull" || !/^\d+$/.test(parts[3]!)) throw new Error(`Expected a GitHub pull-request URL: ${remoteUrl}`);
-  return { host: url.host.toLowerCase(), repository: `${parts[0]}/${parts[1]}`, number: Number(parts[3]) };
+  const host = url.host.toLowerCase();
+  // A user token for github.com must never be sent to a URL supplied by a
+  // queue form, CLI argument, or local browser navigation. Enterprise support
+  // needs a separately configured, host-scoped credential provider; until it
+  // exists, failing closed is the only safe behavior.
+  if (host !== "github.com") throw new Error("Only github.com pull-request URLs are supported until GitHub Enterprise host-scoped credentials are configured.");
+  return { host, repository: `${parts[0]}/${parts[1]}`, number: Number(parts[3]) };
+}
+
+function githubApiBase(host: string): string {
+  // GitHub.com serves REST at the root of api.github.com. GitHub Enterprise
+  // Server keeps the /api/v3 prefix on the appliance host.
+  return host === "github.com" ? "https://api.github.com" : `https://${host}/api/v3`;
 }
 
 type GitHubFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
@@ -82,7 +94,7 @@ async function githubJson<T>(url: string, token: string, init: RequestInit = {})
 /** Resolve a PR using only the daemon-owned read-capability GitHub App token. */
 export async function resolveRemotePullRequest(remoteUrl: string, token: string): Promise<RemotePullRequest> {
   const target = pullRequestTarget(remoteUrl);
-  const apiBase = `https://${target.host === "github.com" ? "api.github.com" : target.host}/api/v3`;
+  const apiBase = githubApiBase(target.host);
   const value = await githubJson<GitHubPullApiJson>(`${apiBase}/repos/${target.repository}/pulls/${target.number}`, token);
   const repository = value.base.repo;
   const repositoryUrl = repository?.clone_url ?? repository?.ssh_url ?? repository?.html_url;
@@ -250,7 +262,7 @@ export async function submitRemoteDecision(item: QueueItem, decision: "approved"
     ...(inline.length ? { comments: inline } : {}),
   };
   const target = pullRequestTarget(pr.url);
-  const apiBase = `https://${target.host === "github.com" ? "api.github.com" : target.host}/api/v3`;
+  const apiBase = githubApiBase(target.host);
   await githubJson(`${apiBase}/repos/${pr.repository}/pulls/${pr.number}/reviews`, tokens.write, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
   return { method: "github-review-api", inlineComments: inline.length };
 }
