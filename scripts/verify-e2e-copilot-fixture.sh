@@ -88,6 +88,13 @@ jq -e --arg id "$inline_id" '.reused == true and .conversation.id == $id' <<<"$i
 inline_after_reopen=$(api_get "ask/conversations/$inline_id")
 jq -e '.messages | length == 2' <<<"$inline_after_reopen" >/dev/null
 
+# Queue workspace reopening is a state restore only. In particular it must not
+# replay the inline Copilot turn already persisted above or manufacture a new
+# assistant row merely because Queue Home was revisited.
+api_post "queue/$item/open" '{}' >/dev/null
+inline_after_queue_reopen=$(api_get "ask/conversations/$inline_id")
+jq -e '.messages | length == 2 and .[1].pending == false' <<<"$inline_after_queue_reopen" >/dev/null
+
 conversation=$(api_post ask/conversations '{"model":"gpt-5"}')
 conversation_id=$(jq -r .conversation.id <<<"$conversation")
 api_post "ask/conversations/$conversation_id/settings" '{"model":"claude-sonnet-4.6","reasoningEffort":"high","contextTier":"long_context"}' >/dev/null
@@ -123,6 +130,24 @@ jq -e '.target == "copilot-sdk"' <<<"$btw" >/dev/null
 sleep 1
 threads=$(api_get btw/threads)
 jq -e '.threads | length == 1 and .[0].questions[0].answer.pending == false and (. [0].questions[0].answer.body | contains("Fixture Copilot"))' <<<"$threads" >/dev/null
+
+# Exercise Queue Home's formal lifecycle as a full, recoverable round. A
+# completed item leaves the actionable queue, is explicitly requeued, can be
+# opened again, and can be removed without destroying its history record.
+completed=$(api_post "queue/$item/complete" '{}')
+jq -e '.item.status == "completed"' <<<"$completed" >/dev/null
+active_after_complete=$(api_get queue)
+jq -e --arg id "$item" '([.items[]?.id] | index($id)) == null' <<<"$active_after_complete" >/dev/null
+history_after_complete=$(api_get 'queue?history=true')
+jq -e --arg id "$item" '.items[] | select(.id == $id and .status == "completed" and .removedAt == null)' <<<"$history_after_complete" >/dev/null
+requeued=$(api_post "queue/$item/requeue" '{}')
+jq -e '.item.status == "queued"' <<<"$requeued" >/dev/null
+reopened=$(api_post "queue/$item/open" '{}')
+jq -e '.item.status == "in_review"' <<<"$reopened" >/dev/null
+removed=$(curl -fsS -b "$cookie" -H "Origin: $origin" -H 'content-type: application/json' -X DELETE -d '{"reason":"Fixture lifecycle removal"}' "$origin/api/queue/$item")
+jq -e '.item.removedAt != null and .item.removedReason == "Fixture lifecycle removal"' <<<"$removed" >/dev/null
+history_after_remove=$(api_get 'queue?history=true')
+jq -e --arg id "$item" '.items[] | select(.id == $id and .removedAt != null)' <<<"$history_after_remove" >/dev/null
 
 # Restarting resets only live fixture SDK sessions. It must retain the saved
 # transcript and a read must never replay a prompt.
