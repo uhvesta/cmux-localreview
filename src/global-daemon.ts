@@ -1,13 +1,12 @@
 #!/usr/bin/env bun
 import { createHash } from "node:crypto";
 import { existsSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type Express, type Request, type Response } from "express";
 
 import { openDb } from "./server/db.ts";
-import { daemonDbPath, ensureDaemonDirectories, newDaemonToken, writeDiscovery } from "./server/daemonPaths.ts";
+import { daemonDbPath, ensureDaemonDirectories, localreviewDataDir, newDaemonToken, writeDiscovery } from "./server/daemonPaths.ts";
 import { createWorkspaceSnapshot } from "./server/snapshots.ts";
 import { addFeedback, decideQueueItem, decisionHistoryForItem, enqueue, feedbackForItem, getQueueItem, listQueue, markFeedbackDelivered, openNext, refreshRemoteQueue, requeueQueueItem, reorderQueue, updateAcpState, type QueueFeedback, type QueueStatus } from "./server/queueStore.ts";
 import { buildWorkspaceApp, type WorkspaceApp } from "./server/app.ts";
@@ -270,7 +269,10 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
   const activate = async (workspacePath: string, base?: string, defaultTerminalAgentId?: string) => {
     if (active?.rootPath === workspacePath) return active;
     if (active) await active.stop();
-    const workspaceDb = openDb(join(homedir(), ".local", "share", "cmux-localreview", `${createHash("sha256").update(workspacePath).digest("hex").slice(0, 16)}.db`));
+    // Keep review-local state next to the daemon database. In particular this
+    // makes an isolated CMUX_LOCALREVIEW_DATA_DIR a complete isolation
+    // boundary for demos, tests, and disposable remote workers.
+    const workspaceDb = openDb(join(localreviewDataDir(), "workspaces", `${createHash("sha256").update(workspacePath).digest("hex").slice(0, 16)}.db`));
     workspaceDb.query(`INSERT INTO workspace(id,root_path,created_at) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET root_path=excluded.root_path`).run(workspacePath, Date.now());
     const workspace = await buildWorkspaceApp({
       workspaceRoot: workspacePath,

@@ -2,6 +2,14 @@
 
 `cmux-localreview` is a local multi-repository review UI with persistent comments, `/btw`, and a global local-review queue.
 
+## Guides
+
+- [Agent guide](docs/AGENT-GUIDE.md) — operating model, safe agent workflows, handoffs, and review boundaries.
+- [FAQ](docs/FAQ.md) — concise setup, recovery, Copilot/ACP, GitHub, and remote-daemon answers.
+- [Setup](docs/SETUP.md) — macOS/Linux configuration, Copilot skills, remote nodes, and security boundaries.
+- [Demo and source install](docs/DEMO.md) — disposable browser demo plus a user-prefix CLI installation flow.
+- [Troubleshooting](docs/TROUBLESHOOTING.md) — actionable recovery for auth, diff, Copilot, GitHub, cmux, and SSH states.
+
 ## Common workflow
 
 ```sh
