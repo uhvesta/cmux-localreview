@@ -93,6 +93,7 @@ export class AskService {
   private readonly realWorkspaceRoot: string;
   private client: CopilotClient | undefined;
   private readonly active = new Map<string, ActiveAsk>();
+  private readonly initializing = new Set<string>();
   // The browser receives SSE `started` before a cold Copilot runtime has
   // necessarily created its session. Remember an immediate Stop so it wins
   // once initialization completes instead of misleadingly returning false.
@@ -150,6 +151,7 @@ export class AskService {
       await session.disconnect().catch(() => undefined);
     }
     this.active.clear();
+    this.initializing.clear();
     this.pendingAborts.clear();
     await this.client?.stop();
     this.client = undefined;
@@ -157,10 +159,14 @@ export class AskService {
 
   async abort(conversationId: string): Promise<boolean> {
     const active = this.active.get(conversationId);
-    if (!active?.sending) {
+    // Stop may win while a cold SDK session is being created. Once a turn is
+    // idle, however, Stop must be a no-op: recording a latent abort there
+    // would silently cancel the user's *next* question.
+    if (!active && this.initializing.has(conversationId)) {
       this.pendingAborts.add(conversationId);
       return true;
     }
+    if (!active?.sending) return false;
     await active.session.abort();
     return true;
   }
@@ -223,7 +229,10 @@ export class AskService {
   ): Promise<{ messageId: number; content: string; aborted: boolean }> {
     const conversation = getAskConversation(this.db, conversationId);
     if (!conversation) throw new Error("Unknown /ask conversation");
-    const active = await this.sessionFor(conversationId);
+    this.initializing.add(conversationId);
+    let active: ActiveAsk;
+    try { active = await this.sessionFor(conversationId); }
+    finally { this.initializing.delete(conversationId); }
     if (this.pendingAborts.delete(conversationId)) {
       const assistant = insertAskMessage(this.db, {
         conversationId,

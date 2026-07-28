@@ -287,4 +287,15 @@ describe("/ask HTTP integration with an injected Copilot boundary", () => {
       db.close();
     }
   });
+
+  test("does not let a late Stop cancel the next /ask prompt", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const conversation = createAskConversation(db, {});
+    const service = new AskService(db, temporaryWorkspace());
+    try {
+      expect(await service.abort(conversation.id)).toBe(false);
+      expect((service as unknown as { pendingAborts: Set<string> }).pendingAborts.has(conversation.id)).toBe(false);
+    } finally { await service.close(); db.close(); }
+  });
 });
