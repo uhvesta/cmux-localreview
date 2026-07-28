@@ -1,0 +1,18 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+# embedsrcs makes staged Vite files visible to rules_go's //go:embed action.
+# The checked-in bootstrap index keeps `bazel build //...` usable before the
+# release staging target has run; release builds stage the full Vite tree.
+go_library(
+    name = "webassets",
+    srcs = ["webassets.go"],
+    embedsrcs = glob(["dist/**"]),
+    importpath = "github.com/uhvesta/cmux-localreview/internal/webassets",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "webassets_test",
+    srcs = ["webassets_test.go"],
+    embed = [":webassets"],
+)

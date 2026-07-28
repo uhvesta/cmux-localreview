@@ -31,6 +31,7 @@ import (
 	"github.com/uhvesta/cmux-localreview/internal/githubauth"
 	queueStore "github.com/uhvesta/cmux-localreview/internal/queue"
 	"github.com/uhvesta/cmux-localreview/internal/store"
+	"github.com/uhvesta/cmux-localreview/internal/webassets"
 )
 
 const Version = "0.3.0-go-migration"
@@ -1574,7 +1575,7 @@ func nullable(value string) any {
 
 func staticHandler(uiDir string) http.Handler {
 	if uiDir == "" {
-		uiDir = filepath.Join("vendor", "difit", "dist", "client")
+		return webassets.Handler()
 	}
 	if _, err := os.Stat(uiDir); err != nil {
 		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
