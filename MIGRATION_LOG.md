@@ -905,3 +905,31 @@ Not yet claimed:
 - The generated ledger is intentionally all pending until a reviewer performs
   each web and packaged-Electron item with real OAuth/Copilot services. It is
   tooling for the two clean Phase-3 runs, not evidence that either run passed.
+
+## 2026-07-28 — Native boundary and Queue Home recovery hardening
+
+Done:
+
+- Fixed Queue Home so an immutable snapshot open failure retains the daemon's
+  specific recovery instructions instead of replacing them with generic daemon
+  restart advice. Starting a subsequent action clears that stale recovery
+  message.
+- Corrected the release installer contract: `--no-ui-stage` (with the former
+  spelling kept as an alias) skips only redundant UI staging preflight. Bazel
+  remains the owner of the embedded Vite archive, and Bun is explicitly
+  build-time-only rather than an implied release dependency.
+- Strengthened the native runtime-boundary gate to resolve the built Go
+  binaries and execute their help paths with Node and Bun omitted from `PATH`.
+
+Validated:
+
+- `bash scripts/verify-native-runtime-boundary.sh`
+- `cd vendor/difit && bunx vitest run src/client/QueueHome.test.tsx`
+- `cd vendor/difit && bunx tsc --project tsconfig.json --noEmit`
+- `bash scripts/verify-phase4-absence.sh --predelete`
+
+Not yet claimed:
+
+- These recovery and boundary checks reduce Phase-3 dead ends; they do not
+  replace the two authenticated computer-use acceptance passes or authorize
+  the Phase-4 deletion itself.
