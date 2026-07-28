@@ -17,6 +17,7 @@ import (
 type commentImport struct {
 	Type     string `json:"type"`
 	ID       string `json:"id"`
+	Channel  string `json:"channel"`
 	FilePath string `json:"filePath"`
 	Position struct {
 		Side string          `json:"side"`
@@ -84,6 +85,11 @@ func (d *Daemon) importComments(review *workspaceReview, repo reviewRepo, entrie
 		return 0, nil, err
 	}
 	defer tx.Rollback()
+	// Imports mutate the same durable thread collection as browser snapshots,
+	// so they must invalidate a tab's optimistic revision too.
+	if _, _, err := advanceCommentRevision(tx, review.SessionID, repo.DBID, nil); err != nil {
+		return 0, nil, err
+	}
 	now := time.Now().UnixMilli()
 	changed := 0
 	warnings := []string{}
@@ -137,7 +143,8 @@ func (d *Daemon) importComments(review *workspaceReview, repo reviewRepo, entrie
 		message := importedMessage{ID: threadID, Body: strings.TrimSpace(entry.Body), Author: entry.Author, CreatedAt: entry.CreatedAt, UpdatedAt: entry.UpdatedAt}
 		messages, _ := json.Marshal([]importedMessage{message})
 		hash := sha256.Sum256([]byte(entry.CodeSnapshot.Content))
-		result, err := tx.Exec(`INSERT INTO comments(session_id,repo_id,file_path,side,start_line,end_line,body,anchor_content_hash,created_at,updated_at,thread_id,messages_json,anchor_content,channel) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?, 'formal') ON CONFLICT(session_id,repo_id,thread_id) DO NOTHING`, review.SessionID, repo.DBID, entry.FilePath, entry.Position.Side, start, end, message.Body, fmt.Sprintf("%x", hash[:]), now, now, threadID, string(messages), nullable(entry.CodeSnapshot.Content))
+		channel := commentChannel(entry.Channel, []durableCommentMessage{{Body: message.Body}})
+		result, err := tx.Exec(`INSERT INTO comments(session_id,repo_id,file_path,side,start_line,end_line,body,anchor_content_hash,created_at,updated_at,thread_id,messages_json,anchor_content,channel) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(session_id,repo_id,thread_id) DO NOTHING`, review.SessionID, repo.DBID, entry.FilePath, entry.Position.Side, start, end, message.Body, fmt.Sprintf("%x", hash[:]), now, now, threadID, string(messages), nullable(entry.CodeSnapshot.Content), channel)
 		if err != nil {
 			return 0, nil, err
 		}

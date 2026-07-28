@@ -1451,36 +1451,17 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusNotFound, map[string]string{"error": "Unknown review repository"})
 				return
 			}
-			rows, err := d.db.Query(`SELECT thread_id,file_path,side,start_line,end_line,messages_json,created_at,updated_at,anchor_content FROM comments WHERE session_id=? AND repo_id=? ORDER BY created_at,id`, review.SessionID, repo.DBID)
+			threads, err := d.commentThreads(review, repo)
 			if err != nil {
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 				return
 			}
-			defer rows.Close()
-			threads := []map[string]any{}
-			for rows.Next() {
-				var id, file, side string
-				var start, end, created, updated int64
-				var messages, content sql.NullString
-				if err := rows.Scan(&id, &file, &side, &start, &end, &messages, &created, &updated, &content); err != nil {
-					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-					return
-				}
-				var line any = start
-				if start != end {
-					line = map[string]int64{"start": start, "end": end}
-				}
-				var parsed any = []any{}
-				if messages.Valid {
-					_ = json.Unmarshal([]byte(messages.String), &parsed)
-				}
-				thread := map[string]any{"id": id, "filePath": file, "createdAt": time.UnixMilli(created).UTC().Format(time.RFC3339Nano), "updatedAt": time.UnixMilli(updated).UTC().Format(time.RFC3339Nano), "position": map[string]any{"side": side, "line": line}, "messages": parsed}
-				if content.Valid {
-					thread["codeSnapshot"] = map[string]string{"content": content.String}
-				}
-				threads = append(threads, thread)
+			version, err := readCommentRevision(d.db, review.SessionID, repo.DBID)
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
 			}
-			writeJSON(w, http.StatusOK, map[string]any{"version": 0, "threads": threads})
+			writeJSON(w, http.StatusOK, map[string]any{"version": version, "threads": threads})
 			return
 		}
 		if len(parts) == 4 && parts[0] == "repos" && parts[2] == "api" && parts[3] == "comments" && r.Method == http.MethodPost {
@@ -1490,9 +1471,11 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			var payload struct {
-				Threads []struct {
+				BaseVersion *int `json:"baseVersion"`
+				Threads     []struct {
 					ID       string `json:"id"`
 					FilePath string `json:"filePath"`
+					Channel  string `json:"channel"`
 					Position struct {
 						Side string          `json:"side"`
 						Line json.RawMessage `json:"line"`
@@ -1511,6 +1494,22 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 			tx, err := d.db.Begin()
 			if err != nil {
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			version, stale, err := advanceCommentRevision(tx, review.SessionID, repo.DBID, payload.BaseVersion)
+			if err != nil {
+				_ = tx.Rollback()
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			if stale {
+				_ = tx.Rollback()
+				threads, listErr := d.commentThreads(review, repo)
+				if listErr != nil {
+					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": listErr.Error()})
+					return
+				}
+				writeJSON(w, http.StatusConflict, map[string]any{"error": "Comments changed in another request; refresh the local state.", "merged": true, "version": version, "threads": threads})
 				return
 			}
 			for _, thread := range payload.Threads {
