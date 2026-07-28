@@ -20,11 +20,13 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/uhvesta/cmux-localreview/internal/agent"
+	"github.com/uhvesta/cmux-localreview/internal/gitdiff"
 	queueStore "github.com/uhvesta/cmux-localreview/internal/queue"
 	"github.com/uhvesta/cmux-localreview/internal/store"
 )
@@ -255,6 +257,20 @@ func safeWorkspacePath(value string) (string, error) {
 	return filepath.EvalSymlinks(abs)
 }
 
+func (d *Daemon) reviewRepo(id string) (reviewRepo, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.review == nil {
+		return reviewRepo{}, false
+	}
+	for _, repo := range d.review.Repos {
+		if repo.ID == id {
+			return repo, true
+		}
+	}
+	return reviewRepo{}, false
+}
+
 func dereference(value *string) string {
 	if value == nil {
 		return ""
@@ -386,6 +402,33 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"workspaceRoot": review.Root, "repos": items})
 		return
+	}
+	// The React reviewer scopes all repository API calls below this prefix.
+	// Start with `/api/diff`, whose response is the primary rendering contract;
+	// sibling routes (comments/blobs/revisions) are ported independently.
+	if strings.HasPrefix(path, "/repos/") {
+		parts := strings.Split(strings.Trim(path, "/"), "/")
+		if len(parts) == 4 && parts[0] == "repos" && parts[2] == "api" && parts[3] == "diff" && r.Method == http.MethodGet {
+			repo, ok := d.reviewRepo(parts[1])
+			if !ok {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "Unknown review repository"})
+				return
+			}
+			selection := gitdiff.Selection{BaseCommitish: r.URL.Query().Get("base"), TargetCommitish: r.URL.Query().Get("target"), IgnoreWhitespace: r.URL.Query().Get("ignoreWhitespace") == "true"}
+			if raw := r.URL.Query().Get("contextLines"); raw != "" {
+				if value, err := strconv.Atoi(raw); err == nil && value >= 0 && value <= 10_000 {
+					selection.ContextLines = &value
+				}
+			}
+			response, err := gitdiff.Parse(repo.AbsolutePath, selection)
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			response.RepositoryID = repo.ID
+			writeJSON(w, http.StatusOK, response)
+			return
+		}
 	}
 	if path == "/federation/queue" && r.Method == http.MethodGet {
 		// The local view never fabricates remote data. Federation transport is

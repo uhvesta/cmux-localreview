@@ -7,6 +7,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//internal/agent",
+		"//internal/gitdiff",
         "//internal/queue",
         "//internal/store",
     ],

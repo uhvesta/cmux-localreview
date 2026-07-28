@@ -238,6 +238,15 @@ func TestWorkspaceActivationDiscoversNestedRepositories(t *testing.T) {
 				t.Fatalf("git %v: %v %s", arguments, err, output)
 			}
 		}
+		if err := os.WriteFile(filepath.Join(repo, "review.txt"), []byte("first\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if output, err := exec.Command("git", "-C", repo, "add", "review.txt").CombinedOutput(); err != nil {
+			t.Fatalf("git add: %v %s", err, output)
+		}
+		if output, err := exec.Command("git", "-C", repo, "commit", "-m", "initial").CombinedOutput(); err != nil {
+			t.Fatalf("git commit: %v %s", err, output)
+		}
 	}
 	dir := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -278,5 +287,37 @@ func TestWorkspaceActivationDiscoversNestedRepositories(t *testing.T) {
 	response.Body.Close()
 	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "tools/child") {
 		t.Fatalf("repos status=%d body=%s", response.StatusCode, body)
+	}
+	var repositories struct {
+		Repos []struct {
+			ID                    string `json:"id"`
+			WorkspaceRelativePath string `json:"workspaceRelativePath"`
+		} `json:"repos"`
+	}
+	if err := json.Unmarshal(body, &repositories); err != nil {
+		t.Fatal(err)
+	}
+	if len(repositories.Repos) != 2 || repositories.Repos[0].ID == "" {
+		t.Fatalf("repositories=%s", body)
+	}
+	childID := ""
+	for _, repo := range repositories.Repos {
+		if repo.WorkspaceRelativePath == "tools/child" {
+			childID = repo.ID
+		}
+	}
+	if childID == "" {
+		t.Fatalf("child repository missing: %s", body)
+	}
+	req, _ = http.NewRequest(http.MethodGet, base+"/api/repos/"+childID+"/api/diff", nil)
+	req.Header.Set("Authorization", "Bearer "+discovered.Token)
+	response, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "review.txt") {
+		t.Fatalf("diff status=%d body=%s", response.StatusCode, body)
 	}
 }
