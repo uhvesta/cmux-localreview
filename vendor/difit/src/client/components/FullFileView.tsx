@@ -181,7 +181,9 @@ export function FullFileView({ file, threads, onAddComment }: FullFileViewProps)
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          transport: 'acp',
+          // The native daemon deliberately removed ACP and terminal injection.
+          // /btw is a durable, isolated Copilot SDK conversation.
+          transport: 'copilot',
           repoId,
           filePath: file.path,
           startLine: lineNumber,
@@ -190,13 +192,15 @@ export function FullFileView({ file, threads, onAddComment }: FullFileViewProps)
         }),
       });
       if (!res.ok) throw new Error(`Failed to ask: ${res.status}`);
-      setAskingBtwLine(null);
       setBtwDraft('');
       setBtwStatus('sent');
     } catch {
       setBtwStatus('error');
     } finally {
-      setTimeout(() => setBtwStatus('idle'), 2000);
+      window.setTimeout(() => {
+        setBtwStatus('idle');
+        setAskingBtwLine(null);
+      }, 2000);
     }
   };
 
@@ -405,6 +409,8 @@ export function FullFileView({ file, threads, onAddComment }: FullFileViewProps)
                           >
                             {btwStatus === 'sending' ? 'Asking…' : 'Ask'}
                           </button>
+                          {btwStatus === 'sent' && <span className="text-xs text-blue-300">Sent to Copilot — open /btw for the streamed reply.</span>}
+                          {btwStatus === 'error' && <span className="text-xs text-red-400">Copilot could not start this /btw question.</span>}
                         </div>
                       )}
                       {askRange && askTargetLine === row.lineNumber && (

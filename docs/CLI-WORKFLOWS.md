@@ -268,9 +268,11 @@ scripts/verify-e2e-copilot-fixture.sh
 ```
 
 It covers queue/open, the browser capability exchange, live SSE deltas,
-per-conversation model settings, cancellation, separate `/btw`, and restart
-transcript persistence. It does not represent an OAuth success or validate an
-external Copilot service; run the dedicated real-auth pass separately.
+per-conversation model settings, the exact inline `/ask` create/reopen/no-
+replay sequence and anchor persistence, cancellation, separate `/btw`, and
+restart transcript persistence. It does not represent an OAuth success or
+validate an external Copilot service; run the dedicated real-auth pass
+separately.
 
 ## File-change reload workflow
 

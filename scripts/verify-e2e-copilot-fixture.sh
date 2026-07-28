@@ -69,6 +69,25 @@ repo_id=$(jq -r '.repos[0].id' <<<"$opened")
 models=$(api_get ask/models)
 jq -e '.state == "ready" and .source == "sdk" and (.models | length == 3)' <<<"$models" >/dev/null
 
+# Follow the inline React form's precise create → subscribe → POST sequence.
+# Reopening the same location must reuse the persisted shared conversation,
+# and its GET must not create or replay an additional SDK prompt.
+inline=$(api_post ask/inline-conversations "{\"context\":{\"repoId\":\"$repo_id\",\"filePath\":\"main.go\",\"workspacePath\":\"main.go\",\"side\":\"current\",\"startLine\":3,\"endLine\":3,\"selectedCode\":\"const after = 2\"}}")
+inline_id=$(jq -r .conversation.id <<<"$inline")
+[[ "$inline_id" != null && -n "$inline_id" ]]
+curl -sSN --max-time 5 -b "$cookie" "$origin/api/ask/conversations/$inline_id/events" >"$data/inline-stream.txt" &
+inline_stream_pid=$!
+sleep .1
+api_post "ask/conversations/$inline_id/messages" "{\"body\":\"Explain this selected line.\",\"location\":{\"repoId\":\"$repo_id\",\"filePath\":\"main.go\",\"workspacePath\":\"main.go\",\"side\":\"current\",\"startLine\":3,\"endLine\":3,\"selectedCode\":\"const after = 2\"}}" >/dev/null
+wait "$inline_stream_pid" || true
+grep -q 'event: delta' "$data/inline-stream.txt"
+inline_transcript=$(api_get "ask/conversations/$inline_id")
+jq -e '.messages | length == 2 and .[0].location.filePath == "main.go" and .[0].location.startLine == 3 and .[1].pending == false' <<<"$inline_transcript" >/dev/null
+inline_reopen=$(api_post ask/inline-conversations "{\"context\":{\"repoId\":\"$repo_id\",\"filePath\":\"main.go\",\"workspacePath\":\"main.go\",\"side\":\"current\",\"startLine\":3,\"endLine\":3,\"selectedCode\":\"const after = 2\"}}")
+jq -e --arg id "$inline_id" '.reused == true and .conversation.id == $id' <<<"$inline_reopen" >/dev/null
+inline_after_reopen=$(api_get "ask/conversations/$inline_id")
+jq -e '.messages | length == 2' <<<"$inline_after_reopen" >/dev/null
+
 conversation=$(api_post ask/conversations '{"model":"gpt-5"}')
 conversation_id=$(jq -r .conversation.id <<<"$conversation")
 api_post "ask/conversations/$conversation_id/settings" '{"model":"claude-sonnet-4.6","reasoningEffort":"high","contextTier":"long_context"}' >/dev/null
@@ -114,5 +133,7 @@ start_daemon
 authenticate
 after_restart=$(api_get "ask/conversations/$conversation_id")
 jq -e '.messages | length == 2 and .[1].pending == false and (.[1].body | contains("claude-sonnet-4.6"))' <<<"$after_restart" >/dev/null
+inline_after_restart=$(api_get "ask/conversations/$inline_id")
+jq -e '.messages | length == 2 and .[0].location.selectedCode == "const after = 2" and .[1].pending == false' <<<"$inline_after_restart" >/dev/null
 
 echo "E2E Copilot fixture acceptance passed"
