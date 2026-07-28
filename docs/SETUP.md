@@ -115,8 +115,8 @@ localreview github-app guide
 localreview github-app configure --capability read --client-id YOUR_CLIENT_ID
 localreview github-app connect --capability read
 
-# Device is the default; it works on a headless host too.
-localreview github-app connect --capability copilot
+# Browser loopback is the default. Use device flow only for headless/SSH hosts.
+localreview github-app connect --capability copilot --device
 localreview auth status
 ```
 

@@ -58,12 +58,12 @@ not proof that the question was delivered. See [Troubleshooting](TROUBLESHOOTING
 
 ## Do I need `gh` or a personal access token?
 
-No. Native authentication uses dedicated GitHub OAuth App client credentials
-separated into `read`, `write`, and `copilot` capabilities, stored only in the
-OS secret store. The `github-app` command is a compatibility name, not an
-installation-token integration. The browser gets neither OAuth tokens nor a
-token stored in web storage. `gh`, PATs, environment variables, and existing
-Copilot CLI login are not fallbacks.
+No. Native authentication is self-hosted: operators bring dedicated GitHub
+OAuth App client registrations for `read`, `write`, and `copilot`; only their
+issued tokens are stored in the OS secret store. The `github-app` command is a
+compatibility name, not an installation-token integration. The browser gets
+neither OAuth tokens nor a token stored in web storage. `gh`, PATs,
+environment variables, and existing Copilot CLI login are not fallbacks.
 
 ## Can I inspect a GitHub PR without publishing feedback?
 

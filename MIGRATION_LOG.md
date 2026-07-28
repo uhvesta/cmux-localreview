@@ -510,6 +510,31 @@ Not yet claimed:
   account. The first live account pass requires a user-visible GitHub consent
   page and cannot safely be fabricated by the fixture.
 
+## 2026-07-28 — Live self-hosted OAuth device-flow pass
+
+Validated against a newly created, operator-owned GitHub OAuth App (PKCE
+loopback callback registered and Device Flow enabled), rather than `gh`, a
+PAT, or a shared token:
+
+- Started the native daemon from a fresh temporary data directory, configured
+  only the OAuth App's public client ID, and completed GitHub's real device
+  activation and consent screens as `@uhvesta`.
+- The native auth poll reported the account connected, and the issued access
+  token was present only under the daemon's macOS Keychain service/account.
+- Logout removed the local Keychain credential and returned the capability to
+  an unauthenticated idle state. GitHub-side consent remains independently
+  revocable from GitHub, as documented.
+- Rebuilt the macOS Electron archive after reclaiming only the rebuildable
+  Bazel cache; codesign verification passed and all four native release
+  archives passed structural/checksum validation.
+
+Not yet claimed:
+
+- The in-app automation surface blocks the final `/login/oauth/authorize`
+  callback redirect, so the real browser-loopback click-through still needs a
+  clean desktop-browser pass. Device flow, which is the SSH/headless fallback,
+  is now live-validated end to end.
+
 ## 2026-07-28 — Release archive structural gate
 
 Done:

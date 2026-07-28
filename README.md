@@ -46,9 +46,10 @@ does not modify shell profiles or copy credentials. See
   refreshing a review reads history only; it never resends a question. Formal
   feedback is delivered only through the explicit **Send through Copilot**
   action.
-- Authentication uses cmux-localreview’s dedicated OAuth credentials in the
-  OS secret store—not `gh`, PATs, environment variables, or a Copilot CLI
-  login. Read, write, and Copilot are separate capabilities.
+- Authentication is self-hosted: each operator can bring dedicated GitHub
+  OAuth client registrations and the daemon stores only that operator's issued
+  tokens in the OS secret store—not `gh`, PATs, environment variables, or a
+  Copilot CLI login. Read, write, and Copilot are separate capabilities.
 
 ## Guides
 
