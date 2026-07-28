@@ -97,3 +97,43 @@ Not yet claimed:
 
 - This is one reviewer-file surface, not reviewer E2E parity. Browser and
   Electron validation remain deferred until the Go HTTP route set is complete.
+
+## 2026-07-28 — Phase 1/2 hardening increment
+
+Done:
+
+- Made the parity verification gate non-mutating. It now captures each frozen
+  TypeScript corpus into two temporary files, checks them for repeatability,
+  and checks the result against the committed oracle. Running the verifier can
+  no longer silently replace `testdata/parity/ts-final`.
+- Added Go reviewer support for portable comment imports, including anchored
+  thread/reply validation, deterministic import IDs, reply deduplication,
+  tombstone handling, and warnings for replies whose parent cannot be found.
+- Added a dedicated `/ask` runtime seam with only the daemon-owned Copilot
+  credential capability, safe model-result/SSE helpers, and no ambient CLI or
+  `gh` credential path. It is not yet connected to the live message route.
+- Added the minimal Electron sidecar shell. It starts `localreviewd`, waits
+  for loopback health, exchanges the capability via a URL fragment, prevents
+  renderer Node access, and opens external links outside Electron. The daemon
+  now supports `--parent-pid`; Electron supplies it and the daemon exits if
+  the parent disappears.
+- Extended `docs/CLI-WORKFLOWS.md` with authoritative native daemon, desktop,
+  queue, setup-skill, auth, reproduction, watcher, and current remote-status
+  instructions.
+
+Validated:
+
+- `go test ./...`
+- `bazel test //...` (15 targets)
+- `bash scripts/verify-parity-fixtures.sh`
+- `node --check desktop/main.mjs`
+
+Not yet claimed:
+
+- The Electron package has syntax coverage only; a packaged macOS/Linux
+  launch is still required.
+- `/ask` persistence and cancellation are present, but the live SDK streaming
+  message route, authenticated model catalogue, and complete question-set send
+  behavior still need end-to-end wiring and browser validation.
+- Remote PR, federation, and the remaining frozen API surfaces are not yet
+  production-complete in Go.
