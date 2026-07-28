@@ -13,6 +13,23 @@ It also fails if any frozen fixture has neither an executable replay nor a
 specific, reviewable exception. Run `scripts/verify-go-parity-matrix.sh` to
 exercise the Go and Bazel forms of that gate.
 
+## Release-time verification (no TypeScript runtime)
+
+After Phase 4, this directory is an archived compatibility corpus, not a
+regeneration target. Run:
+
+```sh
+bash scripts/verify-frozen-parity-corpus.sh
+bash scripts/verify-go-parity-matrix.sh
+```
+
+The first command checks both committed JSON captures against SHA-256 pins,
+their provenance, and fixture uniqueness using Go and Bazel only. It never
+executes `src/`, Bun, Node, or either capture script. The second command makes
+that gate mandatory before replaying the native HTTP matrix. The old
+`scripts/verify-parity-fixtures.sh` is retained only until Phase 4 to prove a
+frozen TypeScript recapture is deterministic; it must not be a release gate.
+
 Regenerate this corpus only when a frozen TypeScript bug fix deliberately
 changes its public contract. An exception is not evidence of parity: it is a
 visible debt record that must be removed when that endpoint is ported.

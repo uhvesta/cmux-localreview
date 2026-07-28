@@ -1,5 +1,6 @@
 exports_files([
     "verify-go-parity-matrix.sh",
+    "verify-frozen-parity-corpus.sh",
     "legacy-bin.mjs",
     "stage-ui-assets.sh",
 ])

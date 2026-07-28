@@ -291,6 +291,12 @@ session forwarding is required or supported.
 ```sh
 go test ./...
 bazel test //...
+
+# Release/native parity verification: does not execute the retired TS server.
+bash scripts/verify-frozen-parity-corpus.sh
+bash scripts/verify-go-parity-matrix.sh
+
+# Pre-Phase-4 oracle determinism only (requires frozen TS/Bun sources).
 bash scripts/verify-parity-fixtures.sh
 
 # Build the embedded browser UI before a distributable daemon build.

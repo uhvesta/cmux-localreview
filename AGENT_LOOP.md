@@ -12,7 +12,11 @@ Each iteration, do exactly one meaningful increment, leave the tree green, and r
    - **Phase 1**: port to parity in the spec's order (blob/expansion → full-file projection → comments remainder → sessions/export/send-to-cmux → wsHub + watching → Copilot ask/btw + model selection → GitHub auth + secret store → remote PR/federation → CLI subcommands). Each port lands with Go unit tests AND its parity fixtures passing against the Go daemon. Validate the Copilot SDK token→session→stream path as early as it becomes reachable.
    - **Phase 2**: cutover — `localreview` CLI subcommands complete, UI embedded via `go:embed`, Bazel targets (`bazel build //...`, `bazel test //...` green), Electron shell in `desktop/` spawning the sidecar, release archive rules.
    - **Phase 3**: validation loop (below).
-   - **Phase 4**: delete `src/`, prune package.json, update docs.
+   - **Phase 4**: first run `scripts/verify-frozen-parity-corpus.sh` and
+     `scripts/verify-go-parity-matrix.sh` without Bun; then delete `src/`,
+     capture scripts, server/CLI dependencies, and obsolete bins while keeping
+     the immutable `testdata/parity/ts-final` corpus. Follow
+     `docs/PHASE4-DELETION-READINESS.md` exactly and add an absence gate.
 3. **Implement it.** Small, reviewable commits with the repo's existing commit style. Preserve env vars, data-dir layout, DB schemas, and WebSocket message shapes exactly — the React UI must keep working unmodified except where the migration spec says otherwise (API base, model picker).
 4. **Validate the increment.** Minimum bar every iteration: `go test ./...` and the relevant parity fixtures green, plus `bun test` for any still-live TS (until Phase 4). For increments that change user-visible behavior, ALSO do a live check: start `localreviewd` against the fixture workspace and drive the real UI with the Claude-in-Chrome computer-use tools (navigate, click, read the page) to confirm the feature works in the browser — a screenshot-verified pass, not just HTTP assertions.
 5. **Journal and commit.** Append the `MIGRATION_LOG.md` entry (done / decided / next), commit everything. Never end an iteration with uncommitted work or a red tree.

@@ -3,3 +3,9 @@ filegroup(
     srcs = ["http.json"],
     visibility = ["//visibility:public"],
 )
+
+filegroup(
+    name = "remote_pr_fixture",
+    srcs = ["remote-pr.json"],
+    visibility = ["//visibility:public"],
+)
