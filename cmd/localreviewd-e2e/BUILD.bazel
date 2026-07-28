@@ -16,6 +16,5 @@ go_library(
 go_binary(
     name = "localreviewd-e2e",
     embed = [":localreviewd_e2e_lib"],
-    gotags = ["bazel_ui_archive"],
     visibility = ["//visibility:public"],
 )

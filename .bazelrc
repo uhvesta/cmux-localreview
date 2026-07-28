@@ -3,3 +3,7 @@
 # those explicit targets find the Bun/Node installation selected by the
 # developer or release runner; Go compilation remains fully declared.
 build --action_env=PATH
+# The release daemon always embeds the renderer produced by the declared Vite
+# genrule. Direct `go test` deliberately selects the tiny source fallback so
+# inner-loop Go tests do not require Bun.
+build --define gotags=bazel_ui_archive

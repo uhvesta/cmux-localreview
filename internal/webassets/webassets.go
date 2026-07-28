@@ -7,23 +7,25 @@
 package webassets
 
 import (
-	"embed"
 	"io/fs"
 	"net/http"
 	"path"
 	"strings"
+	"testing/fstest"
 )
 
-// Files holds the checked-in bootstrap renderer used only for direct Go inner
-// loop tests. Release and Bazel artifacts always embed the declared Vite build
-// in webassets_bazel.go.
-//
-//go:embed all:dist
-var Files embed.FS
+// Files holds a deliberately tiny direct-Go fallback. The supported developer
+// and release path is Bazel, which selects webassets_bazel.go and embeds the
+// current declared Vite bundle. Keeping this fallback in Go source means
+// `go test ./...` remains a fast, dependency-free inner loop rather than
+// accidentally serving stale checked-in hashed assets.
+var Files fs.FS = fstest.MapFS{
+	"index.html": &fstest.MapFile{Data: []byte("<!doctype html><html><body><div id=\"root\">CMUX Local Review requires a Bazel-built UI.</div></body></html>")},
+}
 
 // FS returns the embedded Vite distribution rooted at its index.html.
 func FS() (fs.FS, error) {
-	return fs.Sub(Files, "dist")
+	return Files, nil
 }
 
 // Handler serves static files and applies an SPA fallback only to route-like

@@ -42,5 +42,4 @@ go_test(
     name = "webassets_test",
     srcs = ["webassets_test.go"],
     embed = [":webassets"],
-    gotags = ["bazel_ui_archive"],
 )
