@@ -1996,11 +1996,13 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 		remoteReview, publishErr := d.publishRemoteReview(r.Context(), item, githubreview.Comment, input.Body)
 		if publishErr != nil {
 			status, code := http.StatusBadGateway, "github_review_publish_failed"
+			recovery := "Confirm the dedicated GitHub PR read and publish connections in Queue Home, then retry. This did not publish a review or change the local queue item."
 			var stale *githubreview.StaleHeadError
 			if errors.As(publishErr, &stale) {
 				status, code = http.StatusConflict, "github_review_publish_stale_head"
+				recovery = "The pull request head changed. Click Refresh PR to capture the new immutable snapshot, review the updated diff, then publish again. No review was published."
 			}
-			writeJSON(w, status, map[string]any{"error": publishErr.Error(), "code": code, "published": false, "localDecisionSaved": false, "item": item})
+			writeJSON(w, status, map[string]any{"error": publishErr.Error(), "code": code, "recovery": recovery, "published": false, "localDecisionSaved": false, "item": item})
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"item": item, "remoteReview": remoteReview, "published": true, "localDecisionSaved": false})
@@ -2053,11 +2055,13 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 			remoteReview, publishErr := d.publishRemoteReview(r.Context(), item, kind, input.Body)
 			if publishErr != nil {
 				status, code := http.StatusBadGateway, "github_review_publish_failed"
+				recovery := "Confirm the dedicated GitHub PR read and publish connections in Queue Home, then retry. No GitHub review or local decision was saved."
 				var stale *githubreview.StaleHeadError
 				if errors.As(publishErr, &stale) {
 					status, code = http.StatusConflict, "github_review_publish_stale_head"
+					recovery = "The pull request head changed. Click Refresh PR to capture the new immutable snapshot, review the updated diff, then publish again. No GitHub review or local decision was saved."
 				}
-				writeJSON(w, status, map[string]any{"error": publishErr.Error(), "code": code, "publishRequested": true, "localDecisionSaved": false, "item": item})
+				writeJSON(w, status, map[string]any{"error": publishErr.Error(), "code": code, "recovery": recovery, "publishRequested": true, "localDecisionSaved": false, "item": item})
 				return
 			}
 			updated, decideErr := queueStore.Decide(d.db, parts[1], queueStore.Status(input.Decision), input.Body)

@@ -26,12 +26,32 @@ describe('Queue Home lifecycle recovery', () => {
     vi.stubGlobal('fetch', fetchMock);
     render(<QueueHome />);
 
-    const alert = await screen.findByRole('alert');
-    expect(alert.textContent).toContain('The local review queue is unavailable.');
+    const alert = await screen.findByText('The local review queue is unavailable.');
+    expect(alert.parentElement?.textContent).toContain('The local review queue is unavailable.');
     expect(screen.getByRole('button', { name: 'Retry Queue Home' })).not.toBeNull();
     expect(screen.getByText('localreview daemon status')).not.toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Retry Queue Home' }));
     await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(4));
+  });
+
+  it('keeps optional GitHub and federation failures actionable instead of silently hiding them', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.includes('/api/github/auth/status')) return Promise.resolve({ ok: false, status: 503, json: async () => ({ error: 'secure store is locked' }) });
+      if (path.includes('/api/queue')) return Promise.resolve({ ok: true, status: 200, json: async () => ({ items: [] }) });
+      if (path.includes('/api/workspaces')) return Promise.resolve({ ok: true, status: 200, json: async () => ({ activeWorkspace: null }) });
+      if (path.includes('/api/federation/queue')) return Promise.resolve({ ok: false, status: 503, json: async () => ({ error: 'remote tunnel unavailable' }) });
+      if (path.includes('/api/federation/nodes')) return Promise.resolve({ ok: false, status: 503, json: async () => ({ error: 'remote node registry unavailable' }) });
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({}) });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<QueueHome />);
+
+    expect(await screen.findByText(/secure store is locked/)).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Retry GitHub status' })).not.toBeNull();
+    expect(screen.getByText(/remote tunnel unavailable/)).not.toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry remote nodes' }));
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(5));
   });
 
   it('preserves the daemon-provided immutable snapshot recovery when opening fails', async () => {

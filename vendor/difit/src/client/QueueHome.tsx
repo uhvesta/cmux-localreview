@@ -132,6 +132,11 @@ export function QueueHome() {
   const [activeWorkspace, setActiveWorkspace] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [errorRecovery, setErrorRecovery] = useState<string | null>(null);
+  // Queue Home can still be useful when an optional integration is down. Keep
+  // those failures visible next to the affected feature instead of silently
+  // rendering an empty remote/auth section (which looks like data loss).
+  const [federationError, setFederationError] = useState<string | null>(null);
+  const [githubAuthError, setGithubAuthError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [opening, setOpening] = useState(false);
   const [remoteUrl, setRemoteUrl] = useState('');
@@ -162,7 +167,7 @@ export function QueueHome() {
 
   useEffect(() => { captureDaemonTokenFromLocation(); }, []);
   const refresh = useCallback(async () => {
-    setLoading(true); setError(null); setErrorRecovery(null);
+    setLoading(true); setError(null); setErrorRecovery(null); setFederationError(null);
     try {
       const [queueResponse, workspacesResponse, federationResponse, nodesResponse] = await Promise.all([daemonFetch(`/api/queue${showHistory ? '?history=true' : ''}`), daemonFetch('/api/workspaces'), daemonFetch('/api/federation/queue'), daemonFetch('/api/federation/nodes')]);
       if (!queueResponse.ok || !workspacesResponse.ok) {
@@ -175,7 +180,13 @@ export function QueueHome() {
       const workspaces = (await workspacesResponse.json()) as { activeWorkspace?: string | null };
       setItems(Array.isArray(queue.items) ? queue.items : []); setActiveWorkspace(workspaces.activeWorkspace ?? null);
       setLocalPath((current) => current || workspaces.activeWorkspace || '');
-      if (federationResponse.ok) { const aggregate = (await federationResponse.json()) as { nodes?: FederationQueue[] }; setFederation(Array.isArray(aggregate.nodes) ? aggregate.nodes : []); } else setFederation([]);
+      const federationFailures: string[] = [];
+      if (federationResponse.ok) { const aggregate = (await federationResponse.json()) as { nodes?: FederationQueue[] }; setFederation(Array.isArray(aggregate.nodes) ? aggregate.nodes : []); }
+      else {
+        const body = (await federationResponse.json().catch(() => null)) as { error?: string } | null;
+        setFederation([]);
+        federationFailures.push(body?.error ?? 'Could not load remote daemon queues.');
+      }
       if (nodesResponse.ok) {
         const nodeData = (await nodesResponse.json()) as { nodes?: FederationNode[] };
         const listed = Array.isArray(nodeData.nodes) ? nodeData.nodes : [];
@@ -186,7 +197,12 @@ export function QueueHome() {
           return { ...node, runtime: data.runtime };
         }));
         setNodes(withRuntime);
+      } else {
+        const body = (await nodesResponse.json().catch(() => null)) as { error?: string } | null;
+        setNodes([]);
+        federationFailures.push(body?.error ?? 'Could not load saved remote daemon nodes.');
       }
+      if (federationFailures.length) setFederationError(`${federationFailures.join(' ')} Saved nodes and queue items were not changed. Retry Remote nodes when the daemon is available.`);
     } catch (err) { setError(err instanceof Error ? err.message : 'Unable to load the queue.'); } finally { setLoading(false); }
   }, [showHistory]);
   useEffect(() => { void refresh(); }, [refresh]);
@@ -195,8 +211,14 @@ export function QueueHome() {
     setGithubAuthLoading(true);
     try {
       const response = await daemonFetch('/api/github/auth/status');
-      if (!response.ok) return;
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(body?.error ?? 'GitHub connection status is unavailable.');
+      }
       setGithubAuth((await response.json()) as GitHubAuthStatus);
+      setGithubAuthError(null);
+    } catch (err) {
+      setGithubAuthError(`${err instanceof Error ? err.message : 'GitHub connection status is unavailable.'} Queue Home remains usable; retry this status before configuring or disconnecting a GitHub connection.`);
     } finally { setGithubAuthLoading(false); }
   }, []);
   useEffect(() => { void refreshGitHubAuth(); }, [refreshGitHubAuth]);
@@ -255,7 +277,14 @@ export function QueueHome() {
 
   const disconnectGitHubApp = useCallback(async (capability: GitHubCapability) => {
     setGithubAction(capability);
-    try { await daemonFetch(`/api/github/auth/${capability}`, { method: 'DELETE' }); await refreshGitHubAuth(); }
+    try {
+      const response = await daemonFetch(`/api/github/auth/${capability}`, { method: 'DELETE' });
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(body?.error ?? 'Could not disconnect this GitHub connection.');
+      }
+      await refreshGitHubAuth();
+    } catch (err) { setError(err instanceof Error ? err.message : 'Could not disconnect this GitHub connection.'); }
     finally { setGithubAction(null); }
   }, [refreshGitHubAuth]);
 
@@ -415,7 +444,9 @@ export function QueueHome() {
       <input value={daemonToken} onChange={(event) => setDaemonToken(event.target.value)} type="password" autoComplete="off" aria-label="Daemon bearer token" placeholder="Daemon token" style={{ flex: 1, minWidth: 180, padding: '7px 8px', borderRadius: 5, border: '1px solid rgba(127,127,127,0.45)', background: 'transparent', color: 'inherit' }} />
       <button type="submit" disabled={!daemonToken.trim()} style={buttonStyle}>Connect</button>
     </form>}
-    {githubAuth && <section aria-label="GitHub OAuth connections" style={{ margin: '0 0 18px', padding: 12, border: '1px solid rgba(127,127,127,0.42)', borderRadius: 8 }}>
+    {(githubAuth || githubAuthError) && <section aria-label="GitHub OAuth connections" style={{ margin: '0 0 18px', padding: 12, border: '1px solid rgba(127,127,127,0.42)', borderRadius: 8 }}>
+      {githubAuthError && <div role="alert" style={{ marginBottom: 10, padding: '8px 9px', borderRadius: 5, border: '1px solid rgba(248,81,73,0.5)', color: '#f85149', fontSize: 12 }}>{githubAuthError} <button onClick={() => void refreshGitHubAuth()} disabled={githubAuthLoading} style={{ ...buttonStyle, marginLeft: 6 }}>{githubAuthLoading ? 'Retrying…' : 'Retry GitHub status'}</button></div>}
+      {githubAuth && <>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}><div><strong>GitHub connections</strong><p style={{ margin: '4px 0 0', fontSize: 12, opacity: 0.74 }}>Dedicated GitHub OAuth connections using PKCE. Browser sign-in is the default; device code is the SSH/headless fallback. The daemon keeps access tokens in the system secret store—this page never receives a GitHub token.</p></div><button onClick={() => void refreshGitHubAuth()} disabled={githubAuthLoading} style={buttonStyle}>{githubAuthLoading ? 'Checking…' : 'Refresh status'}</button></div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(225px, 1fr))', gap: 9, marginTop: 10 }}>
         {(Object.keys(capabilityLabels) as GitHubCapability[]).map((capability) => {
@@ -456,6 +487,7 @@ export function QueueHome() {
       </details>
       {loopbackLogin && <div role="status" style={{ marginTop: 10, padding: 10, border: '1px solid rgba(88,166,255,0.5)', borderRadius: 6, fontSize: 12 }}>Continue <strong>{capabilityLabels[loopbackLogin.capability].title}</strong> in the GitHub browser tab. If it did not open, <a href={loopbackLogin.authorizationUrl} target="_blank" rel="noreferrer">open the secure authorization page</a>. This page will refresh after the loopback callback completes.</div>}
       {deviceCode && <div role="status" style={{ marginTop: 10, padding: 10, border: '1px solid rgba(88,166,255,0.5)', borderRadius: 6, fontSize: 12 }}>Authorize <strong>{capabilityLabels[deviceCode.capability].title}</strong> at <a href={deviceCode.verificationUri} target="_blank" rel="noreferrer">github.com/login/device</a> with code <code style={{ fontWeight: 700, fontSize: 14 }}>{deviceCode.userCode}</code>. This page checks automatically; no token is shown or pasted.</div>}
+      </>}
     </section>}
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 22, alignItems: 'start' }}>
       <section aria-label="Local review queue">
@@ -482,6 +514,7 @@ export function QueueHome() {
         <div style={{ display: 'grid', gap: 10 }}>{remoteItems.map((item) => <QueueCard key={item.id} item={item} onOpenWorkspace={openWorkspace} onRequeue={requeueItem} onRemove={removeQueueItem} />)}</div>
         <section style={{ marginTop: 16, display: 'grid', gap: 10 }} aria-label="Remote daemon nodes">
           <div><h3 style={{ margin: 0, fontSize: 13 }}>Remote daemon nodes</h3><p style={{ margin: '4px 0 0', fontSize: 11, opacity: 0.65 }}>Connect loopback-only remote daemons through an on-demand SSH forward. The daemon keeps the remote capability in secure storage, lazily caches queue/workspace reads, and shows retryable tunnel errors here.</p></div>
+          {federationError && <div role="alert" style={{ padding: '8px 9px', borderRadius: 5, border: '1px solid rgba(248,81,73,0.5)', color: '#f85149', fontSize: 12 }}>{federationError} <button onClick={() => void refresh()} disabled={loading} style={{ ...buttonStyle, marginLeft: 6 }}>{loading ? 'Retrying…' : 'Retry remote nodes'}</button></div>}
           <form onSubmit={addNode} style={{ display: 'grid', gridTemplateColumns: 'minmax(100px, 1fr) minmax(120px, 1fr) 72px minmax(120px, 1fr) auto', gap: 6 }} aria-label="Add remote daemon">
             <input value={nodeLabel} onChange={(event) => setNodeLabel(event.target.value)} placeholder="Name" aria-label="Remote daemon name" required style={{ minWidth: 0, padding: '7px 8px', borderRadius: 5, border: '1px solid rgba(127,127,127,0.45)', background: 'transparent', color: 'inherit' }} />
             <input value={nodeTarget} onChange={(event) => setNodeTarget(event.target.value)} placeholder="user@host" aria-label="SSH target" required style={{ minWidth: 0, padding: '7px 8px', borderRadius: 5, border: '1px solid rgba(127,127,127,0.45)', background: 'transparent', color: 'inherit' }} />

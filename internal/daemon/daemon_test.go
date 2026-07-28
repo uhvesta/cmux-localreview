@@ -617,7 +617,7 @@ func TestRemotePublishStaleHeadSavesNoLocalDecision(t *testing.T) {
 	}
 	body, _ := io.ReadAll(response.Body)
 	response.Body.Close()
-	if response.StatusCode != http.StatusConflict || !strings.Contains(string(body), "github_review_publish_stale_head") || writes != 0 {
+	if response.StatusCode != http.StatusConflict || !strings.Contains(string(body), "github_review_publish_stale_head") || !strings.Contains(string(body), "Click Refresh PR") || writes != 0 {
 		t.Fatalf("status=%d body=%s writes=%d", response.StatusCode, body, writes)
 	}
 	persisted, err := queueStore.Get(d.db, item.ID)

@@ -119,12 +119,15 @@ export function ReviewControlPanel({ collapsed, onToggleCollapsed, refreshNonce 
   const [decisionDestination, setDecisionDestination] = useState<'local' | 'github'>('local');
   const [working, setWorking] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [errorRecovery, setErrorRecovery] = useState<string | null>(null);
+  const [detailWarning, setDetailWarning] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     setError(null);
+    setErrorRecovery(null);
     try {
       const [queueResponse, agentsResponse] = await Promise.all([daemonFetch('/api/queue?history=true'), daemonFetch('/api/agents')]);
       if (!queueResponse.ok || !agentsResponse.ok) {
@@ -147,6 +150,7 @@ export function ReviewControlPanel({ collapsed, onToggleCollapsed, refreshNonce 
   const selected = useMemo(() => queue.find((item) => item.id === selectedId) ?? null, [queue, selectedId]);
 
   const loadDetail = useCallback(async (id: string) => {
+    setDetailWarning(null);
     try {
       const selectedItem = queue.find((item) => item.id === id);
       const [detailResponse, reproduceResponse, remoteResponse] = await Promise.all([
@@ -157,7 +161,12 @@ export function ReviewControlPanel({ collapsed, onToggleCollapsed, refreshNonce 
       if (!detailResponse.ok) throw new Error('Could not load this queue item.');
       setDetail(await detailResponse.json() as QueueDetail);
       setPlan(reproduceResponse.ok ? await reproduceResponse.json() as ReproductionPlan : null);
-      setRemoteStatus(remoteResponse?.ok ? await remoteResponse.json() as RemoteStatus : null);
+      if (!reproduceResponse.ok) setDetailWarning('Reproduction details are temporarily unavailable. Refresh the controls; the queued snapshot itself is unchanged.');
+      if (remoteResponse && !remoteResponse.ok) {
+        const body = (await remoteResponse.json().catch(() => null)) as { error?: string; recovery?: string } | null;
+        setRemoteStatus(null);
+        setDetailWarning(body?.recovery ?? body?.error ?? 'Remote PR cache status is unavailable. Use Refresh PR to create a fresh immutable snapshot.');
+      } else setRemoteStatus(remoteResponse?.ok ? await remoteResponse.json() as RemoteStatus : null);
     } catch (err) { setError(err instanceof Error ? err.message : 'Could not load queue-item details.'); }
   }, [queue]);
 
@@ -166,11 +175,14 @@ export function ReviewControlPanel({ collapsed, onToggleCollapsed, refreshNonce 
 
   const run = useCallback(async (key: string, operation: () => Promise<Response>, success: string) => {
     if (working) return;
-    setWorking(key); setError(null); setNotice(null);
+    setWorking(key); setError(null); setErrorRecovery(null); setNotice(null);
     try {
       const response = await operation();
-      const payload = await response.json().catch(() => ({})) as { error?: string };
-      if (!response.ok) throw new Error(payload.error ?? 'The action could not be completed.');
+      const payload = await response.json().catch(() => ({})) as { error?: string; recovery?: string };
+      if (!response.ok) {
+        if (payload.recovery) setErrorRecovery(payload.recovery);
+        throw new Error(payload.error ?? 'The action could not be completed.');
+      }
       setNotice(success);
       await refresh();
       if (selectedId) await loadDetail(selectedId);
@@ -246,7 +258,7 @@ export function ReviewControlPanel({ collapsed, onToggleCollapsed, refreshNonce 
         <button onClick={() => void refresh()} style={{ ...buttonStyle, marginLeft: 'auto' }} disabled={loading || disabled}>{loading ? 'Loading…' : 'Refresh'}</button>
         <button onClick={onToggleCollapsed} style={buttonStyle} aria-label="Close review controls">Close</button>
       </div>
-      {error && <div role="alert" style={{ color: '#e5534b', fontSize: 11, padding: '7px 10px' }}>{error}</div>}
+      {error && <div role="alert" style={{ color: '#e5534b', fontSize: 11, padding: '7px 10px' }}><div>{error}</div>{errorRecovery && <div style={{ marginTop: 4 }}>{errorRecovery}</div>}<div style={{ marginTop: 5, display: 'flex', gap: 5, flexWrap: 'wrap' }}><button onClick={() => void refresh()} disabled={loading || disabled} style={buttonStyle}>Refresh controls</button>{errorRecovery?.includes('Queue Home') || errorRecovery?.includes('GitHub') ? <button onClick={() => { window.location.assign('/queue'); }} style={buttonStyle}>Open Queue Home</button> : null}</div></div>}
       {notice && <div role="status" style={{ color: '#56d364', fontSize: 11, padding: '7px 10px' }}>{notice}</div>}
       <div style={{ overflowY: 'auto', padding: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
         {tab === 'agents' ? <>
@@ -294,6 +306,7 @@ export function ReviewControlPanel({ collapsed, onToggleCollapsed, refreshNonce 
               <button onClick={() => void reorder(selected, selected.position + 1)} style={buttonStyle} disabled={disabled}>Move down</button>
               {selected.kind === 'remote' && <><button onClick={() => void refreshRemote(selected)} style={buttonStyle} disabled={disabled}>Refresh PR</button><button onClick={() => void cleanupRemote(selected)} style={buttonStyle} disabled={disabled}>Clean worktree</button></>}
             </div>
+            {detailWarning && <div role="status" style={{ marginTop: 8, padding: '6px 7px', borderRadius: 4, border: '1px solid rgba(210,153,34,0.45)', color: '#d29922', fontSize: 11 }}>{detailWarning} <button onClick={() => void loadDetail(selected.id)} disabled={disabled} style={{ ...buttonStyle, marginLeft: 5 }}>Retry details</button></div>}
             <hr style={{ borderColor: 'rgba(127,127,127,0.25)', margin: '10px 0' }} />
             <strong style={{ fontSize: 11 }}>Copilot feedback delivery</strong>
             <div style={{ ...muted, marginTop: 4 }}>Copilot SDK: {copilotLabel(selected)}. Sending creates/reuses this queue item's durable SDK conversation; it never targets a terminal or ACP session.</div>
