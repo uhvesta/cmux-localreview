@@ -465,3 +465,28 @@ Not yet claimed:
 - A real OAuth App registration and user authorization have not been created
   during this fixture validation; that live authorization remains a Phase-3
   workflow check.
+
+## 2026-07-28 — Recoverable reviewer failures and native PKCE setup
+
+Done:
+
+- Reviewer diff/workspace failures now keep the saved review intact and offer
+  in-place retry plus Queue Home navigation. `/ask`, inline `/ask`, and `/btw`
+  retain a failed prompt, make its error accessible, offer an explicit retry,
+  and reject duplicate sends while a turn is pending.
+- Converted the dedicated GitHub OAuth client setup to authorization-code PKCE.
+  Loopback browser sign-in now needs only a public client ID and the registered
+  callback `http://127.0.0.1:8787/oauth/callback`; the product no longer
+  accepts, stores, or ships an OAuth client secret. Issued access tokens remain
+  daemon-only in the OS secret store.
+
+Validated:
+
+- Focused reviewer, Queue Home, `/btw`, Go auth/CLI tests, complete Go suite,
+  TypeScript check, fixture Copilot acceptance, and frozen parity matrix pass.
+
+Not yet claimed:
+
+- A signed-in GitHub account still needs the interactive one-time registration
+  and browser authorization pass before this is counted as a complete live
+  Phase-3 OAuth validation.

@@ -93,8 +93,15 @@ export function WorkspaceShell() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(initialUiState.sidebarCollapsed ?? false);
   const [flatMode, setFlatMode] = useState(initialUiState.flatMode ?? false);
 
-  useEffect(() => {
-    fetchRepos()
+  // Capture the fragment capability before any protected request. Keeping this
+  // ahead of the loader prevents a freshly opened reviewer from turning a
+  // recoverable first-request 401 into a blank terminal error screen.
+  useEffect(() => { captureDaemonTokenFromLocation(); }, []);
+
+  const loadRepos = useCallback(() => {
+    setError(null);
+    setRepos(null);
+    return fetchRepos()
       .then((workspace) => {
         setRepos(workspace.repos);
         setWorkspaceRoot(workspace.workspaceRoot);
@@ -107,13 +114,11 @@ export function WorkspaceShell() {
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : 'Failed to load workspace repos');
       });
-    // Only run on mount; repo list is stable for the lifetime of the page load.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    captureDaemonTokenFromLocation();
-  }, []);
+    void loadRepos();
+  }, [loadRepos]);
 
   // The server copy survives browser storage clears and allows another tab to
   // pick up the latest shell state. localStorage remains an immediate fallback
@@ -288,9 +293,14 @@ export function WorkspaceShell() {
 
   if (error) {
     return (
-      <div style={{ padding: 24, fontFamily: 'sans-serif' }}>
+      <div role="alert" style={{ padding: 24, fontFamily: 'sans-serif', display: 'grid', gap: 12, maxWidth: 640 }}>
         <h2>cmux-localreview</h2>
         <p style={{ color: '#c0392b' }}>{error}</p>
+        <p style={{ margin: 0, opacity: 0.75, fontSize: 13 }}>The review was not changed. Retry after the daemon is reachable, or return to Queue Home to open another item.</p>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button type="button" onClick={() => void loadRepos()} style={{ padding: '6px 10px', cursor: 'pointer' }}>Retry workspace</button>
+          <button type="button" onClick={() => { window.location.assign('/queue'); }} style={{ padding: '6px 10px', cursor: 'pointer' }}>Queue Home</button>
+        </div>
       </div>
     );
   }
@@ -305,9 +315,11 @@ export function WorkspaceShell() {
 
   if (repos.length === 0) {
     return (
-      <div style={{ padding: 24, fontFamily: 'sans-serif' }}>
+      <div style={{ padding: 24, fontFamily: 'sans-serif', display: 'grid', gap: 10 }}>
         <h2>cmux-localreview</h2>
         <p>No git repositories found in this workspace.</p>
+        <p style={{ margin: 0, opacity: 0.75, fontSize: 13 }}>Choose a different workspace from Queue Home, or add a Git repository and retry this workspace.</p>
+        <div style={{ display: 'flex', gap: 8 }}><button type="button" onClick={() => void loadRepos()} style={{ padding: '6px 10px', cursor: 'pointer' }}>Rescan workspace</button><button type="button" onClick={() => { window.location.assign('/queue'); }} style={{ padding: '6px 10px', cursor: 'pointer' }}>Queue Home</button></div>
       </div>
     );
   }

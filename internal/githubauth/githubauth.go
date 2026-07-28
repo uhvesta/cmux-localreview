@@ -70,12 +70,14 @@ type StartResult struct {
 	ExpiresAt                 int64
 }
 type Status struct {
-	Configured    bool   `json:"configured"`
-	Authenticated bool   `json:"authenticated"`
-	Login         string `json:"login,omitempty"`
-	State         string `json:"loginState"`
-	Message       string `json:"message,omitempty"`
-	Error         string `json:"error,omitempty"`
+	Configured        bool   `json:"configured"`
+	ClientID          string `json:"clientId,omitempty"`
+	BrowserOAuthReady bool   `json:"browserOAuthReady"`
+	Authenticated     bool   `json:"authenticated"`
+	Login             string `json:"login,omitempty"`
+	State             string `json:"loginState"`
+	Message           string `json:"message,omitempty"`
+	Error             string `json:"error,omitempty"`
 }
 
 type ServiceClient struct {
@@ -360,14 +362,17 @@ func (s *ServiceClient) Status(ctx context.Context, c Capability) (Status, error
 	if err != nil {
 		return Status{}, err
 	}
-	out := Status{Configured: strings.TrimSpace(id) != "", State: s.state[c], Message: s.message[c]}
+	out := Status{Configured: strings.TrimSpace(id) != "", ClientID: strings.TrimSpace(id), State: s.state[c], Message: s.message[c]}
 	if out.State == "" {
 		out.State = "idle"
 	}
 	if !out.Configured {
-		out.Error = "Configure a dedicated GitHub App for " + string(c) + "."
+		out.Error = "Configure a dedicated GitHub OAuth App client for " + string(c) + "."
 		return out, nil
 	}
+	// PKCE makes the configured public client sufficient for browser OAuth.
+	// The OS secret store is used only after sign-in, for issued access tokens.
+	out.BrowserOAuthReady = out.Configured
 	t, e := s.read(c)
 	if e != nil {
 		return out, nil

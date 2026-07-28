@@ -1300,6 +1300,11 @@ function App() {
       <div className="flex flex-col items-center justify-center h-screen bg-github-bg-primary text-center gap-2">
         <h2 className="text-github-danger text-2xl mb-2">Error</h2>
         <p className="text-github-text-secondary text-base">{error}</p>
+        <p className="text-github-text-muted text-sm max-w-md">Your comments and review state were preserved. Retry the diff, choose a different revision, or return to Queue Home.</p>
+        <div className="flex flex-wrap justify-center gap-2 mt-2">
+          <button type="button" onClick={() => { setError(null); void fetchDiffData(); }} className="rounded border border-github-border px-3 py-1.5 text-sm hover:bg-github-bg-tertiary">Retry diff</button>
+          <button type="button" onClick={() => { window.location.assign('/queue'); }} className="rounded border border-github-border px-3 py-1.5 text-sm hover:bg-github-bg-tertiary">Queue Home</button>
+        </div>
       </div>
     );
   }
@@ -1309,6 +1314,7 @@ function App() {
       <div className="flex flex-col items-center justify-center h-screen bg-github-bg-primary text-center gap-2">
         <h2 className="text-github-danger text-2xl mb-2">No data</h2>
         <p className="text-github-text-secondary text-base">No diff data available</p>
+        <div className="flex gap-2 mt-2"><button type="button" onClick={() => { void fetchDiffData(); }} className="rounded border border-github-border px-3 py-1.5 text-sm hover:bg-github-bg-tertiary">Retry diff</button><button type="button" onClick={() => { window.location.assign('/queue'); }} className="rounded border border-github-border px-3 py-1.5 text-sm hover:bg-github-bg-tertiary">Queue Home</button></div>
       </div>
     );
   }

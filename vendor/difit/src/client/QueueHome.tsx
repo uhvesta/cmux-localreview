@@ -46,6 +46,8 @@ interface FederationNodeWithRuntime extends FederationNode { runtime?: Federatio
 type GitHubCapability = 'read' | 'write' | 'copilot';
 interface GitHubCapabilityStatus {
   configured: boolean;
+  clientId?: string;
+  browserOAuthReady?: boolean;
   authenticated: boolean;
   login?: string;
   error?: string;
@@ -393,15 +395,15 @@ export function QueueHome() {
       <input value={daemonToken} onChange={(event) => setDaemonToken(event.target.value)} type="password" autoComplete="off" aria-label="Daemon bearer token" placeholder="Daemon token" style={{ flex: 1, minWidth: 180, padding: '7px 8px', borderRadius: 5, border: '1px solid rgba(127,127,127,0.45)', background: 'transparent', color: 'inherit' }} />
       <button type="submit" disabled={!daemonToken.trim()} style={buttonStyle}>Connect</button>
     </form>}
-    {githubAuth && <section aria-label="GitHub App connections" style={{ margin: '0 0 18px', padding: 12, border: '1px solid rgba(127,127,127,0.42)', borderRadius: 8 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}><div><strong>GitHub App connections</strong><p style={{ margin: '4px 0 0', fontSize: 12, opacity: 0.74 }}>Separate, least-privilege App grants. Browser OAuth is the default through a registered loopback callback; device code is the SSH/headless fallback. The daemon keeps tokens and client secrets in the system secret store, never in this page.</p></div><button onClick={() => void refreshGitHubAuth()} disabled={githubAuthLoading} style={buttonStyle}>{githubAuthLoading ? 'Checking…' : 'Refresh status'}</button></div>
+    {githubAuth && <section aria-label="GitHub OAuth connections" style={{ margin: '0 0 18px', padding: 12, border: '1px solid rgba(127,127,127,0.42)', borderRadius: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}><div><strong>GitHub connections</strong><p style={{ margin: '4px 0 0', fontSize: 12, opacity: 0.74 }}>Dedicated GitHub OAuth connections using PKCE. Browser sign-in is the default; device code is the SSH/headless fallback. The daemon keeps access tokens in the system secret store—this page never receives a GitHub token.</p></div><button onClick={() => void refreshGitHubAuth()} disabled={githubAuthLoading} style={buttonStyle}>{githubAuthLoading ? 'Checking…' : 'Refresh status'}</button></div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(225px, 1fr))', gap: 9, marginTop: 10 }}>
         {(Object.keys(capabilityLabels) as GitHubCapability[]).map((capability) => {
           const status = githubAuth.capabilities[capability];
           const waiting = status.loginState === 'waiting';
           return <article key={capability} style={{ border: '1px solid rgba(127,127,127,0.3)', padding: 10, borderRadius: 6 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 7 }}><strong style={{ fontSize: 13 }}>{capabilityLabels[capability].title}</strong><span style={{ fontSize: 11, color: status.authenticated ? '#2ea043' : status.configured ? '#d29922' : '#8b949e' }}>{status.authenticated ? `Connected${status.login ? ` @${status.login}` : ''}` : status.configured ? (waiting ? 'Waiting…' : 'Not connected') : 'Not configured'}</span></div>
-            <p style={{ margin: '5px 0 9px', fontSize: 11, opacity: 0.7 }}>{status.message ?? status.error ?? capabilityLabels[capability].description}</p>
+            <p style={{ margin: '5px 0 9px', fontSize: 11, opacity: 0.7 }}>{status.message ?? status.error ?? capabilityLabels[capability].description}{status.configured && status.clientId ? <> OAuth client: <code>{status.clientId}</code>.</> : null}</p>
             <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
               {status.configured && !status.authenticated && <button onClick={() => void startGitHubAuth(capability)} disabled={githubAction !== null} style={{ ...buttonStyle, borderColor: '#2ea043' }}>{githubAction === capability ? 'Opening…' : waiting ? `Restart ${githubFlow === 'loopback' ? 'browser login' : 'device flow'}` : 'Connect'}</button>}
               {status.authenticated && <button onClick={() => void disconnectGitHubApp(capability)} disabled={githubAction !== null} style={buttonStyle}>{githubAction === capability ? 'Disconnecting…' : 'Disconnect'}</button>}
@@ -416,12 +418,20 @@ export function QueueHome() {
           <option value="device">Device code (SSH/headless fallback)</option>
         </select>
       </label>
-      <form onSubmit={configureGitHubApp} style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginTop: 11 }} aria-label="Configure GitHub App client ID">
-        <select value={githubCapability} onChange={(event) => setGithubCapability(event.target.value as GitHubCapability)} aria-label="GitHub App capability" style={{ ...buttonStyle, padding: '6px 7px' }}>{(Object.keys(capabilityLabels) as GitHubCapability[]).map((capability) => <option key={capability} value={capability}>{capabilityLabels[capability].title}</option>)}</select>
-        <input value={githubClientId} onChange={(event) => setGithubClientId(event.target.value)} placeholder="GitHub App client ID (Iv1.… )" autoComplete="off" aria-label="GitHub App client ID" style={{ flex: 1, minWidth: 220, padding: '6px 8px', borderRadius: 5, border: '1px solid rgba(127,127,127,0.45)', background: 'transparent', color: 'inherit' }} />
-        <button type="submit" disabled={!githubClientId.trim() || githubAction !== null} style={buttonStyle}>{githubAction === githubCapability ? 'Saving…' : 'Save App'}</button>
+      <form onSubmit={configureGitHubApp} style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginTop: 11 }} aria-label="Configure GitHub OAuth client ID">
+        <select value={githubCapability} onChange={(event) => setGithubCapability(event.target.value as GitHubCapability)} aria-label="GitHub OAuth capability" style={{ ...buttonStyle, padding: '6px 7px' }}>{(Object.keys(capabilityLabels) as GitHubCapability[]).map((capability) => <option key={capability} value={capability}>{capabilityLabels[capability].title}</option>)}</select>
+        <input value={githubClientId} onChange={(event) => setGithubClientId(event.target.value)} placeholder="GitHub OAuth client ID (Iv1.… )" autoComplete="off" aria-label="GitHub OAuth client ID" style={{ flex: 1, minWidth: 220, padding: '6px 8px', borderRadius: 5, border: '1px solid rgba(127,127,127,0.45)', background: 'transparent', color: 'inherit' }} />
+        <button type="submit" disabled={!githubClientId.trim() || githubAction !== null} style={buttonStyle}>{githubAction === githubCapability ? 'Saving…' : 'Save OAuth client ID'}</button>
       </form>
-      <p style={{ margin: '7px 0 0', fontSize: 11, opacity: 0.68 }}>Browser OAuth also requires that capability’s confidential client secret. Set it from the native CLI using <code>localreview auth login --client-secret-stdin …</code>; this UI intentionally never accepts or stores secrets.</p>
+      <details style={{ marginTop: 9, fontSize: 11, opacity: 0.78 }}>
+        <summary style={{ cursor: 'pointer' }}>Set up browser OAuth safely</summary>
+        <ol style={{ margin: '7px 0 0', paddingInlineStart: 19 }}>
+          <li>Create a dedicated GitHub <strong>OAuth App</strong> registration for the selected capability—not a PAT, <code>gh</code> login, or GitHub App installation.</li>
+          <li>Set its authorization callback URL exactly to <code>http://127.0.0.1:8787/oauth/callback</code>. Enable Device Flow only when this machine needs the SSH/headless fallback.</li>
+          <li>Save only the public client ID above, select <strong>Browser OAuth</strong>, then click Connect. The loopback flow uses PKCE; no client secret is entered, stored, or shipped.</li>
+          <li>Review the GitHub consent screen before approving. Tokens are saved only by the daemon in the OS secret store and are never returned to this page.</li>
+        </ol>
+      </details>
       {loopbackLogin && <div role="status" style={{ marginTop: 10, padding: 10, border: '1px solid rgba(88,166,255,0.5)', borderRadius: 6, fontSize: 12 }}>Continue <strong>{capabilityLabels[loopbackLogin.capability].title}</strong> in the GitHub browser tab. If it did not open, <a href={loopbackLogin.authorizationUrl} target="_blank" rel="noreferrer">open the secure authorization page</a>. This page will refresh after the loopback callback completes.</div>}
       {deviceCode && <div role="status" style={{ marginTop: 10, padding: 10, border: '1px solid rgba(88,166,255,0.5)', borderRadius: 6, fontSize: 12 }}>Authorize <strong>{capabilityLabels[deviceCode.capability].title}</strong> at <a href={deviceCode.verificationUri} target="_blank" rel="noreferrer">github.com/login/device</a> with code <code style={{ fontWeight: 700, fontSize: 14 }}>{deviceCode.userCode}</code>. This page checks automatically; no token is shown or pasted.</div>}
     </section>}

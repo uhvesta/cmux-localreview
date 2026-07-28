@@ -191,23 +191,21 @@ The Go daemon accepts only its dedicated Copilot credential source. It does
 not fall back to `gh`, a PAT, environment variables, or an existing Copilot
 CLI login. The compatibility command is named `github-app`, but the current
 implementation uses a dedicated **GitHub OAuth App client registration** for
-each capability; it is not a GitHub App installation flow. Store the OAuth
-client secret through stdin (never as a command-line argument):
+each capability; it is not a GitHub App installation flow. The native browser
+flow uses PKCE, so setup needs only the public client ID:
 
 ```sh
-printf '%s' "$COPILOT_APP_CLIENT_SECRET" | \
-  localreview auth login --capability copilot --client-id "$COPILOT_APP_CLIENT_ID" \
-  --client-secret-stdin --no-wait
+localreview auth login --capability copilot --client-id "$COPILOT_APP_CLIENT_ID" --no-wait
 
 localreview auth status
 localreview auth logout copilot
 ```
 
 The default flow is state-verified browser OAuth through the registered stable
-callback `http://127.0.0.1:8787/oauth/callback`; it requires the configured
-OAuth client secret. Use `--device` for an SSH/headless host. Tokens
-and client secrets are stored only through the OS secret store and never
-returned to the browser or CLI output. When credentials or the Copilot SDK are
+callback `http://127.0.0.1:8787/oauth/callback`; PKCE protects the exchange
+without shipping or storing an OAuth client secret. Use `--device` for an
+SSH/headless host. Tokens are stored only through the OS secret store and
+never returned to the browser or CLI output. When credentials or the Copilot SDK are
 unavailable, the picker reports an unauthenticated/fallback state instead of
 pretending a prompt was delivered. Once connected, turns stream through the
 selected persistent conversation; loading a transcript never starts a turn.
@@ -218,15 +216,15 @@ the native CLI retains its setup vocabulary as a thin, secure alias:
 ```sh
 localreview github-app guide
 localreview github-app configure --capability copilot --client-id "$COPILOT_APP_CLIENT_ID"
-localreview github-app connect --capability copilot       # device flow (default)
-localreview github-app connect --capability copilot
+localreview github-app connect --capability copilot       # browser loopback (default)
+localreview github-app connect --capability copilot --device
 localreview github-app status
 localreview github-app disconnect --capability copilot
 ```
 
-`github-app configure` saves only the public client ID. The opt-in loopback
-flow requires `--client-secret-stdin`; pipe the secret rather than placing it
-in shell history or an argument list. Device flow does not need it.
+`github-app configure` saves only the public client ID. The loopback flow uses
+PKCE; neither the UI nor the native daemon accepts, stores, or ships an OAuth
+client secret.
 
 ### Deterministic `/ask` and `/btw` acceptance fixture (source checkouts only)
 

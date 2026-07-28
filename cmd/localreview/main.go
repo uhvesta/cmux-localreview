@@ -370,11 +370,8 @@ func printDaemonJSON(method, path string, body any) error {
 	return nil
 }
 
-func configureAuthCapability(capability, clientID, clientSecret string) error {
+func configureAuthCapability(capability, clientID string) error {
 	configure := map[string]string{"capability": capability, "clientId": clientID}
-	if clientSecret != "" {
-		configure["clientSecret"] = clientSecret
-	}
 	_, _, err := daemonCall(http.MethodPost, "/github/auth/configure", configure)
 	return err
 }
@@ -398,7 +395,6 @@ func authCommand(args []string) error {
 		flags := flag.NewFlagSet("auth login", flag.ContinueOnError)
 		capability := flags.String("capability", "copilot", "GitHub App capability: read, write, or copilot")
 		clientID := flags.String("client-id", "", "public GitHub App client ID to configure before login")
-		clientSecretStdin := flags.Bool("client-secret-stdin", false, "read the OAuth client secret from stdin and store it in the OS secret store")
 		device := flags.Bool("device", false, "use device OAuth for a headless or SSH-only machine")
 		loopback := flags.Bool("loopback", false, "use the default browser OAuth callback http://127.0.0.1:8787/oauth/callback")
 		noWait := flags.Bool("no-wait", false, "print authorization instructions without polling")
@@ -406,27 +402,16 @@ func authCommand(args []string) error {
 			return err
 		}
 		if flags.NArg() != 0 {
-			return errors.New("usage: localreview auth login [--capability CAPABILITY] [--client-id ID] [--client-secret-stdin] [--device|--loopback] [--no-wait]")
+			return errors.New("usage: localreview auth login [--capability CAPABILITY] [--client-id ID] [--device|--loopback] [--no-wait]")
 		}
 		if *capability != "read" && *capability != "write" && *capability != "copilot" {
 			return errors.New("capability must be read, write, or copilot")
-		}
-		if *clientSecretStdin && *clientID == "" {
-			return errors.New("--client-secret-stdin requires --client-id")
 		}
 		if *device && *loopback {
 			return errors.New("choose only one of --device or --loopback")
 		}
 		if *clientID != "" {
-			secretValue := ""
-			if *clientSecretStdin {
-				secret, err := io.ReadAll(io.LimitReader(os.Stdin, 64<<10))
-				if err != nil {
-					return fmt.Errorf("read OAuth client secret from stdin: %w", err)
-				}
-				secretValue = strings.TrimSpace(string(secret))
-			}
-			if err := configureAuthCapability(*capability, *clientID, secretValue); err != nil {
+			if err := configureAuthCapability(*capability, *clientID); err != nil {
 				return err
 			}
 		}
@@ -484,8 +469,7 @@ func authCommand(args []string) error {
 
 // githubAppCommand preserves the old setup-oriented vocabulary while routing
 // every credential operation through the native auth surface. It never accepts
-// a token, and it keeps a client secret off argv by delegating stdin handling
-// to `auth login`.
+// a token or OAuth client secret: the public client uses PKCE.
 func githubAppCommand(args []string) error {
 	if len(args) == 0 || args[0] == "guide" {
 		if len(args) > 1 {
@@ -496,7 +480,7 @@ func githubAppCommand(args []string) error {
 		fmt.Fprintln(os.Stdout, "  localreview github-app configure --capability copilot --client-id <client-id>")
 		fmt.Fprintln(os.Stdout, "  localreview github-app connect --capability copilot  # browser loopback (default; register http://127.0.0.1:8787/oauth/callback)")
 		fmt.Fprintln(os.Stdout, "  localreview github-app connect --capability copilot --device  # SSH/headless fallback")
-		fmt.Fprintln(os.Stdout, "Tokens and optional client secrets stay in the OS secret store; they are never printed by this CLI.")
+		fmt.Fprintln(os.Stdout, "Access tokens stay in the OS secret store; they are never printed by this CLI. The browser flow uses PKCE and requires no client secret.")
 		return nil
 	}
 	switch args[0] {
@@ -519,22 +503,13 @@ func githubAppCommand(args []string) error {
 		flags := flag.NewFlagSet("github-app configure", flag.ContinueOnError)
 		capability := flags.String("capability", "", "GitHub App capability: read, write, or copilot")
 		clientID := flags.String("client-id", "", "public GitHub OAuth client ID")
-		clientSecretStdin := flags.Bool("client-secret-stdin", false, "read optional client secret from stdin")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
 		if flags.NArg() != 0 || *capability == "" || *clientID == "" {
-			return errors.New("usage: localreview github-app configure --capability <read|write|copilot> --client-id <id> [--client-secret-stdin]")
+			return errors.New("usage: localreview github-app configure --capability <read|write|copilot> --client-id <id>")
 		}
-		secretValue := ""
-		if *clientSecretStdin {
-			secret, err := io.ReadAll(io.LimitReader(os.Stdin, 64<<10))
-			if err != nil {
-				return fmt.Errorf("read OAuth client secret from stdin: %w", err)
-			}
-			secretValue = strings.TrimSpace(string(secret))
-		}
-		if err := configureAuthCapability(*capability, *clientID, secretValue); err != nil {
+		if err := configureAuthCapability(*capability, *clientID); err != nil {
 			return err
 		}
 		fmt.Printf("Saved %s GitHub App client ID. Run `localreview github-app connect --capability %s`.\n", *capability, *capability)

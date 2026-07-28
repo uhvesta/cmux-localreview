@@ -19,10 +19,6 @@ type AuthStatus struct {
 type ConfigureRequest struct {
 	Capability Capability `json:"capability"`
 	ClientID   string     `json:"clientId"`
-	// ClientSecret is accepted only over the daemon's authenticated loopback
-	// API (normally from CLI stdin). It is immediately written to the OS secret
-	// store and is never returned by this package or persisted in SQLite.
-	ClientSecret string `json:"clientSecret,omitempty"`
 }
 type StartRequest struct {
 	Capability Capability `json:"capability"`
@@ -47,7 +43,7 @@ func (api API) Status(ctx context.Context) (AuthStatus, error) {
 	if e != nil {
 		return AuthStatus{}, e
 	}
-	out := AuthStatus{Provider: "github-app-device-flow", Capabilities: map[Capability]Status{}}
+	out := AuthStatus{Provider: "github-oauth-pkce", Capabilities: map[Capability]Status{}}
 	for _, c := range []Capability{Read, Write, Copilot} {
 		v, e := s.Status(ctx, c)
 		if e != nil {
@@ -65,9 +61,6 @@ func (api API) Configure(ctx context.Context, request ConfigureRequest) error {
 	}
 	if err := s.Configure(request.Capability, request.ClientID); err != nil {
 		return err
-	}
-	if strings.TrimSpace(request.ClientSecret) != "" {
-		return s.SetClientSecret(request.Capability, request.ClientSecret)
 	}
 	return nil
 }

@@ -3,7 +3,7 @@ import { HotkeysProvider } from 'react-hotkeys-hook';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import '@testing-library/jest-dom';
 
-import { mockFetch } from '../../vitest.setup';
+import { mockFetch, mockFetchError } from '../../vitest.setup';
 import type { DiffCommentThread, DiffResponse } from '../types/diff';
 import type { ClientWatchState } from '../types/watch';
 import { DiffMode } from '../types/watch';
@@ -469,6 +469,26 @@ describe('App Component - Clear Comments Functionality', () => {
 
       expect(mockReplaceThreads).not.toHaveBeenCalledWith([...serverThreads, ...mockComments]);
     });
+  });
+});
+
+describe('App recovery screens', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockComments = [];
+  });
+
+  it('offers an in-place diff retry after a load failure', async () => {
+    mockFetchError('fixture diff unavailable');
+    renderApp();
+
+    expect(await screen.findByText('fixture diff unavailable')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry diff' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Queue Home' })).toBeInTheDocument();
+
+    mockFetch(mockDiffResponse);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry diff' }));
+    expect(await screen.findByTitle('test.ts')).toBeInTheDocument();
   });
 });
 

@@ -150,17 +150,14 @@ func TestOSSecretStoreFailsClosed(t *testing.T) {
 	}
 }
 
-func TestLoopbackOAuthStateAndSecretStayDaemonOnly(t *testing.T) {
+func TestLoopbackOAuthStateAndPKCEVerifierStayDaemonOnly(t *testing.T) {
 	secrets := memSecrets{}
 	cfg := memConfig{Read: "Iv1.loopback"}
-	if err := secrets.Set(Service, clientSecretAccount(Read), "app-secret"); err != nil {
-		t.Fatal(err)
-	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/token":
 			_ = r.ParseForm()
-			if r.Form.Get("client_secret") != "app-secret" || r.Form.Get("code") != "code" {
+			if r.Form.Get("client_secret") != "" || r.Form.Get("code_verifier") == "" || r.Form.Get("code") != "code" {
 				t.Fatalf("bad exchange: %v", r.Form)
 			}
 			_, _ = w.Write([]byte(`{"access_token":"loop-token"}`))
@@ -196,8 +193,8 @@ func TestLoopbackOAuthStateAndSecretStayDaemonOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if u.Query().Get("state") == "" || strings.Contains(f.AuthorizationURL, "app-secret") {
-		t.Fatal("authorization URL leaks state or secret")
+	if u.Query().Get("state") == "" || u.Query().Get("code_challenge_method") != "S256" || u.Query().Get("code_challenge") == "" {
+		t.Fatal("authorization URL must contain only the PKCE challenge, never the verifier")
 	}
 	bad, err := http.Get(f.RedirectURI + "?code=code&state=wrong")
 	if err != nil {
@@ -237,11 +234,8 @@ func TestAPIFacadeUsesExplicitFlowAndHidesCredentials(t *testing.T) {
 	}), nil)
 	api := API{Service: s}
 	status, err := api.Status(context.Background())
-	if err != nil || status.Provider != "github-app-device-flow" || len(status.Capabilities) != 3 {
+	if err != nil || status.Provider != "github-oauth-pkce" || len(status.Capabilities) != 3 {
 		t.Fatalf("status=%#v err=%v", status, err)
-	}
-	if err := s.SetClientSecret(Read, "fixture-secret"); err != nil {
-		t.Fatal(err)
 	}
 	result, flow, err := api.Start(context.Background(), StartRequest{Capability: Read})
 	if err != nil || flow == nil || result.AuthorizationURL == "" || result.Flow != "loopback" {

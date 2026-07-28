@@ -3,6 +3,7 @@ package githubauth
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
@@ -16,13 +17,13 @@ import (
 )
 
 // LoopbackFlow is an ephemeral, authenticated OAuth callback receiver. Neither
-// its state nor client secret is serialized or exposed to browser code.
+// its state nor PKCE verifier is serialized or exposed to browser code.
 type LoopbackFlow struct {
 	AuthorizationURL string
 	RedirectURI      string
 	service          *ServiceClient
 	capability       Capability
-	state, secret    string
+	state, verifier  string
 	listener         net.Listener
 	server           *http.Server
 	result           chan error
@@ -41,18 +42,6 @@ func (s *ServiceClient) authorizeEndpoint() string {
 	}
 	return "https://github.com/login/oauth/authorize"
 }
-func clientSecretAccount(c Capability) string { return account(c) + ":client-secret" }
-
-// SetClientSecret persists an OAuth App secret only in the OS SecretStore.
-func (s *ServiceClient) SetClientSecret(c Capability, secret string) error {
-	if !valid(c) {
-		return errors.New("unknown GitHub capability")
-	}
-	if strings.TrimSpace(secret) == "" {
-		return errors.New("refusing an empty GitHub OAuth client secret")
-	}
-	return s.Secrets.Set(Service, clientSecretAccount(c), secret)
-}
 
 // StartLoopback is the primary browser flow. GitHub OAuth App registrations
 // need a pre-registered redirect URI, so the callback is deliberately stable
@@ -64,13 +53,6 @@ func (s *ServiceClient) StartLoopback(ctx context.Context, c Capability) (*Loopb
 	if err != nil {
 		return nil, err
 	}
-	secret, err := s.Secrets.Get(Service, clientSecretAccount(c))
-	if err != nil {
-		return nil, err
-	}
-	if strings.TrimSpace(secret) == "" {
-		return nil, fmt.Errorf("configure the %s GitHub App OAuth client secret in the system secret store before browser login", c)
-	}
 	ln, err := net.Listen("tcp", "127.0.0.1:8787")
 	if err != nil {
 		return nil, fmt.Errorf("open registered loopback OAuth listener on 127.0.0.1:8787 (or use device flow): %w", err)
@@ -80,9 +62,15 @@ func (s *ServiceClient) StartLoopback(ctx context.Context, c Capability) (*Loopb
 		_ = ln.Close()
 		return nil, err
 	}
+	verifier, err := newOAuthState()
+	if err != nil {
+		_ = ln.Close()
+		return nil, err
+	}
 	redirect := "http://127.0.0.1:8787/oauth/callback"
-	q := url.Values{"client_id": {id}, "redirect_uri": {redirect}, "state": {state}}
-	f := &LoopbackFlow{AuthorizationURL: s.authorizeEndpoint() + "?" + q.Encode(), RedirectURI: redirect, service: s, capability: c, state: state, secret: secret, listener: ln, result: make(chan error, 1)}
+	challenge := sha256.Sum256([]byte(verifier))
+	q := url.Values{"client_id": {id}, "redirect_uri": {redirect}, "state": {state}, "code_challenge": {base64.RawURLEncoding.EncodeToString(challenge[:])}, "code_challenge_method": {"S256"}}
+	f := &LoopbackFlow{AuthorizationURL: s.authorizeEndpoint() + "?" + q.Encode(), RedirectURI: redirect, service: s, capability: c, state: state, verifier: verifier, listener: ln, result: make(chan error, 1)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/oauth/callback", f.callback)
 	f.server = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
@@ -132,7 +120,7 @@ func (f *LoopbackFlow) exchange(ctx context.Context, code string) error {
 	if e != nil {
 		return e
 	}
-	body, status, e := f.service.request(ctx, f.service.tokenEndpoint(), url.Values{"client_id": {id}, "client_secret": {f.secret}, "code": {code}, "redirect_uri": {f.RedirectURI}})
+	body, status, e := f.service.request(ctx, f.service.tokenEndpoint(), url.Values{"client_id": {id}, "code": {code}, "redirect_uri": {f.RedirectURI}, "code_verifier": {f.verifier}})
 	if e != nil {
 		return e
 	}
