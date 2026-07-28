@@ -106,24 +106,22 @@ func hunkPatch(chunk gitdiff.Chunk) string {
 
 func (d *Daemon) hunkPlanHandler(w http.ResponseWriter, r *http.Request, review workspaceReview, repo reviewRepo) bool {
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	// GET /.../hunk-review-plan/{planID}/ask-context is only a persisted-plan
-	// lookup. Do not overload normal plan reads with hidden /ask activity.
-	if len(parts) == 5 && parts[3] == "hunk-review-plan" && parts[4] == "ask-context" && r.Method == http.MethodGet {
-		plan, err := hunkorder.GetByID(r.Context(), d.db, r.URL.Query().Get("planId"))
-		if errors.Is(err, hunkorder.ErrNotFound) {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "Review plan not found"})
+	// Canonical GET /.../hunk-review-plan/{planID}/ask-context is only a
+	// persisted-plan lookup. Keep the prior query form as a compatibility alias
+	// for a bundled UI that may still be open during a daemon upgrade.
+	planID := ""
+	if len(parts) == 6 && parts[3] == "hunk-review-plan" && parts[5] == "ask-context" {
+		planID = parts[4]
+	}
+	if len(parts) == 5 && parts[3] == "hunk-review-plan" && parts[4] == "ask-context" {
+		planID = r.URL.Query().Get("planId")
+	}
+	if planID != "" || (len(parts) == 5 && parts[3] == "hunk-review-plan" && parts[4] == "ask-context") {
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "Use GET to read saved review-plan context"})
 			return true
 		}
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return true
-		}
-		if plan.ReviewSessionID != review.SessionID || plan.RepoID != repo.ID {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "Review plan not found for this repository"})
-			return true
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"plan": plan, "askContext": hunkPlanAskContext(plan)})
-		return true
+		return d.hunkPlanContext(w, r, review, repo, planID)
 	}
 	if len(parts) != 4 || parts[3] != "hunk-review-plan" {
 		return false
@@ -192,6 +190,28 @@ func (d *Daemon) hunkPlanHandler(w http.ResponseWriter, r *http.Request, review 
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "Use GET to read or POST to explicitly generate a review plan"})
 		return true
 	}
+}
+
+func (d *Daemon) hunkPlanContext(w http.ResponseWriter, r *http.Request, review workspaceReview, repo reviewRepo, planID string) bool {
+	if strings.TrimSpace(planID) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "A saved review plan ID is required"})
+		return true
+	}
+	plan, err := hunkorder.GetByID(r.Context(), d.db, planID)
+	if errors.Is(err, hunkorder.ErrNotFound) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Review plan not found"})
+		return true
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return true
+	}
+	if plan.ReviewSessionID != review.SessionID || plan.RepoID != repo.ID {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Review plan not found for this repository"})
+		return true
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"plan": plan, "askContext": hunkPlanAskContext(plan)})
+	return true
 }
 
 func (d *Daemon) generateHunkPlan(ctx context.Context, workingDirectory string, request hunkorder.Request) (hunkorder.Result, error) {

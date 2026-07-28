@@ -66,9 +66,14 @@ func TestHunkPlanIsExplicitImmutableAndStaleWithoutReprompt(t *testing.T) {
 	if refreshed["state"] != "ready" || refreshed["plan"].(map[string]any)["id"] == firstID || hunkPlanCalls(&mu, &calls) != 2 {
 		t.Fatalf("explicit refresh must create a new immutable plan: %#v calls=%d", refreshed, calls)
 	}
-	contextRead := hunkPlanRequestHTTP(t, d, review, repo, http.MethodGet, "/ask-context?planId="+refreshed["plan"].(map[string]any)["id"].(string), "")
+	refreshedID := refreshed["plan"].(map[string]any)["id"].(string)
+	contextRead := hunkPlanRequestHTTP(t, d, review, repo, http.MethodGet, "/"+refreshedID+"/ask-context", "")
 	if contextRead["askContext"] == "" || hunkPlanCalls(&mu, &calls) != 2 {
-		t.Fatalf("context read must not generate: %#v calls=%d", contextRead, calls)
+		t.Fatalf("canonical context read must not generate: %#v calls=%d", contextRead, calls)
+	}
+	compatibilityRead := hunkPlanRequestHTTP(t, d, review, repo, http.MethodGet, "/ask-context?planId="+refreshedID, "")
+	if compatibilityRead["askContext"] == "" || hunkPlanCalls(&mu, &calls) != 2 {
+		t.Fatalf("compatibility context read must not generate: %#v calls=%d", compatibilityRead, calls)
 	}
 }
 
