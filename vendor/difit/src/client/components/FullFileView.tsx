@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { CommentThread, DiffFile, DiffSide, LineNumber } from '../../types/diff';
 import { getApiBase, resolveApiUrl } from '../apiBase';
+import { daemonFetch } from '../services/daemonAuth';
 import { CommentBodyRenderer } from './CommentBodyRenderer';
 
 interface FullFileGate {
@@ -173,7 +174,7 @@ export function FullFileView({ file, threads, onAddComment }: FullFileViewProps)
       const apiBase = getApiBase(); // "/api/repos/<repoId>" — /btw is workspace-level, not repo-namespaced.
       const repoId = apiBase.split('/').pop();
       const content = data?.lines?.[lineNumber - 1] ?? '';
-      const res = await fetch('/api/btw/ask', {
+      const res = await daemonFetch('/api/btw/ask', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

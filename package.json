@@ -4,11 +4,16 @@
   "private": true,
   "type": "module",
   "bin": {
-    "cmux-localreview": "./src/cli.ts"
+    "cmux-localreview": "./src/cli.ts",
+    "global-daemon": "./src/global-daemon.ts",
+    "queue-submit": "./src/queue-submit.ts",
+    "localreview-reproduce": "./src/localreview-reproduce.ts",
+    "localreview-open": "./src/localreview-open.ts"
   },
   "scripts": {
     "vendor-difit-build": "cd vendor/difit && tsc --project tsconfig.cli.json && vite build",
     "vendor-difit-server": "bun vendor/difit/dist/cli/index.js",
+    "build": "bun run vendor-difit-build",
     "test": "bun test --path-ignore-patterns='vendor/**'",
     "typecheck": "tsc --project tsconfig.json && tsc --project vendor/difit/tsconfig.cli.json --noEmit && tsc --project vendor/difit/tsconfig.json --noEmit"
   },
@@ -33,6 +38,7 @@
     "simple-git": "^3.28.0",
     "ws": "^8.18.0",
     "@tanstack/react-virtual": "^3.14.8",
+    "@github/copilot-sdk": "1.0.8",
     "@zed-industries/agent-client-protocol": "^0.4.5",
     "@zed-industries/claude-code-acp": "^0.16.2"
   },

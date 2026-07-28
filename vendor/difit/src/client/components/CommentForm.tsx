@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
 import { CommentBodyRenderer, hasSuggestionInBody } from './CommentBodyRenderer';
 import type { AppearanceSettings } from './SettingsModal';
@@ -15,6 +15,8 @@ interface CommentFormProps {
   title?: string;
   submitLabel?: string;
   placeholder?: string;
+  /** Stable, review-scoped identity for retaining an unfinished new comment. */
+  draftKey?: string;
 }
 
 type CommentFormMode = 'edit' | 'preview';
@@ -30,13 +32,31 @@ export function CommentForm({
   title = 'Add a comment',
   submitLabel = 'Submit',
   placeholder = 'Leave a comment...',
+  draftKey,
 }: CommentFormProps) {
-  const [body, setBody] = useState(initialValue);
+  const [body, setBody] = useState(() => {
+    if (initialValue || !draftKey || typeof window === 'undefined') return initialValue;
+    try {
+      return window.localStorage.getItem(draftKey) ?? '';
+    } catch {
+      return initialValue;
+    }
+  });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [mode, setMode] = useState<CommentFormMode>('edit');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const hasSuggestion = hasSuggestionInBody(body);
   const effectiveMode: CommentFormMode = hasSuggestion ? mode : 'edit';
+
+  useEffect(() => {
+    if (!draftKey || initialValue) return;
+    try {
+      if (body) window.localStorage.setItem(draftKey, body);
+      else window.localStorage.removeItem(draftKey);
+    } catch {
+      // Browser storage is optional; a missing draft must never block review.
+    }
+  }, [body, draftKey, initialValue]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -47,6 +67,13 @@ export function CommentForm({
     try {
       await onSubmit(body.trim());
       setBody('');
+      if (draftKey) {
+        try {
+          window.localStorage.removeItem(draftKey);
+        } catch {
+          // Best effort only.
+        }
+      }
       setMode('edit');
     } catch (error) {
       console.error('Failed to submit comment:', error);

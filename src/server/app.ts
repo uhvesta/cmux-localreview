@@ -25,6 +25,7 @@ import { createCommentsRouter } from "./commentsRouter.ts";
 import { createFullFileRouter } from "./fullFileRouter.ts";
 import { buildExportPrompt } from "./exportFormatting.ts";
 import { createBtwRouter } from "./btwRouter.ts";
+import { createAskRouter } from "./askRouter.ts";
 import type { BtwManager } from "./btwManager.ts";
 import type { TerminalBtw } from "./terminalBtw.ts";
 import type { WsHub } from "./wsHub.ts";
@@ -58,6 +59,8 @@ export interface WorkspaceApp {
   stopWatchers: () => Promise<void>;
   /** Mounts /api/btw/* (needs `hub`, so called after listen(), like startWatchers). Safe to mount after the SPA fallback: its catch-all regex excludes /api/*. */
   startBtw: (hub: WsHub, agent: string) => { btwManager: BtwManager; terminalBtw: TerminalBtw };
+  /** Stops the dedicated Copilot /ask runtime and releases active SDK sessions. */
+  stopAsk: () => Promise<void>;
 }
 
 /**
@@ -189,6 +192,33 @@ export async function buildWorkspaceApp(options: WorkspaceServerOptions): Promis
     res.json({ sessionId: id });
   });
 
+  // Small optimistic-concurrency store for browser review state.  A key can
+  // represent a session/file pane, a draft, or a scroll position; rejecting a
+  // stale revision prevents an older tab's unload handler from overwriting a
+  // newer tab's state.
+  app.get("/api/ui-state", (req, res) => {
+    const key = typeof req.query.key === "string" ? req.query.key : undefined;
+    if (!key) { res.status(400).json({ error: "key is required" }); return; }
+    const row = db.query(`SELECT value, revision, updated_at FROM ui_state WHERE key = ?`).get(key) as { value: string; revision: number; updated_at: number } | null;
+    res.json(row ? { key, value: JSON.parse(row.value), revision: row.revision, updatedAt: row.updated_at } : { key, value: null, revision: 0, updatedAt: null });
+  });
+  app.put("/api/ui-state", express.json({ limit: "1mb" }), (req, res) => {
+    const key = typeof req.body?.key === "string" ? req.body.key : undefined;
+    if (!key || key.length > 512) { res.status(400).json({ error: "valid key is required" }); return; }
+    const expectedRevision = typeof req.body?.revision === "number" && Number.isInteger(req.body.revision) ? req.body.revision : undefined;
+    const value = JSON.stringify(req.body?.value ?? null);
+    const existing = db.query(`SELECT revision FROM ui_state WHERE key = ?`).get(key) as { revision: number } | null;
+    if (expectedRevision !== undefined && expectedRevision !== (existing?.revision ?? 0)) { res.status(409).json({ error: "stale ui state", revision: existing?.revision ?? 0 }); return; }
+    const revision = (existing?.revision ?? 0) + 1;
+    db.query(`INSERT INTO ui_state(key,value,updated_at,revision) VALUES(?,?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at,revision=excluded.revision`).run(key, value, Date.now(), revision);
+    res.json({ key, revision });
+  });
+
+  // This mounts before the SPA fallback and never shares /btw's ACP transport
+  // or lifecycle.
+  const ask = createAskRouter({ db, workspaceRoot: options.workspaceRoot });
+  app.use(ask.router);
+
   const clientDist = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "vendor", "difit", "dist", "client");
   app.use(express.static(clientDist));
   app.get(/^(?!\/api\/).*/, (_req, res) => {
@@ -226,5 +256,9 @@ export async function buildWorkspaceApp(options: WorkspaceServerOptions): Promis
     return { btwManager, terminalBtw };
   }
 
-  return { app, repos: mounted, startWatchers, stopWatchers, startBtw };
+  async function stopAsk(): Promise<void> {
+    await ask.askService.close();
+  }
+
+  return { app, repos: mounted, startWatchers, stopWatchers, startBtw, stopAsk };
 }

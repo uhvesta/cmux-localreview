@@ -1,8 +1,43 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { setApiBase } from './apiBase';
 import App from './App';
+import { AskPanel } from './components/AskPanel';
 import { BtwPanel } from './components/BtwPanel';
+import { ReviewControlPanel } from './components/ReviewControlPanel';
+import { captureDaemonTokenFromLocation } from './services/daemonAuth';
+
+const WORKSPACE_UI_STATE_KEY = 'cmux-localreview.workspace-ui-v1';
+
+interface WorkspaceUiState {
+  selectedRepoId?: string;
+  sidebarCollapsed?: boolean;
+  flatMode?: boolean;
+  btwPanelCollapsed?: boolean;
+  askPanelCollapsed?: boolean;
+  reviewControlsCollapsed?: boolean;
+}
+
+function getStoredWorkspaceUiState(): WorkspaceUiState {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(WORKSPACE_UI_STATE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as WorkspaceUiState;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveWorkspaceUiState(state: WorkspaceUiState): void {
+  try {
+    window.localStorage.setItem(WORKSPACE_UI_STATE_KEY, JSON.stringify(state));
+  } catch {
+    // Local storage is a best-effort enhancement; keep the review usable when
+    // a browser profile disables it.
+  }
+}
 
 interface RepoSummary {
   id: string;
@@ -29,18 +64,23 @@ async function fetchRepos(): Promise<RepoSummary[]> {
  * automatically namespaced to that repo's `/api/repos/<id>` routes.
  */
 export function WorkspaceShell() {
+  const [initialUiState] = useState(getStoredWorkspaceUiState);
+  const uiStateRevisionRef = useRef(0);
+  const [uiStateReady, setUiStateReady] = useState(false);
   const [repos, setRepos] = useState<RepoSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [flatMode, setFlatMode] = useState(false);
+  const [selectedRepoId, setSelectedRepoId] = useState<string | null>(initialUiState.selectedRepoId ?? null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(initialUiState.sidebarCollapsed ?? false);
+  const [flatMode, setFlatMode] = useState(initialUiState.flatMode ?? false);
 
   useEffect(() => {
     fetchRepos()
       .then((list) => {
         setRepos(list);
-        if (list.length > 0 && !selectedRepoId) {
-          setSelectedRepoId(list[0]!.id);
+        if (list.length > 0) {
+          setSelectedRepoId((current) =>
+            current && list.some((repo) => repo.id === current) ? current : list[0]!.id,
+          );
         }
       })
       .catch((err: unknown) => {
@@ -48,6 +88,38 @@ export function WorkspaceShell() {
       });
     // Only run on mount; repo list is stable for the lifetime of the page load.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    captureDaemonTokenFromLocation();
+  }, []);
+
+  // The server copy survives browser storage clears and allows another tab to
+  // pick up the latest shell state. localStorage remains an immediate fallback
+  // for a standalone difit server or an offline browser profile.
+  useEffect(() => {
+    let cancelled = false;
+    void fetch('/api/ui-state?key=workspace-ui-v1')
+      .then(async (response) => {
+        if (!response.ok) return null;
+        return (await response.json()) as { value?: WorkspaceUiState | null; revision?: number };
+      })
+      .then((remote) => {
+        if (cancelled) return;
+        if (remote?.value && typeof remote.value === 'object') {
+          const value = remote.value;
+          if (typeof value.selectedRepoId === 'string') setSelectedRepoId(value.selectedRepoId);
+          if (typeof value.sidebarCollapsed === 'boolean') setSidebarCollapsed(value.sidebarCollapsed);
+          if (typeof value.flatMode === 'boolean') setFlatMode(value.flatMode);
+          if (typeof value.btwPanelCollapsed === 'boolean') setBtwPanelCollapsed(value.btwPanelCollapsed);
+          if (typeof value.askPanelCollapsed === 'boolean') setAskPanelCollapsed(value.askPanelCollapsed);
+          if (typeof value.reviewControlsCollapsed === 'boolean') setReviewControlsCollapsed(value.reviewControlsCollapsed);
+        }
+        uiStateRevisionRef.current = remote?.revision ?? 0;
+      })
+      .catch(() => undefined)
+      .finally(() => { if (!cancelled) setUiStateReady(true); });
+    return () => { cancelled = true; };
   }, []);
 
   const selectRepo = useCallback((id: string) => {
@@ -60,7 +132,33 @@ export function WorkspaceShell() {
   const [reloadableRepoIds, setReloadableRepoIds] = useState<Set<string>>(new Set());
   const [reloadNonce, setReloadNonce] = useState(0);
   const [btwRefreshNonce, setBtwRefreshNonce] = useState(0);
-  const [btwPanelCollapsed, setBtwPanelCollapsed] = useState(true);
+  const [btwPanelCollapsed, setBtwPanelCollapsed] = useState(initialUiState.btwPanelCollapsed ?? true);
+  const [askPanelCollapsed, setAskPanelCollapsed] = useState(initialUiState.askPanelCollapsed ?? true);
+  const [reviewControlsCollapsed, setReviewControlsCollapsed] = useState(
+    initialUiState.reviewControlsCollapsed ?? true,
+  );
+
+  useEffect(() => {
+    const value = {
+      selectedRepoId: selectedRepoId ?? undefined,
+      sidebarCollapsed,
+      flatMode,
+      btwPanelCollapsed,
+      askPanelCollapsed,
+      reviewControlsCollapsed,
+    };
+    saveWorkspaceUiState(value);
+    if (!uiStateReady) return;
+    void fetch('/api/ui-state', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: 'workspace-ui-v1', value, revision: uiStateRevisionRef.current }),
+    }).then(async (response) => {
+      const result = (await response.json().catch(() => null)) as { revision?: number } | null;
+      if (response.ok && typeof result?.revision === 'number') uiStateRevisionRef.current = result.revision;
+      if (response.status === 409 && typeof result?.revision === 'number') uiStateRevisionRef.current = result.revision;
+    }).catch(() => undefined);
+  }, [selectedRepoId, sidebarCollapsed, flatMode, btwPanelCollapsed, askPanelCollapsed, reviewControlsCollapsed, uiStateReady]);
 
   useEffect(() => {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -408,6 +506,15 @@ export function WorkspaceShell() {
         refreshNonce={btwRefreshNonce}
         collapsed={btwPanelCollapsed}
         onToggleCollapsed={() => setBtwPanelCollapsed((v) => !v)}
+      />
+      <AskPanel
+        collapsed={askPanelCollapsed}
+        onToggleCollapsed={() => setAskPanelCollapsed((v) => !v)}
+      />
+      <ReviewControlPanel
+        collapsed={reviewControlsCollapsed}
+        onToggleCollapsed={() => setReviewControlsCollapsed((v) => !v)}
+        refreshNonce={btwRefreshNonce}
       />
     </div>
   );

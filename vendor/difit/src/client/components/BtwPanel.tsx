@@ -2,6 +2,19 @@ import { useCallback, useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
+import { daemonFetch } from '../services/daemonAuth';
+
+const BTW_DRAFT_STORAGE_KEY = 'cmux-localreview.btw-draft-v1';
+const BTW_TRANSPORT_STORAGE_KEY = 'cmux-localreview.btw-transport-v1';
+
+function readStoredString(key: string): string {
+  try {
+    return window.localStorage.getItem(key) ?? '';
+  } catch {
+    return '';
+  }
+}
+
 interface BtwAnswerDTO {
   id: number;
   body: string;
@@ -39,7 +52,7 @@ interface BtwPanelProps {
 }
 
 async function fetchThreads(): Promise<BtwThreadDTO[]> {
-  const res = await fetch('/api/btw/threads');
+  const res = await daemonFetch('/api/btw/threads');
   if (!res.ok) throw new Error(`Failed to load /btw threads: ${res.status}`);
   const data = (await res.json()) as { threads: BtwThreadDTO[] };
   return data.threads;
@@ -47,8 +60,10 @@ async function fetchThreads(): Promise<BtwThreadDTO[]> {
 
 export function BtwPanel({ selectedRepoId, refreshNonce, collapsed, onToggleCollapsed }: BtwPanelProps) {
   const [threads, setThreads] = useState<BtwThreadDTO[]>([]);
-  const [question, setQuestion] = useState('');
-  const [transport, setTransport] = useState<'acp' | 'terminal'>('acp');
+  const [question, setQuestion] = useState(() => readStoredString(BTW_DRAFT_STORAGE_KEY));
+  const [transport, setTransport] = useState<'acp' | 'terminal'>(() =>
+    readStoredString(BTW_TRANSPORT_STORAGE_KEY) === 'terminal' ? 'terminal' : 'acp',
+  );
   const [asking, setAsking] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -62,13 +77,29 @@ export function BtwPanel({ selectedRepoId, refreshNonce, collapsed, onToggleColl
     refresh();
   }, [refresh, refreshNonce]);
 
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(BTW_DRAFT_STORAGE_KEY, question);
+    } catch {
+      // Draft retention is best-effort.
+    }
+  }, [question]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(BTW_TRANSPORT_STORAGE_KEY, transport);
+    } catch {
+      // Preference retention is best-effort.
+    }
+  }, [transport]);
+
   const ask = useCallback(async () => {
     const body = question.trim();
     if (!body) return;
     setAsking(true);
     setError(null);
     try {
-      const res = await fetch('/api/btw/ask', {
+      const res = await daemonFetch('/api/btw/ask', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

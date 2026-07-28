@@ -368,6 +368,7 @@ export function CommentThreadCard({
                 title="Reply to thread"
                 submitLabel="Reply"
                 placeholder="Write a reply..."
+                draftKey={`cmux-localreview.reply-draft:${thread.id}`}
               />
             ) : (
               <button

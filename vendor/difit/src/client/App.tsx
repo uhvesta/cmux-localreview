@@ -35,7 +35,7 @@ import { RevisionDetailModal } from './components/RevisionDetailModal';
 import { SettingsModal } from './components/SettingsModal';
 import { SparkleAnimation } from './components/SparkleAnimation';
 import { WordHighlightProvider } from './contexts/WordHighlightContext';
-import { resolveApiUrl } from './apiBase';
+import { getApiBase, resolveApiUrl } from './apiBase';
 import { useAppearanceSettings } from './hooks/useAppearanceSettings';
 import { useDiffComments } from './hooks/useDiffComments';
 import { useExpandedLines, type MergedChunk } from './hooks/useExpandedLines';
@@ -65,6 +65,38 @@ const SIDEBAR_OPEN_STORAGE_KEY = 'difit.sidebarOpen';
 const SIDEBAR_MIN_WIDTH = 200;
 const SIDEBAR_MAX_WIDTH = 600;
 const SIDEBAR_DEFAULT_WIDTH = 280;
+const REVIEW_UI_STATE_KEY_PREFIX = 'cmux-localreview.review-ui-v1';
+
+interface ReviewUiState {
+  collapsedFiles?: string[];
+  fullFileOpenFor?: string[];
+  lastFilePath?: string;
+  scrollTop?: number;
+}
+
+function getReviewUiStateKey(): string {
+  return `${REVIEW_UI_STATE_KEY_PREFIX}:${getApiBase() || 'default'}`;
+}
+
+function readReviewUiState(): ReviewUiState {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(getReviewUiStateKey());
+    if (!raw) return {};
+    const value = JSON.parse(raw) as ReviewUiState;
+    return value && typeof value === 'object' ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeReviewUiState(value: ReviewUiState): void {
+  try {
+    window.localStorage.setItem(getReviewUiStateKey(), JSON.stringify(value));
+  } catch {
+    // UI state persistence is intentionally best effort.
+  }
+}
 
 const parseDiffViewMode = (value: unknown): DiffViewMode | null => {
   switch (value) {
@@ -129,6 +161,7 @@ const getStoredSidebarOpen = (): boolean | null => {
 const getInitialFileTreeOpen = () => getStoredSidebarOpen() ?? true;
 
 function App() {
+  const [initialReviewUiState] = useState(readReviewUiState);
   const [diffData, setDiffData] = useState<DiffResponse | null>(null);
   const [diffDataVersion, setDiffDataVersion] = useState(0);
   const [diffMode, setDiffMode] = useState<DiffViewMode>(getInitialDiffViewMode);
@@ -144,7 +177,10 @@ function App() {
   const [hasTriggeredSparkles, setHasTriggeredSparkles] = useState(false);
   const [isCommentsListOpen, setIsCommentsListOpen] = useState(false);
   const [isRevisionModalOpen, setIsRevisionModalOpen] = useState(false);
-  const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(new Set());
+  const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(
+    () => new Set(initialReviewUiState.collapsedFiles),
+  );
+  const [lastFilePath, setLastFilePath] = useState(initialReviewUiState.lastFilePath ?? '');
   const collapsedInitializedRef = useRef(false);
   const diffScrollContainerRef = useRef<HTMLElement | null>(null);
 
@@ -327,10 +363,16 @@ function App() {
   // Initialize collapsed files from viewed files (only once per diff)
   useEffect(() => {
     if (!collapsedInitializedRef.current && hasLoadedInitialViewedFiles) {
-      setCollapsedFiles(new Set(viewedFiles));
+      const validPaths = new Set(diffData?.files.map((file) => file.path) ?? []);
+      const restored = initialReviewUiState.collapsedFiles;
+      setCollapsedFiles(
+        Array.isArray(restored)
+          ? new Set(restored.filter((path) => validPaths.has(path)))
+          : new Set(viewedFiles),
+      );
       collapsedInitializedRef.current = true;
     }
-  }, [viewedFiles, hasLoadedInitialViewedFiles]);
+  }, [diffData?.files, hasLoadedInitialViewedFiles, initialReviewUiState.collapsedFiles, viewedFiles]);
   const {
     renderedFilePaths,
     ensureFileRendered,
@@ -446,7 +488,9 @@ function App() {
   // Per-file "Full File" mode (SPEC.md §2): an independent toggle from
   // split/unified, layered on top of the same stacked file list rather than
   // replacing it — a file shows either its normal DiffViewer or FullFileView.
-  const [fullFileOpenFor, setFullFileOpenFor] = useState<Set<string>>(new Set());
+  const [fullFileOpenFor, setFullFileOpenFor] = useState<Set<string>>(
+    () => new Set(initialReviewUiState.fullFileOpenFor),
+  );
   const toggleFullFile = useCallback((path: string) => {
     setFullFileOpenFor((prev) => {
       const next = new Set(prev);
@@ -455,6 +499,40 @@ function App() {
       return next;
     });
   }, []);
+
+  const handleFileSelected = useCallback(
+    (path: string) => {
+      setLastFilePath(path);
+      scrollFileIntoDiffContainer(path);
+      if (isMobile) handleMobileFileSelected();
+    },
+    [handleMobileFileSelected, isMobile, scrollFileIntoDiffContainer],
+  );
+
+  useEffect(() => {
+    if (!diffData || !lastFilePath || !diffData.files.some((file) => file.path === lastFilePath)) {
+      return;
+    }
+    const timeout = window.setTimeout(() => scrollFileIntoDiffContainer(lastFilePath), 50);
+    return () => window.clearTimeout(timeout);
+  }, [diffData, lastFilePath, scrollFileIntoDiffContainer]);
+
+  useEffect(() => {
+    writeReviewUiState({
+      collapsedFiles: [...collapsedFiles],
+      fullFileOpenFor: [...fullFileOpenFor],
+      lastFilePath: lastFilePath || undefined,
+      scrollTop: diffScrollContainerRef.current?.scrollTop,
+    });
+  }, [collapsedFiles, fullFileOpenFor, lastFilePath]);
+
+  useEffect(() => {
+    if (!diffData || !initialReviewUiState.scrollTop) return;
+    const timeout = window.setTimeout(() => {
+      diffScrollContainerRef.current?.scrollTo({ top: initialReviewUiState.scrollTop });
+    }, 50);
+    return () => window.clearTimeout(timeout);
+  }, [diffData, initialReviewUiState.scrollTop]);
 
   const handleDiffModeChange = useCallback((mode: DiffViewMode) => {
     setDiffMode(mode);
@@ -1436,7 +1514,7 @@ function App() {
                 <FileList
                   files={diffData.files}
                   onScrollToFile={scrollFileIntoDiffContainer}
-                  onFileSelected={isMobile ? handleMobileFileSelected : undefined}
+                  onFileSelected={handleFileSelected}
                   comments={normalizedThreads}
                   reviewedFiles={viewedFiles}
                   onToggleReviewed={toggleFileReviewed}
@@ -1482,6 +1560,14 @@ function App() {
 
           <main
             ref={diffScrollContainerRef}
+            onScroll={(event) => {
+              writeReviewUiState({
+                collapsedFiles: [...collapsedFiles],
+                fullFileOpenFor: [...fullFileOpenFor],
+                lastFilePath: lastFilePath || undefined,
+                scrollTop: event.currentTarget.scrollTop,
+              });
+            }}
             className={`flex-1 overflow-y-auto ${showMobileCommentsBar ? 'pb-16' : ''}`}
           >
             {diffData.files.map((file, fileIndex) => {

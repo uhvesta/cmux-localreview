@@ -561,6 +561,7 @@ export const DiffChunk = memo(function DiffChunk({
                               selectedCode={getSelectedCodeContent()}
                               syntaxTheme={syntaxTheme}
                               filename={filename}
+                              draftKey={`cmux-localreview.comment-draft:${filename}:${commentingLine.side}:${String(commentingLine.lineNumber)}`}
                             />
                           </div>
                         </div>

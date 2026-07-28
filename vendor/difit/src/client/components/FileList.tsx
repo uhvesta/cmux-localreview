@@ -22,7 +22,7 @@ import { Checkbox } from './Checkbox';
 interface FileListProps {
   files: DiffFile[];
   onScrollToFile: (path: string) => void;
-  onFileSelected?: () => void;
+  onFileSelected?: (path: string) => void;
   comments: CommentThread[];
   reviewedFiles: Set<string>;
   onToggleReviewed: (path: string) => void;
@@ -414,7 +414,7 @@ export const FileList = memo(function FileList({
           style={{ paddingLeft: getTreeRowPaddingLeft(depth) }}
           onClick={() => {
             onScrollToFile(file.path);
-            onFileSelected?.();
+            onFileSelected?.(file.path);
           }}
         >
           <Checkbox

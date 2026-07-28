@@ -123,6 +123,134 @@ const MIGRATIONS: Migration[] = [
       );
     },
   },
+  {
+    // Global-daemon data lives in a SQLite database too.  Keeping the queue
+    // schema in the regular migration stream lets a workspace DB be used for
+    // standalone/offline operation, while the daemon normally uses daemon.db.
+    version: 3,
+    up: (db) => {
+      db.run(`CREATE TABLE workspace_registry (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        root_path TEXT NOT NULL UNIQUE,
+        label TEXT,
+        last_opened_at INTEGER NOT NULL,
+        active INTEGER NOT NULL DEFAULT 0
+      )`);
+      db.run(`CREATE TABLE queue_items (
+        id TEXT PRIMARY KEY,
+        idempotent_key TEXT UNIQUE,
+        title TEXT NOT NULL,
+        body TEXT NOT NULL DEFAULT '',
+        workspace_path TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'local' CHECK(kind IN ('local','remote')),
+        remote_url TEXT,
+        status TEXT NOT NULL CHECK(status IN ('queued','in_review','changes_requested','approved','completed')),
+        position INTEGER NOT NULL,
+        agent_id TEXT,
+        agent_provider TEXT,
+        copilot_session_id TEXT,
+        snapshot_manifest_path TEXT,
+        snapshot_manifest_json TEXT,
+        feedback_target TEXT,
+        decision_body TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`);
+      db.run(`CREATE INDEX idx_queue_items_status_position ON queue_items(status, position)`);
+      db.run(`CREATE TABLE queue_feedback (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        queue_item_id TEXT NOT NULL REFERENCES queue_items(id) ON DELETE CASCADE,
+        body TEXT NOT NULL,
+        path TEXT,
+        line INTEGER,
+        created_at INTEGER NOT NULL
+      )`);
+      db.run(`CREATE TABLE agent_registry (
+        id TEXT PRIMARY KEY,
+        provider TEXT NOT NULL,
+        command TEXT,
+        workspace_path TEXT,
+        review_session_id TEXT,
+        status TEXT NOT NULL DEFAULT 'connected',
+        metadata_json TEXT,
+        updated_at INTEGER NOT NULL
+      )`);
+      db.run(`CREATE TABLE ask_conversations (
+        id TEXT PRIMARY KEY,
+        queue_item_id TEXT,
+        model TEXT,
+        copilot_session_id TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`);
+      db.run(`CREATE TABLE ask_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id TEXT NOT NULL REFERENCES ask_conversations(id) ON DELETE CASCADE,
+        role TEXT NOT NULL CHECK(role IN ('user','assistant','system')),
+        body TEXT NOT NULL,
+        pending INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL
+      )`);
+    },
+  },
+  {
+    version: 4,
+    up: (db) => {
+      db.run(`ALTER TABLE queue_items ADD COLUMN base_ref TEXT`);
+    },
+  },
+  {
+    version: 5,
+    up: (db) => {
+      db.run(`ALTER TABLE ui_state ADD COLUMN revision INTEGER NOT NULL DEFAULT 0`);
+    },
+  },
+  {
+    // Submission provenance is intentionally JSON: cmux evolves its surface
+    // payload independently, and preserving the original capture is more
+    // useful than flattening a lossy subset into columns.
+    version: 6,
+    up: (db) => {
+      db.run(`ALTER TABLE queue_items ADD COLUMN provenance_json TEXT`);
+      db.run(`ALTER TABLE queue_items ADD COLUMN source_fingerprint TEXT`);
+      db.run(`ALTER TABLE queue_items ADD COLUMN supersedes_id TEXT REFERENCES queue_items(id)`);
+      db.run(`CREATE INDEX idx_queue_items_workspace_fingerprint ON queue_items(workspace_path, source_fingerprint)`);
+      db.run(`CREATE TABLE queue_watchers (
+        workspace_path TEXT PRIMARY KEY,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        poll_interval_ms INTEGER NOT NULL DEFAULT 5000,
+        title TEXT,
+        body TEXT,
+        base_ref TEXT,
+        agent_id TEXT,
+        agent_provider TEXT,
+        feedback_target TEXT,
+        provenance_json TEXT,
+        last_fingerprint TEXT,
+        last_queue_item_id TEXT REFERENCES queue_items(id),
+        updated_at INTEGER NOT NULL
+      )`);
+    },
+  },
+  {
+    // A remote node's bearer token is stored only in the owner-only daemon
+    // database. SSH forwards remote loopback to local loopback on demand.
+    version: 7,
+    up: (db) => {
+      db.run(`CREATE TABLE federation_nodes (
+        id TEXT PRIMARY KEY,
+        label TEXT NOT NULL,
+        ssh_target TEXT NOT NULL,
+        remote_port INTEGER NOT NULL,
+        token TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        last_connected_at INTEGER,
+        last_error TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`);
+    },
+  },
 ];
 
 export function runMigrations(db: Database): void {
