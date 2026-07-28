@@ -2,7 +2,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "githubauth",
-    srcs = ["githubauth.go"],
+    srcs = ["githubauth.go", "os_secrets.go"],
     importpath = "github.com/uhvesta/cmux-localreview/internal/githubauth",
     visibility = ["//visibility:public"],
 )

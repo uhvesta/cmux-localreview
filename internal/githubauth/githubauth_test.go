@@ -94,3 +94,55 @@ func mapValues(m memSecrets) []string {
 	}
 	return out
 }
+
+type invocation struct {
+	name  string
+	args  []string
+	stdin []byte
+}
+type runner struct {
+	calls       []invocation
+	out, errOut []byte
+	err         error
+}
+
+func (r *runner) Run(n string, a []string, in []byte) ([]byte, []byte, error) {
+	r.calls = append(r.calls, invocation{n, append([]string{}, a...), append([]byte{}, in...)})
+	return r.out, r.errOut, r.err
+}
+func TestOSSecretStoreCommandBoundaries(t *testing.T) {
+	for _, tc := range []struct{ os, get, set string }{{"darwin", "security", "security"}, {"linux", "secret-tool", "secret-tool"}} {
+		t.Run(tc.os, func(t *testing.T) {
+			r := &runner{out: []byte("token\n")}
+			s := &OSSecretStore{OS: tc.os, Runner: r}
+			v, e := s.Get("svc", "acct")
+			if e != nil || v != "token" {
+				t.Fatalf("get %q %v", v, e)
+			}
+			if r.calls[0].name != tc.get {
+				t.Fatal(r.calls)
+			}
+			if e = s.Set("svc", "acct", "token"); e != nil {
+				t.Fatal(e)
+			}
+			if r.calls[1].name != tc.set {
+				t.Fatal(r.calls)
+			}
+			if tc.os == "linux" && string(r.calls[1].stdin) != "token" {
+				t.Fatalf("linux token must be stdin: %#v", r.calls[1])
+			}
+			if e = s.Delete("svc", "acct"); e != nil {
+				t.Fatal(e)
+			}
+		})
+	}
+}
+func TestOSSecretStoreFailsClosed(t *testing.T) {
+	s := &OSSecretStore{OS: "windows", Runner: &runner{}}
+	if _, e := s.Get("s", "a"); e == nil {
+		t.Fatal("unsupported OS must fail closed")
+	}
+	if e := s.Set("s", "a", "token"); e == nil {
+		t.Fatal("unsupported OS must not write fallback")
+	}
+}
