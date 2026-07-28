@@ -105,6 +105,9 @@ dependencies. They may continue to mention TypeScript after Phase 4.
    runtime/build references. See
    [`PHASE4-LEGACY-INVENTORY.md`](PHASE4-LEGACY-INVENTORY.md) for the exact
    deletion/preservation split.
+   The pre-delete form also rejects a renderer import of a server-only
+   `vendor/cmux-hub` module and runs the native frozen-corpus/parity replay;
+   this catches a hidden retained-UI dependency before the delete commit.
 6. Re-run `go test ./...`, `bazel test //...`, the native release gate, UI
    build, platform archive smoke tests, and both full browser/Electron
    computer-use passes. Record command output and screenshots in

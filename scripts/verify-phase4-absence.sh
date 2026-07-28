@@ -50,6 +50,17 @@ require_archived_corpus() {
   done
 }
 
+require_renderer_isolation() {
+  # The renderer is intentionally retained after Phase 4.  These four files
+  # are server-side cmux-hub modules, so a renderer import would turn the
+  # planned delete into a late, user-visible regression.  Check it before the
+  # deletion rather than discovering it while pruning dependencies.
+  if rg -n 'vendor/cmux-hub/(cmux|logger|review-watcher|review)|cmux-hub/(cmux|logger|review-watcher|review)' \
+    vendor/difit/src/client --glob '*.{ts,tsx,js,jsx}'; then
+    fail 'retained renderer imports a server-only cmux-hub TypeScript module'
+  fi
+}
+
 if [[ "$mode" == predelete ]]; then
   for path in "${legacy_paths[@]}"; do
     test -e "$path" || fail "pre-deletion inventory changed unexpectedly: missing $path"
@@ -58,10 +69,17 @@ if [[ "$mode" == predelete ]]; then
     test -f "$path" || fail "pre-deletion server-only vendor inventory changed unexpectedly: missing $path"
   done
   require_archived_corpus
+  require_renderer_isolation
 
   # The Go delivery boundary must already be free of the old runtime. This is
   # deliberately separate from the strict tree-absence assertion below.
   bash scripts/verify-native-runtime-boundary.sh
+
+  # These consume the archived oracle with Go/Bazel only.  Calling them here
+  # makes --predelete a real deletion-readiness check, not merely a directory
+  # existence check.  Neither command starts Bun/Node or imports src/.
+  bash scripts/verify-frozen-parity-corpus.sh
+  bash scripts/verify-go-parity-matrix.sh
 
   printf '%s\n' 'Phase-4 pre-deletion inventory is explicit (legacy runtime is still present):'
   printf '  src files: %s\n' "$(find src -type f | wc -l | tr -d ' ')"
@@ -116,5 +134,6 @@ if rg -n '"(cmux-localreview|global-daemon|queue-submit|localreview-submit|local
 fi
 
 require_archived_corpus
+require_renderer_isolation
 bash scripts/verify-native-runtime-boundary.sh
 printf '%s\n' 'Phase-4 strict absence gate passed.'

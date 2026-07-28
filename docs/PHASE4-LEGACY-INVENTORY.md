@@ -29,8 +29,16 @@ commit.
 ## Gate behavior
 
 `--predelete` confirms that the complete retired inventory is still explicit,
-the preserved corpus has Go-native consumers, and the Go runtime boundary is
-already clean. It must not claim the frozen files are absent.
+the preserved corpus has Go-native consumers and passes its Go/Bazel replay,
+the retained renderer imports none of the server-only `vendor/cmux-hub`
+modules, and the Go runtime boundary is already clean. It must not claim the
+frozen files are absent.
+
+The pre-delete check deliberately exercises the native frozen-corpus and
+parity-matrix gates. It never launches Bun/Node or imports `src/`; it is safe
+to use as the final stop-line test immediately before a reviewed deletion
+commit. It is not a replacement for the two clean browser/Electron Phase-3
+passes recorded in `MIGRATION_LOG.md`.
 
 The strict form fails if any retired path/module remains, if root package
 dependencies still name the retired JS server/ACP runtime, or if a non-exempt
