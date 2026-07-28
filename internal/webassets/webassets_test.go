@@ -8,6 +8,9 @@ import (
 )
 
 func TestEmbeddedAssetsServeIndexAndSPAFallback(t *testing.T) {
+	if _, err := FS(); err != nil {
+		t.Fatalf("embedded assets failed to load: %v", err)
+	}
 	h := Handler()
 	for _, target := range []string{"/", "/queue", "/review/some-item"} {
 		r := httptest.NewRequest(http.MethodGet, target, nil)

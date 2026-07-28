@@ -17,5 +17,6 @@ go_test(
 go_binary(
     name = "localreviewd",
     embed = [":localreviewd_lib"],
+    gotags = ["bazel_ui_archive"],
     visibility = ["//visibility:public"],
 )

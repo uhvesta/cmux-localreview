@@ -1,6 +1,9 @@
+//go:build !bazel_ui_archive
+
 // Package webassets provides the daemon's embedded, single-binary web asset
-// boundary. It has no JavaScript runtime dependency: Vite is used only by the
-// explicit staging step before a release build.
+// boundary. This direct-Go fallback keeps `go test ./...` useful without Bun;
+// Bazel builds select webassets_bazel.go, whose declared Vite build input
+// prevents a stale renderer from shipping.
 package webassets
 
 import (
@@ -11,10 +14,9 @@ import (
 	"strings"
 )
 
-// Files holds a staged Vite distribution. The repository carries a tiny
-// bootstrap page so ordinary Go/Bazel compilation remains reproducible before
-// a frontend build; scripts/stage-ui-assets.sh replaces dist/ with the real
-// Vite output before a distributable localreviewd is built.
+// Files holds the checked-in bootstrap renderer used only for direct Go inner
+// loop tests. Release and Bazel artifacts always embed the declared Vite build
+// in webassets_bazel.go.
 //
 //go:embed all:dist
 var Files embed.FS

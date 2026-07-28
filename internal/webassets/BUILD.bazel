@@ -1,12 +1,39 @@
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
-# embedsrcs makes staged Vite files visible to rules_go's //go:embed action.
-# The checked-in bootstrap index keeps `bazel build //...` usable before the
-# release staging target has run; release builds stage the full Vite tree.
+# Build the renderer as an explicit input of the embedded daemon, rather than
+# relying on a developer having run stage-ui-assets.sh beforehand.  The archive
+# is a build-time-only Vite artifact; the daemon expands it in memory and has
+# no Node/Bun runtime dependency.
+genrule(
+    name = "staged_ui_archive",
+    srcs = [
+        "//:ui_sources",
+        "//:package.json",
+        "//:bun.lock",
+        "//scripts:stage-ui-assets.sh",
+    ],
+    outs = ["ui-dist.tar.gz"],
+    local = True,
+    tags = ["no-sandbox"],
+    cmd = """
+set -euo pipefail
+command -v bun >/dev/null || { echo 'bun is required to build the embedded UI' >&2; exit 1; }
+repo=$$(dirname "$$(realpath $(location //:package.json))")
+BUILD_WORKSPACE_DIRECTORY="$$repo" bash $(location //scripts:stage-ui-assets.sh) \\
+  --output "$(@D)/ui-dist" --archive "$@"
+""",
+)
+
+# embedsrcs makes the generated archive visible to rules_go's //go:embed
+# action.  Unlike the old checked-in dist bootstrap, every Bazel daemon build
+# now contains the renderer from the current declared Vite sources.
 go_library(
     name = "webassets",
-    srcs = ["webassets.go"],
-    embedsrcs = glob(["dist/**"]),
+    srcs = [
+        "webassets.go",
+        "webassets_bazel.go",
+    ],
+    embedsrcs = [":staged_ui_archive"],
     importpath = "github.com/uhvesta/cmux-localreview/internal/webassets",
     visibility = ["//visibility:public"],
 )
@@ -15,4 +42,5 @@ go_test(
     name = "webassets_test",
     srcs = ["webassets_test.go"],
     embed = [":webassets"],
+    gotags = ["bazel_ui_archive"],
 )
