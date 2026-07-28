@@ -54,6 +54,7 @@ go_test(
 		"parity_corpus_test.go",
 		"parity_matrix_test.go",
 		"queue_delivery_test.go",
+		"remote_parity_test.go",
     ],
     embed = [":daemon"],
 	data = ["//testdata/parity/ts-final:http_fixture", "//testdata/parity/ts-final:remote_pr_fixture"],

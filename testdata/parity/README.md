@@ -39,3 +39,9 @@ visible debt record that must be removed when that endpoint is ported.
 Git remote and a synthetic GitHub App device-flow/API response, then records
 the successful remote PR queue, cached-worktree, open, status, and cleanup
 lifecycle. Neither script contacts GitHub, Copilot, cmux, or a user cache.
+`TestFrozenRemotePullRequestLifecycleParity` consumes that captured lifecycle
+directly: it checks the frozen inventory, then drives the native daemon through
+the same auth → queue → cache status → open → cleanup transitions using its own
+disposable bare remote. `verify-go-parity-matrix.sh` runs that test in both Go
+and Bazel forms, so remote lifecycle coverage survives deletion of the capture
+scripts.

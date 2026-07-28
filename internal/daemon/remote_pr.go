@@ -141,9 +141,12 @@ func (d *Daemon) enqueueRemotePullRequest(ctx context.Context, input queueStore.
 		if marshalErr != nil {
 			return nil, false, marshalErr
 		}
-		if writeErr := os.WriteFile(manifestPath, append(append([]byte(nil), encoded...), '\n'), 0o600); writeErr != nil {
-			return nil, false, writeErr
-		}
+		// snapshot.Capture already wrote the canonical manifest at manifestPath.
+		// Keep that file in the portable snapshot format: queue opening and
+		// `localreview reproduce` materialize it directly.  The queue record can
+		// carry a richer envelope (including remote PR/cache provenance), but
+		// overwriting the on-disk manifest with that envelope makes a successfully
+		// queued remote PR impossible to open later.
 		input.SnapshotManifestPath, input.SnapshotManifest = manifestPath, encoded
 	} else if len(input.SnapshotManifest) == 0 {
 		encoded, marshalErr := json.Marshal(map[string]any{"remotePullRequest": pr, "remoteWorkspace": map[string]string{"mirrorPath": workspace.MirrorPath, "worktreePath": workspace.WorktreePath}})

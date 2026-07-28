@@ -28,7 +28,7 @@ The expected corpus is intentionally retained:
 | Archived artifact | Native consumer | Why it survives deletion |
 | --- | --- | --- |
 | `testdata/parity/ts-final/http.json` | `internal/daemon/parity_matrix_test.go` | Frozen HTTP oracle for the native daemon. |
-| `testdata/parity/ts-final/remote-pr.json` | `internal/daemon/parity_corpus_test.go` | Frozen remote lifecycle provenance/digest evidence; extend to full native remote replay before release. |
+| `testdata/parity/ts-final/remote-pr.json` | `internal/daemon/remote_parity_test.go` | Frozen remote lifecycle source plus direct native auth → queue → status → open → cleanup replay against a disposable Git remote. |
 | `internal/daemon/parity_corpus_test.go` | `go test`, `bazel test` | Pins hashes and validates corpus structure without a TS runtime. |
 | `testdata/parity/ts-final/BUILD.bazel` | `//internal/daemon:daemon_test` | Makes both JSON captures explicit Bazel runfiles. |
 | `scripts/verify-frozen-parity-corpus.sh` | CI/release checklist | Native-only integrity gate; retained after Phase 4. |
@@ -71,9 +71,9 @@ dependencies. They may continue to mention TypeScript after Phase 4.
 
 ## Required deletion change sequence
 
-1. Resolve every exception in `parityMatrix`. The matrix currently treats an
-   exception as visible debt, not equivalent parity. Add a normalized fixture
-   or a direct native replay for each changed contract.
+1. Resolve every non-executable exception in `parityMatrix`. A changed native
+   contract is acceptable only when its matrix row executes a normalized
+   fixture assertion or a direct native replay; prose alone is not parity.
 2. Run the native release gate from a clean worktree and from an unpacked
    release-source archive with `bun` absent from `PATH`.
 3. Copy no files: retain the already checked-in corpus plus its Go/Bazel
@@ -120,7 +120,7 @@ request retains its file/line selection, the deterministic fixture turn
 settles once, and reopening the transcript cannot resubmit it. Queue reproduction
 now replays as a safe snapshot materialization plan and explicitly rejects
 retired ACP continuation commands in favor of a fresh SDK-native `/ask`
-handoff. Deletion is **not** ready: the matrix still contains
-other explicit compatibility exceptions and the required two complete
-Phase-3 browser/Electron passes have not been recorded. Do not remove `src/`
-or package dependencies based only on this preparation work.
+handoff. Deletion is **not** ready: the matrix now executes every frozen HTTP
+row and the remote-PR lifecycle has a direct native replay, but the required
+two complete Phase-3 browser/Electron passes have not been recorded. Do not
+remove `src/` or package dependencies based only on this preparation work.
