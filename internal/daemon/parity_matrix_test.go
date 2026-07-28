@@ -107,10 +107,14 @@ var parityMatrix = map[string]parityDisposition{
 	// Import accepts the original compact difit row and stores it as a durable
 	// formal thread. The response is intentionally still byte-compatible with
 	// the frozen capture, so replay it instead of relying only on unit coverage.
-	"comment_import":         {Execute: true, ForceDaemonCapability: true, Reason: "Replayed with the daemon capability: native reviewer writes are capability-protected."},
-	"review_history":         {Execute: true, ForceDaemonCapability: true, Reason: "Replayed with the daemon capability: native reviewer reads are capability-protected."},
-	"btw_threads_empty":      {Reason: "Native /btw uses the SDK conversation store rather than the retired ACP thread projection."},
-	"btw_ask_validation":     {Reason: "Native /btw validation is tested directly against explicit target routing; frozen ACP prompt shape is intentionally retired."},
+	"comment_import": {Execute: true, ForceDaemonCapability: true, Reason: "Replayed with the daemon capability: native reviewer writes are capability-protected."},
+	"review_history": {Execute: true, ForceDaemonCapability: true, Reason: "Replayed with the daemon capability: native reviewer reads are capability-protected."},
+	// The frozen browser capture made these reads public. Native keeps /btw
+	// behind the daemon capability, but the empty thread projection and missing
+	// question validation remain compatible. Native /btw is SDK-only; terminal
+	// and ACP delivery are separately rejected with no focused-pane fallback.
+	"btw_threads_empty":      {Execute: true, ForceDaemonCapability: true, Reason: "Native capability boundary is intentionally stricter than frozen TS."},
+	"btw_ask_validation":     {Execute: true, ForceDaemonCapability: true, Reason: "Native capability boundary is intentionally stricter than frozen TS."},
 	"websocket_diff_updated": {Execute: true, NativeWebsocketDiff: true, Reason: "Replayed through the daemon's real Git polling watcher and mounted WebSocket endpoint."},
 	// A new review session must expose an empty durable comment collection and
 	// retain the old empty comments-output compatibility endpoint. The fixtures
@@ -223,7 +227,7 @@ func TestFrozenTypeScriptParityMatrix(t *testing.T) {
 		"github_auth_status", "github_auth_configure", "github_auth_device_start", "github_auth_device_poll", "github_auth_authenticated_status", "github_auth_disconnect",
 		"local_pr_requires_read_auth", "workspaces_empty", "queue_empty", "federation_nodes_empty", "federation_node_create", "federation_node_status", "federation_node_disconnect", "federation_aggregate_queue", "federation_node_delete", "open_workspace", "repos",
 		"repo_diff", "repo_diff_ignore_whitespace", "repo_revisions", "websocket_diff_updated", "repo_line_count", "repo_blob", "repo_generated_status", "repo_fullfile", "repo_comments_empty", "create_comment", "repo_comments_saved", "comment_import",
-		"sessions", "review_history", "ui_state_empty", "ui_state_put", "export_prompt", "new_session", "comments_json", "comments_output",
+		"sessions", "review_history", "btw_threads_empty", "btw_ask_validation", "ui_state_empty", "ui_state_put", "export_prompt", "new_session", "comments_json", "comments_output",
 		"ask_models", "ask_conversations_empty", "ask_question_set_create", "ask_question_sets", "ask_question_set_get", "ask_question_set_update", "ask_question_set_delete", "ask_conversation_create", "ask_conversation_get", "ask_inline_conversation_reuses_context", "ask_conversation_model", "ask_conversation_settings", "ask_conversation_message_sse", "ask_conversation_cancel_idle", "ask_question_set_for_send", "ask_question_set_combined_sse", "ask_question_set_sequential_sse", "ask_conversation_fresh", "ask_conversation_history",
 		"queue_create_local", "queue_list_with_item", "queue_detail", "queue_reorder", "queue_add_feedback", "queue_feedback_prompt", "queue_reproduce", "queue_export", "queue_open", "queue_complete", "queue_requeue", "queue_delete", "queue_history", "queue_watch_enable", "queue_watch_disable", "queue_hook",
 		"agent_register", "agent_list", "agent_heartbeat", "agent_reconnect",

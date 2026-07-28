@@ -624,3 +624,19 @@ Not yet claimed:
 - Neither replay uses an actual SSH host. Real SSH forwarding, tunnel health,
   reconnect, and remote-daemon browser flows remain explicit Phase-3 manual
   validation gates.
+
+## 2026-07-28 — Native `/btw` parity replay
+
+Done:
+
+- Made the remaining frozen `/btw` rows executable through the capability-
+  protected native route: an opened workspace lists an empty durable SDK thread
+  collection, and an empty prompt is rejected before any turn is created.
+- Retained the direct native tests that reject retired terminal and ACP
+  transports and reject `/btw` when no workspace is open. There is no
+  focused-terminal or focused-cmux-pane fallback in either path.
+
+Validated:
+
+- `TestFrozenTypeScriptParityMatrix`, `TestBtw*`, and the equivalent Bazel
+  parity target pass.
