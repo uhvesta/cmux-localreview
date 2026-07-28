@@ -105,9 +105,10 @@ Create the appropriate dedicated GitHub **OAuth App** client registrations and
 configure their public client IDs. `localreview github-app` is a retained
 compatibility command name; it configures OAuth clients rather than GitHub App
 installations. The default browser loopback flow requires the registered
-`http://127.0.0.1:8787/oauth/callback` URI and an OAuth client secret supplied
-through stdin, never argv or shell history. Use `--device` for a headless or
-SSH-only host.
+`http://127.0.0.1:8787/oauth/callback` URI and uses PKCE, so it needs only the
+public client ID—no OAuth client secret is accepted, stored, or shipped. Use
+`--device` for a headless or SSH-only host after enabling Device Flow on the
+OAuth App registration.
 
 ```sh
 localreview github-app guide
@@ -119,11 +120,12 @@ localreview github-app connect --capability copilot
 localreview auth status
 ```
 
-Tokens and optional client secrets stay in the OS secret store (Keychain on
-macOS; a libsecret-backed `secret-tool` provider on Linux). The browser gets
-neither OAuth tokens nor a persistent readable daemon token. The native daemon
-does not fall back to `gh`, environment tokens, PATs, or an existing Copilot
-CLI login.
+Tokens stay in the OS secret store (Keychain on macOS; a libsecret-backed
+`secret-tool` provider on Linux). The browser gets neither OAuth tokens nor a
+persistent readable daemon token. The native daemon does not fall back to
+`gh`, environment tokens, PATs, or an existing Copilot CLI login. See
+[GitHub OAuth setup](GITHUB-OAUTH-SETUP.md) for the interactive registration,
+consent, recovery, and OAuth-scope limitations.
 
 ## GitHub pull requests and local questions
 

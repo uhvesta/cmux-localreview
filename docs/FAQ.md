@@ -79,7 +79,7 @@ publication path. A `write` capability is not needed for local review.
 
 For a queued remote PR, **Save locally** records a local queue decision only.
 **Publish to GitHub** is a separate, opt-in action that requires both the
-dedicated `read` and `write` GitHub App capabilities. Before it writes, the
+dedicated `read` and `write` GitHub OAuth capabilities. Before it writes, the
 daemon re-resolves the PR and refuses to publish if its head SHA changed or
 the PR is no longer open. A failed publication never becomes a local decision.
 

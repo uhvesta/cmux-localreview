@@ -430,6 +430,7 @@ export function QueueHome() {
           <li>Set its authorization callback URL exactly to <code>http://127.0.0.1:8787/oauth/callback</code>. Enable Device Flow only when this machine needs the SSH/headless fallback.</li>
           <li>Save only the public client ID above, select <strong>Browser OAuth</strong>, then click Connect. The loopback flow uses PKCE; no client secret is entered, stored, or shipped.</li>
           <li>Review the GitHub consent screen before approving. Tokens are saved only by the daemon in the OS secret store and are never returned to this page.</li>
+          <li>This setup never falls back to <code>gh login</code>, a PAT, environment credentials, or an existing Copilot CLI session.</li>
         </ol>
       </details>
       {loopbackLogin && <div role="status" style={{ marginTop: 10, padding: 10, border: '1px solid rgba(88,166,255,0.5)', borderRadius: 6, fontSize: 12 }}>Continue <strong>{capabilityLabels[loopbackLogin.capability].title}</strong> in the GitHub browser tab. If it did not open, <a href={loopbackLogin.authorizationUrl} target="_blank" rel="noreferrer">open the secure authorization page</a>. This page will refresh after the loopback callback completes.</div>}

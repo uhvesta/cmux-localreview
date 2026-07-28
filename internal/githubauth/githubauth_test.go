@@ -2,6 +2,7 @@ package githubauth
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -251,6 +252,27 @@ func TestAPIFacadeUsesExplicitFlowAndHidesCredentials(t *testing.T) {
 	}
 	if err := api.Logout(context.Background(), Read); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestStatusExposesOnlyPublicPKCEReadiness(t *testing.T) {
+	secrets := memSecrets{Service + "/" + account(Read): `{"accessToken":"never-return-this"}`}
+	s := New(secrets, memConfig{Read: "Iv1.public-client"}, roundTrip(func(*http.Request) (*http.Response, error) {
+		return response(http.StatusUnauthorized, `{}`), nil
+	}), nil)
+	status, err := s.Status(context.Background(), Read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Configured || !status.BrowserOAuthReady || status.ClientID != "Iv1.public-client" {
+		t.Fatalf("unexpected PKCE status: %#v", status)
+	}
+	encoded, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "never-return-this") || strings.Contains(string(encoded), "accessToken") {
+		t.Fatalf("status leaked secure credential: %s", encoded)
 	}
 }
 

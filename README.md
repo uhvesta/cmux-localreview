@@ -56,6 +56,8 @@ does not modify shell profiles or copy credentials. See
   copy/paste local review loop.
 - [Setup](docs/SETUP.md) — macOS/Linux installation, skills, OAuth, and
   remote-worker roles.
+- [GitHub OAuth setup](docs/GITHUB-OAUTH-SETUP.md) — dedicated PKCE client
+  registrations, consent, headless setup, and credential boundaries.
 - [Agent guide](docs/AGENT-GUIDE.md) — concise review protocol and safe
   handoff template.
 - [FAQ](docs/FAQ.md) — common operator questions and boundaries.

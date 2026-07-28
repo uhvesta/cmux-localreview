@@ -33,4 +33,32 @@ describe('Queue Home lifecycle recovery', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry Queue Home' }));
     await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(4));
   });
+
+  it('guides a configured OAuth client through the PKCE browser setup without asking for a secret', async () => {
+    const auth = {
+      provider: 'github-oauth-pkce',
+      capabilities: {
+        read: { configured: true, clientId: 'Iv1.readclient', browserOAuthReady: true, authenticated: false, loginState: 'idle' },
+        write: { configured: false, authenticated: false, loginState: 'idle' },
+        copilot: { configured: false, authenticated: false, loginState: 'idle' },
+      },
+    };
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.includes('/api/github/auth/status')) return Promise.resolve({ ok: true, status: 200, json: async () => auth });
+      if (path.includes('/api/queue')) return Promise.resolve({ ok: true, status: 200, json: async () => ({ items: [] }) });
+      if (path.includes('/api/workspaces')) return Promise.resolve({ ok: true, status: 200, json: async () => ({ activeWorkspace: null }) });
+      if (path.includes('/api/federation/')) return Promise.resolve({ ok: true, status: 200, json: async () => ({ nodes: [] }) });
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({}) });
+    }));
+    render(<QueueHome />);
+
+    expect(await screen.findByRole('region', { name: 'GitHub OAuth connections' })).not.toBeNull();
+    expect(screen.getByText('Iv1.readclient')).not.toBeNull();
+    fireEvent.click(screen.getByText('Set up browser OAuth safely'));
+    expect(screen.getByText(/The loopback flow uses PKCE/)).not.toBeNull();
+    // PKCE is explained, but Queue Home has no secret input or paste flow.
+    expect(screen.queryByRole('textbox', { name: /secret/i })).toBeNull();
+    expect(screen.getByText(/gh login/i)).not.toBeNull();
+  });
 });
