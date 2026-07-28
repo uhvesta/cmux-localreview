@@ -223,3 +223,59 @@ Not yet claimed:
   remaining explicit flows include real Copilot completion/model switching,
   question sets, `/btw`, queue decisions, remote PR read-only UI, device auth,
   Electron launch/quit, and RSS measurements.
+
+## 2026-07-28 — Native parity, distribution, and validation hardening
+
+Done:
+
+- Wired the production daemon's lazy Copilot SDK factory. It uses only the
+  dedicated daemon-owned Copilot credential, isolates SDK state below the data
+  directory, starts only after an explicit models/turn action, and rejects
+  unsafe workspace escape, mutation, shell, network, MCP, and memory requests.
+  An unconfigured capability reports a concrete unavailable state; it does not
+  fabricate a model list or delivery success.
+- Added a separate local-only GitHub PR opening path in Queue Home and
+  `localreview open --pr <URL>`. It mirrors a PR for diff and `/ask` without a
+  queue row or a publication path.
+- Completed dedicated GitHub App publishing for remote items: read/write
+  credentials remain separate, a fresh immutable-head check rejects stale PRs,
+  and a failed publication leaves the local decision untouched. Non-blocking
+  COMMENT publication has the same safety boundary.
+- Added CLI daemon auto-start with owner-only discovery/health verification,
+  sibling-release-binary resolution, and a startup lock. A copied release-style
+  pair of binaries was manually exercised with `open --no-open`, `daemon
+  status`, and `daemon stop`.
+- Ported actual SSH federation transport: loopback-only OpenSSH forwarding,
+  daemon secret-store credentials, lazy remote queue/workspace aggregation,
+  retry/error/disconnect handling, and hermetic fake-tunnel coverage.
+- Closed native comment parity regressions: optimistic revision/channel
+  preservation and durable anchor revalidation now survive change, restore, and
+  restart without silently relocating a thread.
+- Fixed Queue Home's local submission to call the immutable snapshot hook, not
+  the bare queue-row endpoint.
+
+Validated:
+
+- Clean local-browser run against a fresh daemon: capability exchange; Queue
+  Home local submission; immutable snapshot creation; explicit workspace open;
+  rendered split diff; **Complete**; and **Requeue**. The resulting decision
+  history and queue count matched the rendered state.
+- Packaged macOS Electron run: codesign verification, fresh sidecar and
+  health, immutable snapshot metadata, app/sidecar termination, relaunch, and
+  restored durable queue state. Idle daemon RSS was 20.5–24.7 MB, under the
+  50 MB target.
+- `go test ./...`, `bazel test //...` (18 test targets),
+  `scripts/verify-go-parity-matrix.sh`,
+  `scripts/verify-parity-fixtures.sh`, and `bazel build //desktop:app` passed
+  after the integrated changes.
+
+Not yet claimed:
+
+- Phase 3 has not yet passed twice on clean profiles. The remaining required
+  real-service checks are GitHub App loopback and device authorization,
+  authenticated Copilot model enumeration/stream/cancel/model-switch, `/btw`,
+  and a fully click-driven Electron renderer pass. A native confirmation dialog
+  interrupted the automation attempt to remove the disposable queue item, so
+  removal is not claimed from that pass.
+- Phase 4 deletion and a tagged GitHub Release remain intentionally open until
+  those two complete Phase-3 passes and the full parity audit are complete.
