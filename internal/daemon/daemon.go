@@ -28,6 +28,7 @@ import (
 
 	"github.com/uhvesta/cmux-localreview/internal/agent"
 	"github.com/uhvesta/cmux-localreview/internal/gitdiff"
+	"github.com/uhvesta/cmux-localreview/internal/githubauth"
 	queueStore "github.com/uhvesta/cmux-localreview/internal/queue"
 	"github.com/uhvesta/cmux-localreview/internal/store"
 )
@@ -35,9 +36,10 @@ import (
 const Version = "0.3.0-go-migration"
 
 type Options struct {
-	Port    int
-	DataDir string
-	UIDir   string
+	Port       int
+	DataDir    string
+	UIDir      string
+	GitHubAuth *githubauth.ServiceClient
 }
 
 type discovery struct {
@@ -57,6 +59,25 @@ type Daemon struct {
 	sessions map[string]time.Time
 	db       *sql.DB
 	review   *workspaceReview
+	github   *githubauth.ServiceClient
+}
+
+func browserOpener(rawURL string) error {
+	command := "open"
+	if runtime.GOOS == "linux" {
+		command = "xdg-open"
+	}
+	return exec.Command(command, rawURL).Start()
+}
+
+func githubCapability(raw string) (githubauth.Capability, bool) {
+	value := githubauth.Capability(raw)
+	switch value {
+	case githubauth.Read, githubauth.Write, githubauth.Copilot:
+		return value, true
+	default:
+		return "", false
+	}
 }
 
 type reviewRepo struct {
@@ -523,6 +544,81 @@ func shellQuote(value string) string {
 // explicitly; they never fall back to a Node process behind the caller.
 func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api")
+	if path == "/github/auth/status" && r.Method == http.MethodGet {
+		capabilities := map[string]githubauth.Status{}
+		for _, capability := range []githubauth.Capability{githubauth.Read, githubauth.Write, githubauth.Copilot} {
+			status, err := d.github.Status(r.Context(), capability)
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "GitHub authentication status unavailable"})
+				return
+			}
+			capabilities[string(capability)] = status
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"provider": "github-app-device-flow", "capabilities": capabilities})
+		return
+	}
+	if path == "/github/auth/configure" && r.Method == http.MethodPost {
+		var input struct {
+			Capability string `json:"capability"`
+			ClientID   string `json:"clientId"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&input); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid GitHub App configuration"})
+			return
+		}
+		capability, ok := githubCapability(input.Capability)
+		if !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Unknown GitHub App capability"})
+			return
+		}
+		if err := d.github.Configure(capability, input.ClientID); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if strings.HasPrefix(path, "/github/auth/") {
+		parts := strings.Split(strings.Trim(path, "/"), "/")
+		if len(parts) == 4 && parts[0] == "github" && parts[1] == "auth" {
+			capability, ok := githubCapability(parts[2])
+			if !ok {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Unknown GitHub App capability"})
+				return
+			}
+			switch {
+			case parts[3] == "start" && r.Method == http.MethodPost:
+				start, err := d.github.Start(r.Context(), capability)
+				if err != nil {
+					writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+					return
+				}
+				writeJSON(w, http.StatusAccepted, map[string]any{"userCode": start.UserCode, "verificationUri": start.VerificationURI})
+				return
+			case parts[3] == "poll" && r.Method == http.MethodPost:
+				status, err := d.github.Poll(r.Context(), capability)
+				if err != nil {
+					writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+					return
+				}
+				writeJSON(w, http.StatusOK, status)
+				return
+			}
+		}
+		if len(parts) == 3 && parts[0] == "github" && parts[1] == "auth" && r.Method == http.MethodDelete {
+			capability, ok := githubCapability(parts[2])
+			if !ok {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Unknown GitHub App capability"})
+				return
+			}
+			if err := d.github.Disconnect(capability); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "GitHub authentication disconnect failed"})
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+	}
 	// Queue Home is intentionally useful before a review workspace is open.
 	// These read models let the retained React landing page render against the
 	// Go daemon while workspace/diff activation is ported separately.
@@ -1523,7 +1619,17 @@ func Start(ctx context.Context, options Options) (*Daemon, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	d := &Daemon{listener: listener, dataDir: dir, token: token, sessions: make(map[string]time.Time), db: db}
+	github := options.GitHubAuth
+	if github == nil {
+		secrets, secretErr := githubauth.NewOSSecretStore()
+		if secretErr != nil {
+			_ = listener.Close()
+			_ = db.Close()
+			return nil, secretErr
+		}
+		github = githubauth.New(secrets, githubauth.NewFileConfigStore(filepath.Join(dir, "github-apps.json")), http.DefaultClient, browserOpener)
+	}
+	d := &Daemon{listener: listener, dataDir: dir, token: token, sessions: make(map[string]time.Time), db: db, github: github}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

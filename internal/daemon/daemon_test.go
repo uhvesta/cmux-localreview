@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/uhvesta/cmux-localreview/internal/githubauth"
 )
 
 func TestLoopbackDiscoveryAndBrowserSession(t *testing.T) {
@@ -60,6 +63,96 @@ func TestLoopbackDiscoveryAndBrowserSession(t *testing.T) {
 	}
 	if cookie := response.Header.Get("Set-Cookie"); cookie == "" || !strings.Contains(cookie, "HttpOnly") || !strings.Contains(cookie, "SameSite=Strict") {
 		t.Fatalf("unsafe cookie: %q", cookie)
+	}
+}
+
+type authSecrets map[string]string
+
+func (s authSecrets) Get(service, account string) (string, error) { return s[service+"/"+account], nil }
+func (s authSecrets) Set(service, account, value string) error {
+	s[service+"/"+account] = value
+	return nil
+}
+func (s authSecrets) Delete(service, account string) error {
+	delete(s, service+"/"+account)
+	return nil
+}
+
+type authConfig map[githubauth.Capability]string
+
+func (c authConfig) ClientID(capability githubauth.Capability) (string, error) {
+	return c[capability], nil
+}
+func (c authConfig) SetClientID(capability githubauth.Capability, id string) error {
+	c[capability] = id
+	return nil
+}
+
+type authTransport func(*http.Request) (*http.Response, error)
+
+func (f authTransport) Do(request *http.Request) (*http.Response, error) { return f(request) }
+
+func TestGitHubAuthHTTPContract(t *testing.T) {
+	transport := authTransport(func(request *http.Request) (*http.Response, error) {
+		body := `{"access_token":"fixture-token"}`
+		switch request.URL.Path {
+		case "/login/device/code":
+			body = `{"device_code":"device","user_code":"ABCD-1234","verification_uri":"https://github.com/login/device","expires_in":900}`
+		case "/user":
+			body = `{"login":"fixture-reviewer"}`
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(bytes.NewBufferString(body))}, nil
+	})
+	auth := githubauth.New(authSecrets{}, authConfig{}, transport, func(string) error { return nil })
+	dir := t.TempDir()
+	ui := filepath.Join(dir, "ui")
+	if err := os.MkdirAll(ui, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ui, "index.html"), []byte("ok"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d, err := Start(ctx, Options{DataDir: dir, UIDir: ui, GitHubAuth: auth})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	base := "http://127.0.0.1:" + strconv.Itoa(d.Port())
+	request := func(method, path, body string) (*http.Response, []byte) {
+		req, _ := http.NewRequest(method, base+path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+d.token)
+		if body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		response, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		contents, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		return response, contents
+	}
+	response, body := request(http.MethodGet, "/api/github/auth/status", "")
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), `"configured":false`) {
+		t.Fatalf("initial status=%d %s", response.StatusCode, body)
+	}
+	response, body = request(http.MethodPost, "/api/github/auth/configure", `{"capability":"read","clientId":"Iv1.fixtureRead"}`)
+	if response.StatusCode != http.StatusNoContent || len(body) != 0 {
+		t.Fatalf("configure=%d %s", response.StatusCode, body)
+	}
+	response, body = request(http.MethodPost, "/api/github/auth/read/start", "{}")
+	if response.StatusCode != http.StatusAccepted || !strings.Contains(string(body), "ABCD-1234") {
+		t.Fatalf("start=%d %s", response.StatusCode, body)
+	}
+	response, body = request(http.MethodPost, "/api/github/auth/read/poll", "{}")
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "fixture-reviewer") || strings.Contains(string(body), "fixture-token") {
+		t.Fatalf("poll=%d %s", response.StatusCode, body)
+	}
+	response, body = request(http.MethodDelete, "/api/github/auth/read", "")
+	if response.StatusCode != http.StatusNoContent || len(body) != 0 {
+		t.Fatalf("disconnect=%d %s", response.StatusCode, body)
 	}
 }
 
