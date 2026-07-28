@@ -25,6 +25,9 @@ interface AskPanelProps {
   onToggleCollapsed: () => void;
   requestedConversationId?: string;
   onRequestedConversationOpened?: () => void;
+  /** A deliberate action elsewhere in the reviewer asking this persistent chat. */
+  requestedPrompt?: { id: string; body: string };
+  onRequestedPromptSent?: () => void;
 }
 
 const ASK_DRAFT_STORAGE_KEY = 'cmux-localreview.ask-draft-v1';
@@ -44,7 +47,7 @@ function sameWorkspaceDefaults(left: AskWorkspaceSettings | null, right: AskWork
 }
 
 /** A review-scoped, persisted Copilot conversation. It never shares /btw messages. */
-export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId, onRequestedConversationOpened }: AskPanelProps) {
+export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId, onRequestedConversationOpened, requestedPrompt, onRequestedPromptSent }: AskPanelProps) {
   const [models, setModels] = useState<AskModel[]>([]);
   const [conversations, setConversations] = useState<AskConversation[]>([]);
   const [activeReviewSessionId, setActiveReviewSessionId] = useState<number | null>(null);
@@ -75,6 +78,7 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
   // may update the panel; otherwise an earlier response can hide a just-made
   // inline question until the reviewer reloads the page.
   const transcriptLoadSequence = useRef(0);
+  const sentRequestedPrompts = useRef(new Set<string>());
 
   const loadConversation = useCallback(async (id: string) => {
     const sequence = ++transcriptLoadSequence.current;
@@ -368,6 +372,16 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
       setSending(false);
     }
   }, [modelStatus, prompt, sendPrompt, sending]);
+
+  useEffect(() => {
+    if (collapsed || !requestedPrompt || sentRequestedPrompts.current.has(requestedPrompt.id)) return;
+    // Waiting for the picker avoids starting a turn before a restored /ask
+    // session knows whether Copilot is authenticated. This is still an
+    // explicit user-requested turn, never a consequence of opening a plan.
+    if (modelStatus === 'loading') return;
+    sentRequestedPrompts.current.add(requestedPrompt.id);
+    void send(requestedPrompt.body).finally(() => onRequestedPromptSent?.());
+  }, [collapsed, modelStatus, onRequestedPromptSent, requestedPrompt, send]);
 
   const cancel = useCallback(async () => {
     activeResponseRef.current?.abort();

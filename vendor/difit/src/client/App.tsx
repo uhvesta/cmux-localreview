@@ -204,6 +204,7 @@ function App() {
   const [staleReviewPlan, setStaleReviewPlan] = useState(false);
   const [reviewPlanLoading, setReviewPlanLoading] = useState(false);
   const [reviewPlanGenerating, setReviewPlanGenerating] = useState(false);
+  const [reviewPlanAsking, setReviewPlanAsking] = useState(false);
   const [reviewPlanError, setReviewPlanError] = useState<string | null>(null);
   const [askDefaults, setAskDefaults] = useState<AskDefaults | null>(null);
   const [askModels, setAskModels] = useState<AskModel[]>([]);
@@ -875,6 +876,27 @@ function App() {
       setReviewPlanError(err instanceof Error ? err.message : 'Copilot could not generate a review plan.');
     } finally { setReviewPlanGenerating(false); }
   }, [askDefaults, diffData, ignoreWhitespace, reviewPlan, reviewPlanModel, staleReviewPlan]);
+
+  const handleAskAboutReviewPlan = useCallback(async (question: string) => {
+    if (!reviewPlan?.id || !question.trim()) {
+      setReviewPlanError('Generate or select a saved review plan before asking about it.');
+      return;
+    }
+    setReviewPlanAsking(true); setReviewPlanError(null);
+    try {
+      // This is a pure, immutable-plan read. The follow-up turn itself starts
+      // only after the reviewer clicked Ask in /ask and AskPanel receives it.
+      const response = await fetch(resolveApiUrl(`/api/hunk-review-plan/${encodeURIComponent(reviewPlan.id)}/ask-context`));
+      if (!response.ok) throw new Error('Could not load this saved plan’s /ask context.');
+      const payload = await response.json() as { askContext?: string };
+      if (!payload.askContext) throw new Error('This saved plan has no reusable /ask context.');
+      window.dispatchEvent(new CustomEvent('cmux-localreview:send-ask', {
+        detail: { prompt: `${payload.askContext}\n\nReviewer question about this saved plan:\n${question.trim()}`, source: 'review-plan', planId: reviewPlan.id },
+      }));
+    } catch (err) {
+      setReviewPlanError(err instanceof Error ? err.message : 'Could not open /ask for this plan.');
+    } finally { setReviewPlanAsking(false); }
+  }, [reviewPlan]);
 
   const handleCommentTriggerHandled = useCallback(() => {
     setCommentTrigger(null);
@@ -1766,6 +1788,8 @@ function App() {
                 onOpenHunk={openReviewPlanHunk}
                 onPreviousHunk={() => moveReviewPlanHunk(-1)}
                 onNextHunk={() => moveReviewPlanHunk(1)}
+                onAskQuestion={(question) => void handleAskAboutReviewPlan(question)}
+                asking={reviewPlanAsking}
               />
             </div>
             {diffData.files.map((file, fileIndex) => {

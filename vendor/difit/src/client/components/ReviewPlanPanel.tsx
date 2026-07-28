@@ -1,3 +1,5 @@
+import { useState } from 'react';
+
 export type ReviewPlanView = 'canonical' | 'plan';
 
 export interface ReviewPlanHunk {
@@ -16,6 +18,7 @@ export interface ReviewPlanQuestion {
 }
 
 export interface ReviewPlanRecord {
+  id?: string;
   state: 'ready' | 'error';
   generatedAt?: number;
   model?: string;
@@ -41,6 +44,9 @@ export interface ReviewPlanPanelProps {
   onOpenHunk: (hunkId: string) => void;
   onPreviousHunk: () => void;
   onNextHunk: () => void;
+  /** This callback runs only from a deliberate reviewer action. */
+  onAskQuestion: (question: string) => void;
+  asking?: boolean;
 }
 
 const buttonClass = 'rounded border border-github-border px-2 py-1 text-xs text-github-text-secondary hover:bg-github-bg-tertiary hover:text-github-text-primary disabled:cursor-not-allowed disabled:opacity-60';
@@ -51,8 +57,9 @@ const buttonClass = 'rounded border border-github-border px-2 py-1 text-xs text-
  */
 export function ReviewPlanPanel({
   view, onViewChange, models, model, onModelChange, hunks, record, stale, loading = false, generating = false,
-  onGenerate, activeHunkId, onOpenHunk, onPreviousHunk, onNextHunk,
+  onGenerate, activeHunkId, onOpenHunk, onPreviousHunk, onNextHunk, onAskQuestion, asking = false,
 }: ReviewPlanPanelProps) {
+  const [questionDraft, setQuestionDraft] = useState('');
   const hunkByID = new Map(hunks.map((hunk) => [hunk.id, hunk]));
   const entries = record?.state === 'ready'
     ? [...(record.result?.entries ?? [])].sort((left, right) => left.rank - right.rank)
@@ -108,7 +115,12 @@ export function ReviewPlanPanel({
               </button>
             </li>)}
           </ol> : <p className="text-xs text-github-text-secondary">The diff is in canonical file order. Switch to Copilot plan to navigate its saved prioritization.</p>}
-          {(record?.result?.questions?.length ?? 0) > 0 && <div className="border-t border-github-border pt-2"><strong className="text-xs text-github-text-primary">Suggested questions</strong><ul className="mt-1 list-disc pl-4 text-xs text-github-text-secondary">{record!.result!.questions!.map((question) => <li key={question.id}>{question.body}</li>)}</ul></div>}
+          <div className="border-t border-github-border pt-2">
+            {(record?.result?.questions?.length ?? 0) > 0 && <><strong className="text-xs text-github-text-primary">Suggested questions</strong><ul className="mt-1 space-y-1 text-xs text-github-text-secondary">{record!.result!.questions!.map((question) => <li key={question.id} className="flex gap-2"><span className="flex-1">{question.body}</span><button type="button" className={buttonClass} disabled={asking} onClick={() => onAskQuestion(question.body)}>{asking ? 'Opening /ask…' : 'Ask in /ask'}</button></li>)}</ul></>}
+            <label className="mt-2 block text-xs text-github-text-primary" htmlFor="review-plan-question">Ask about this plan</label>
+            <div className="mt-1 flex gap-2"><input id="review-plan-question" value={questionDraft} onChange={(event) => setQuestionDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && questionDraft.trim()) onAskQuestion(questionDraft.trim()); }} placeholder="Ask Copilot about this review plan…" className="min-w-0 flex-1 rounded border border-github-border bg-github-bg-primary px-2 py-1 text-xs" /><button type="button" className={buttonClass} disabled={asking || !questionDraft.trim()} onClick={() => onAskQuestion(questionDraft.trim())}>{asking ? 'Opening /ask…' : 'Ask in /ask'}</button></div>
+            <p className="mt-1 text-xs text-github-text-muted">This opens the existing private /ask conversation; it never becomes review feedback automatically.</p>
+          </div>
           <button type="button" className={`${buttonClass} mt-1`} disabled={generating} onClick={onGenerate}>{generating ? 'Computing…' : actionLabel}</button>
         </div>
       ) : <div className="mt-2 text-xs text-github-text-secondary">

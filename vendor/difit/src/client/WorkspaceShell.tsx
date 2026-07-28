@@ -161,6 +161,7 @@ export function WorkspaceShell() {
   const [btwPanelCollapsed, setBtwPanelCollapsed] = useState(initialUiState.btwPanelCollapsed ?? true);
   const [askPanelCollapsed, setAskPanelCollapsed] = useState(initialUiState.askPanelCollapsed ?? true);
   const [askConversationToOpen, setAskConversationToOpen] = useState<string | undefined>();
+  const [askPromptToSend, setAskPromptToSend] = useState<{ id: string; body: string } | undefined>();
   const [reviewControlsCollapsed, setReviewControlsCollapsed] = useState(
     initialUiState.reviewControlsCollapsed ?? true,
   );
@@ -173,6 +174,20 @@ export function WorkspaceShell() {
     };
     window.addEventListener('cmux-localreview:open-ask', openAsk);
     return () => window.removeEventListener('cmux-localreview:open-ask', openAsk);
+  }, []);
+
+  useEffect(() => {
+    const sendAsk = (event: Event) => {
+      const prompt = (event as CustomEvent<{ prompt?: string }>).detail?.prompt?.trim();
+      if (!prompt) return;
+      // The source action already required an explicit click.  This state
+      // hand-off lets AskPanel first restore its durable conversation and
+      // model settings before it starts that requested turn.
+      setAskPromptToSend({ id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, body: prompt });
+      setAskPanelCollapsed(false);
+    };
+    window.addEventListener('cmux-localreview:send-ask', sendAsk);
+    return () => window.removeEventListener('cmux-localreview:send-ask', sendAsk);
   }, []);
 
   useEffect(() => {
@@ -622,6 +637,8 @@ export function WorkspaceShell() {
         onToggleCollapsed={() => setAskPanelCollapsed((v) => !v)}
         requestedConversationId={askConversationToOpen}
         onRequestedConversationOpened={() => setAskConversationToOpen(undefined)}
+        requestedPrompt={askPromptToSend}
+        onRequestedPromptSent={() => setAskPromptToSend(undefined)}
       />
       {!localQuestionOnly && <ReviewControlPanel
         collapsed={reviewControlsCollapsed}
