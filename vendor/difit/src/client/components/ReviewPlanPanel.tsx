@@ -30,6 +30,9 @@ export interface ReviewPlanPanelProps {
   view: ReviewPlanView;
   onViewChange: (view: ReviewPlanView) => void;
   models: Array<{ id: string; name?: string }>;
+  /** Model discovery is read-only. A plan is never generated from this state. */
+  modelStatus?: 'loading' | 'available' | 'unavailable';
+  modelRecovery?: string | null;
   model: string;
   onModelChange: (model: string) => void;
   /** The canonical hunks are supplied from the loaded diff, never from Copilot. */
@@ -56,7 +59,7 @@ const buttonClass = 'rounded border border-github-border px-2 py-1 text-xs text-
  * network side effects: opening/reloading a review can only read a record.
  */
 export function ReviewPlanPanel({
-  view, onViewChange, models, model, onModelChange, hunks, record, stale, loading = false, generating = false,
+  view, onViewChange, models, model, modelStatus = 'available', modelRecovery = null, onModelChange, hunks, record, stale, loading = false, generating = false,
   onGenerate, activeHunkId, onOpenHunk, onPreviousHunk, onNextHunk, onAskQuestion, asking = false,
 }: ReviewPlanPanelProps) {
   const [questionDraft, setQuestionDraft] = useState('');
@@ -70,22 +73,32 @@ export function ReviewPlanPanel({
   const navigable = view === 'plan' && !stale && ordered.length ? ordered.map((item) => item.hunk.id) : hunks.map((hunk) => hunk.id);
   const currentIndex = activeHunkId ? navigable.indexOf(activeHunkId) : -1;
   const actionLabel = record || stale ? 'Recompute plan' : 'Generate plan';
+  // Do not apply a partial/invalid response as an ordering. The native route
+  // enforces this contract; this extra check protects a review opened across
+  // daemon/UI upgrades as well.
+  const usablePlan = !stale && ordered.length > 0 && ordered.length === hunks.length && new Set(ordered.map((item) => item.hunk.id)).size === hunks.length;
+  const modelReady = modelStatus === 'available' && models.length > 0;
+  const savedLabel = stale ? 'Saved plan is outdated' : usablePlan ? 'Saved plan for this diff' : 'No saved plan';
 
   return (
     <section aria-label="Copilot review plan" className="rounded border border-github-border bg-github-bg-secondary p-3 text-sm">
       <div className="flex flex-wrap items-center gap-2">
         <strong className="text-github-text-primary">Review order</strong>
+        <span className={`rounded px-1.5 py-0.5 text-xs ${usablePlan ? 'bg-green-950/40 text-green-300' : stale ? 'bg-yellow-950/40 text-yellow-200' : 'bg-github-bg-tertiary text-github-text-muted'}`}>{savedLabel}</span>
         <div role="group" aria-label="Review order representation" className="flex overflow-hidden rounded border border-github-border">
           <button type="button" aria-pressed={view === 'canonical'} onClick={() => onViewChange('canonical')} className={`px-2 py-1 text-xs ${view === 'canonical' ? 'bg-github-bg-tertiary text-github-text-primary' : 'text-github-text-secondary hover:bg-github-bg-tertiary'}`}>File order</button>
-          <button type="button" aria-pressed={view === 'plan'} onClick={() => onViewChange('plan')} className={`border-l border-github-border px-2 py-1 text-xs ${view === 'plan' ? 'bg-github-bg-tertiary text-github-text-primary' : 'text-github-text-secondary hover:bg-github-bg-tertiary'}`}>Copilot plan</button>
+          <button type="button" aria-pressed={view === 'plan'} disabled={!usablePlan} title={usablePlan ? 'Navigate hunks in the saved Copilot order' : 'Generate a plan for this exact diff before using Copilot order'} onClick={() => onViewChange('plan')} className={`border-l border-github-border px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-60 ${view === 'plan' ? 'bg-github-bg-tertiary text-github-text-primary' : 'text-github-text-secondary hover:bg-github-bg-tertiary'}`}>Copilot order</button>
         </div>
         <span className="text-xs text-github-text-muted">{hunks.length} hunk{hunks.length === 1 ? '' : 's'}</span>
         <label className="flex items-center gap-1 text-xs text-github-text-secondary">Model
-          <select aria-label="Review plan model" value={model} onChange={(event) => onModelChange(event.target.value)} disabled={generating || !models.length} className="max-w-44 rounded border border-github-border bg-github-bg-primary px-1 py-0.5 text-xs text-github-text-primary disabled:opacity-60">
+          <select aria-label="Review plan model" value={model} onChange={(event) => onModelChange(event.target.value)} disabled={generating || !modelReady} className="max-w-44 rounded border border-github-border bg-github-bg-primary px-1 py-0.5 text-xs text-github-text-primary disabled:opacity-60">
             {!model && <option value="">Choose in /ask</option>}
             {models.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name || candidate.id}</option>)}
           </select>
         </label>
+        <span aria-live="polite" className={`text-xs ${modelStatus === 'available' ? 'text-github-text-muted' : modelStatus === 'loading' ? 'text-github-text-secondary' : 'text-yellow-200'}`}>
+          {modelStatus === 'available' ? 'Copilot model ready' : modelStatus === 'loading' ? 'Checking Copilot…' : 'Copilot unavailable'}
+        </span>
         <div className="ml-auto flex items-center gap-1">
           <button type="button" className={buttonClass} disabled={!navigable.length} onClick={onPreviousHunk}>Previous hunk</button>
           <button type="button" className={buttonClass} disabled={!navigable.length} onClick={onNextHunk}>Next hunk</button>
@@ -93,15 +106,20 @@ export function ReviewPlanPanel({
         </div>
       </div>
 
+      {modelStatus === 'unavailable' && <div className="mt-2 rounded border border-yellow-800/60 bg-yellow-950/20 p-2 text-xs text-github-text-secondary" role="status">
+        <p>{modelRecovery || 'Copilot model discovery is unavailable. Authenticate or reconnect Copilot in /ask, then return here and recompute explicitly.'}</p>
+        <p className="mt-1 text-github-text-muted">No diff was sent and no plan was generated.</p>
+      </div>}
+
       {loading ? <p className="mt-2 text-xs text-github-text-secondary">Loading saved review plan…</p> : stale ? (
         <div className="mt-2 rounded border border-yellow-800/60 bg-yellow-950/20 p-2 text-xs text-github-text-secondary">
           <p>This saved Copilot plan targets an earlier version of this diff. It is not being used to reorder the current review.</p>
-          <button type="button" className={`${buttonClass} mt-2`} disabled={generating} onClick={onGenerate}>{generating ? 'Computing…' : actionLabel}</button>
+          <button type="button" className={`${buttonClass} mt-2`} disabled={generating || !modelReady} onClick={onGenerate}>{generating ? 'Computing…' : actionLabel}</button>
         </div>
       ) : record?.state === 'error' ? (
         <div className="mt-2 rounded border border-red-900/60 bg-red-950/20 p-2 text-xs text-github-text-secondary">
           <p>{record.error || 'Copilot could not generate this review plan.'}</p>
-          <button type="button" className={`${buttonClass} mt-2`} disabled={generating} onClick={onGenerate}>{generating ? 'Computing…' : actionLabel}</button>
+          <button type="button" className={`${buttonClass} mt-2`} disabled={generating || !modelReady} onClick={onGenerate}>{generating ? 'Computing…' : actionLabel}</button>
         </div>
       ) : ordered.length ? (
         <div className="mt-2 space-y-2">
@@ -121,11 +139,11 @@ export function ReviewPlanPanel({
             <div className="mt-1 flex gap-2"><input id="review-plan-question" value={questionDraft} onChange={(event) => setQuestionDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && questionDraft.trim()) onAskQuestion(questionDraft.trim()); }} placeholder="Ask Copilot about this review plan…" className="min-w-0 flex-1 rounded border border-github-border bg-github-bg-primary px-2 py-1 text-xs" /><button type="button" className={buttonClass} disabled={asking || !questionDraft.trim()} onClick={() => onAskQuestion(questionDraft.trim())}>{asking ? 'Opening /ask…' : 'Ask in /ask'}</button></div>
             <p className="mt-1 text-xs text-github-text-muted">This opens the existing private /ask conversation; it never becomes review feedback automatically.</p>
           </div>
-          <button type="button" className={`${buttonClass} mt-1`} disabled={generating} onClick={onGenerate}>{generating ? 'Computing…' : actionLabel}</button>
+          <button type="button" className={`${buttonClass} mt-1`} disabled={generating || !modelReady} onClick={onGenerate}>{generating ? 'Computing…' : actionLabel}</button>
         </div>
       ) : <div className="mt-2 text-xs text-github-text-secondary">
         <p>No saved Copilot review plan exists for this exact diff. File order remains the default.</p>
-        <button type="button" className={`${buttonClass} mt-2`} disabled={generating || !hunks.length} onClick={onGenerate}>{generating ? 'Computing…' : actionLabel}</button>
+        <button type="button" className={`${buttonClass} mt-2`} disabled={generating || !hunks.length || !modelReady} onClick={onGenerate}>{generating ? 'Computing…' : actionLabel}</button>
         <p className="mt-1 text-github-text-muted">Generate is explicit: it sends the current diff using the workspace’s saved /ask model settings.</p>
       </div>}
     </section>

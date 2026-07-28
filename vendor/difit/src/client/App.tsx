@@ -81,6 +81,7 @@ interface AskDefaults {
   contextTier?: string | null;
 }
 interface AskModel { id: string; name?: string; }
+type AskModelStatus = 'loading' | 'available' | 'unavailable';
 
 interface ReviewPlanApiPlan extends ReviewPlanRecord {
   request?: { hunks?: ReviewPlanHunk[] };
@@ -208,6 +209,8 @@ function App() {
   const [reviewPlanError, setReviewPlanError] = useState<string | null>(null);
   const [askDefaults, setAskDefaults] = useState<AskDefaults | null>(null);
   const [askModels, setAskModels] = useState<AskModel[]>([]);
+  const [askModelStatus, setAskModelStatus] = useState<AskModelStatus>('loading');
+  const [askModelRecovery, setAskModelRecovery] = useState<string | null>(null);
   const [reviewPlanModel, setReviewPlanModel] = useState('');
   const [activePlanHunkID, setActivePlanHunkID] = useState<string | null>(null);
   const collapsedInitializedRef = useRef(false);
@@ -1027,16 +1030,23 @@ function App() {
     void daemonFetch('/api/ask/models')
       .then(async (response) => {
         if (!response.ok) return null;
-        const data = await response.json() as { workspaceDefaults?: AskDefaults; models?: AskModel[] };
-        return { defaults: data.workspaceDefaults ?? null, models: Array.isArray(data.models) ? data.models : [] };
+        const data = await response.json() as { workspaceDefaults?: AskDefaults; models?: AskModel[]; state?: 'ready' | 'unavailable'; warning?: string };
+        return {
+          defaults: data.workspaceDefaults ?? null,
+          models: data.state === 'unavailable' ? [] : Array.isArray(data.models) ? data.models : [],
+          status: data.state === 'unavailable' ? 'unavailable' as const : 'available' as const,
+          recovery: data.warning ?? null,
+        };
       })
       .then((value) => {
         if (cancelled) return;
         setAskDefaults(value?.defaults ?? null);
         setAskModels(value?.models ?? []);
+        setAskModelStatus(value?.status ?? 'unavailable');
+        setAskModelRecovery(value?.recovery ?? 'Copilot model discovery failed. Open /ask to authenticate or reconnect, then retry this explicit action.');
         setReviewPlanModel((current) => current || value?.defaults?.model || value?.models[0]?.id || '');
       })
-      .catch(() => { if (!cancelled) { setAskDefaults(null); setAskModels([]); } });
+      .catch(() => { if (!cancelled) { setAskDefaults(null); setAskModels([]); setAskModelStatus('unavailable'); setAskModelRecovery('Copilot model discovery failed. Open /ask to authenticate or reconnect, then retry this explicit action.'); } });
     return () => { cancelled = true; };
   }, []);
 
@@ -1067,6 +1077,15 @@ function App() {
   }, [askDefaults, diffData, ignoreWhitespace, reviewPlanModel]);
 
   useEffect(() => { void readReviewPlan(); }, [readReviewPlan]);
+
+  // Never leave a reviewer in a representation that cannot apply to this
+  // immutable diff. This only changes local navigation state; it never sends
+  // a Copilot request.
+  useEffect(() => {
+    if (reviewPlanView === 'plan' && (staleReviewPlan || reviewPlan?.state !== 'ready' || !reviewPlan.result?.entries?.length || reviewPlan.result.entries.length !== reviewPlanHunks.length)) {
+      setReviewPlanView('canonical');
+    }
+  }, [reviewPlan, reviewPlanHunks.length, reviewPlanView, staleReviewPlan]);
 
   useEffect(() => {
     return () => {
@@ -1792,6 +1811,8 @@ function App() {
                 onViewChange={setReviewPlanView}
                 models={askModels}
                 model={reviewPlanModel}
+                modelStatus={askModelStatus}
+                modelRecovery={askModelRecovery}
                 onModelChange={(model) => { setReviewPlanModel(model); setActivePlanHunkID(null); }}
                 hunks={reviewPlanHunks}
                 record={reviewPlan ?? (reviewPlanError ? { state: 'error', error: reviewPlanError } : null)}
