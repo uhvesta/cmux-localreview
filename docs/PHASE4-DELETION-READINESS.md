@@ -91,6 +91,15 @@ dependencies. They may continue to mention TypeScript after Phase 4.
 
    Review any remaining match individually; do not blanket-ignore source
    files. The Go Copilot SDK remains allowed through `go.mod`.
+
+   The checked-in gate is `scripts/verify-phase4-absence.sh`. Before deletion,
+   run it with `--predelete`: that verifies the explicit legacy inventory and
+   Go-native corpus consumers without making a false absence claim. After the
+   reviewed deletion commit, run the strict form with no argument; it rejects
+   retained runtime paths, server-only package dependencies, and non-exempt
+   runtime/build references. See
+   [`PHASE4-LEGACY-INVENTORY.md`](PHASE4-LEGACY-INVENTORY.md) for the exact
+   deletion/preservation split.
 6. Re-run `go test ./...`, `bazel test //...`, the native release gate, UI
    build, platform archive smoke tests, and both full browser/Electron
    computer-use passes. Record command output and screenshots in
