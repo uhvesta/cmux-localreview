@@ -6,26 +6,19 @@ import (
 	copilotsdk "github.com/github/copilot-sdk/go"
 )
 
-func TestClientConfigBuildsExternalRuntimeOptionsWithoutIO(t *testing.T) {
-	loggedIn := false
+func TestClientConfigBuildsDedicatedSDKRuntimeOptionsWithoutIO(t *testing.T) {
 	options, err := (ClientConfig{
-		Endpoint:         "127.0.0.1:4101",
-		ConnectionToken:  "test-connection-token",
 		WorkingDirectory: "/tmp/review",
 		BaseDirectory:    "/tmp/copilot-home",
-		UseLoggedInUser:  &loggedIn,
+		GitHubToken:      "dedicated-test-token",
 	}).SDKOptions()
 	if err != nil {
 		t.Fatalf("SDKOptions() error = %v", err)
 	}
-	connection, ok := options.Connection.(copilotsdk.URIConnection)
-	if !ok {
-		t.Fatalf("Connection = %T, want URIConnection", options.Connection)
+	if _, isURI := options.Connection.(copilotsdk.URIConnection); isURI {
+		t.Fatalf("Connection = URIConnection; ACP/URI runtimes are forbidden")
 	}
-	if connection.URL != "127.0.0.1:4101" || connection.ConnectionToken != "test-connection-token" {
-		t.Fatalf("connection = %#v", connection)
-	}
-	if options.WorkingDirectory != "/tmp/review" || options.BaseDirectory != "/tmp/copilot-home" || options.UseLoggedInUser != &loggedIn {
+	if options.WorkingDirectory != "/tmp/review" || options.BaseDirectory != "/tmp/copilot-home" || options.GitHubToken != "dedicated-test-token" || options.UseLoggedInUser == nil || *options.UseLoggedInUser || options.Mode != copilotsdk.ModeCopilotCli {
 		t.Fatalf("options = %#v", options)
 	}
 }
@@ -50,6 +43,9 @@ func TestSessionConfigBuildsModelAndStreamingControlsWithoutIO(t *testing.T) {
 func TestConfigsRequireWorkingDirectoryAndModel(t *testing.T) {
 	if _, err := (ClientConfig{}).SDKOptions(); err == nil {
 		t.Fatal("SDKOptions() error = nil, want missing working directory error")
+	}
+	if _, err := (ClientConfig{WorkingDirectory: "/tmp/review"}).SDKOptions(); err == nil {
+		t.Fatal("SDKOptions() error = nil, want missing dedicated runtime/auth configuration")
 	}
 	if _, err := (SessionConfig{WorkingDirectory: "/tmp/review"}).SDKConfig(); err == nil {
 		t.Fatal("SDKConfig() error = nil, want missing model error")

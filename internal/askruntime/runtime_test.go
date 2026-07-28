@@ -167,11 +167,11 @@ func TestRuntimePropagatesSDKStyleError(t *testing.T) {
 }
 
 func TestAskTransportUsesOnlyInjectedTokenAndSafeSSE(t *testing.T) {
-	options, err := ClientOptions(context.Background(), testTokenSource{token: "dedicated-token"}, "/workspace")
-	if err != nil || options.GitHubToken != "dedicated-token" || options.UseLoggedInUser == nil || *options.UseLoggedInUser {
+	options, err := ClientOptions(context.Background(), testTokenSource{token: "dedicated-token"}, "/workspace", "/daemon/copilot")
+	if err != nil || options.GitHubToken != "dedicated-token" || options.BaseDirectory != "/daemon/copilot" {
 		t.Fatalf("options=%#v err=%v", options, err)
 	}
-	if _, err := ClientOptions(context.Background(), nil, "/workspace"); err == nil {
+	if _, err := ClientOptions(context.Background(), nil, "/workspace", "/daemon/copilot"); err == nil {
 		t.Fatal("missing credential provider must fail")
 	}
 	var stream bytes.Buffer

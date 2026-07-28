@@ -11,36 +11,37 @@ import (
 	copilotsdk "github.com/github/copilot-sdk/go"
 )
 
-// ClientConfig identifies either a managed Copilot runtime or an already
-// running TCP ACP/Copilot endpoint. Secrets are supplied by the caller's
-// credential provider and are never persisted by this package.
+// ClientConfig identifies a fresh, daemon-owned Copilot SDK runtime. Secrets
+// are supplied by the caller's dedicated credential provider and are never
+// persisted by this package. It deliberately has no URI/TCP/ACP connection
+// fields: /ask sessions are SDK-native, local processes.
 type ClientConfig struct {
-	Endpoint         string
-	ConnectionToken  string
 	WorkingDirectory string
 	BaseDirectory    string
 	GitHubToken      string
-	UseLoggedInUser  *bool
 }
 
-// SDKOptions returns the SDK configuration without performing I/O. When
-// Endpoint is set the SDK uses the existing runtime instead of spawning one.
+// SDKOptions returns the SDK configuration without performing I/O. The SDK is
+// explicitly forbidden from discovering a user's Copilot CLI or gh login;
+// only GitHubToken supplied by the daemon credential boundary is accepted.
 func (config ClientConfig) SDKOptions() (*copilotsdk.ClientOptions, error) {
 	if strings.TrimSpace(config.WorkingDirectory) == "" {
 		return nil, errors.New("Copilot working directory is required")
 	}
+	if strings.TrimSpace(config.BaseDirectory) == "" {
+		return nil, errors.New("Copilot base directory is required")
+	}
+	if strings.TrimSpace(config.GitHubToken) == "" {
+		return nil, errors.New("dedicated Copilot GitHub token is required")
+	}
+	loggedIn := false
 
 	options := &copilotsdk.ClientOptions{
 		WorkingDirectory: config.WorkingDirectory,
 		BaseDirectory:    config.BaseDirectory,
 		GitHubToken:      config.GitHubToken,
-		UseLoggedInUser:  config.UseLoggedInUser,
-	}
-	if endpoint := strings.TrimSpace(config.Endpoint); endpoint != "" {
-		options.Connection = copilotsdk.URIConnection{
-			URL:             endpoint,
-			ConnectionToken: config.ConnectionToken,
-		}
+		UseLoggedInUser:  &loggedIn,
+		Mode:             copilotsdk.ModeCopilotCli,
 	}
 	return options, nil
 }

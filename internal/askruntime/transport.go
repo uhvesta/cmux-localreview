@@ -22,7 +22,7 @@ type TokenSource interface {
 // ClientOptions constructs explicit SDK options for a fresh /ask chat. It
 // always disables SDK ambient-login discovery: the sole accepted authority is
 // the injected daemon credential source.
-func ClientOptions(ctx context.Context, source TokenSource, workingDirectory string) (copilot.ClientConfig, error) {
+func ClientOptions(ctx context.Context, source TokenSource, workingDirectory, baseDirectory string) (copilot.ClientConfig, error) {
 	if source == nil {
 		return copilot.ClientConfig{}, errors.New("dedicated Copilot credential provider is unavailable")
 	}
@@ -33,8 +33,7 @@ func ClientOptions(ctx context.Context, source TokenSource, workingDirectory str
 	if strings.TrimSpace(token) == "" {
 		return copilot.ClientConfig{}, errors.New("dedicated Copilot credential provider returned no token")
 	}
-	loggedIn := false
-	return copilot.ClientConfig{WorkingDirectory: workingDirectory, GitHubToken: token, UseLoggedInUser: &loggedIn}, nil
+	return copilot.ClientConfig{WorkingDirectory: workingDirectory, BaseDirectory: baseDirectory, GitHubToken: token}, nil
 }
 
 type ModelResult struct {

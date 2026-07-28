@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -119,18 +121,26 @@ func id() (string, error) {
 	}
 	return hex.EncodeToString(b), nil
 }
-func identity(in EnqueueInput) string {
+
+// Identity is the durable review-stream key. It stays stable across cosmetic
+// PR URL variants and workspace-path spelling changes, while a local topic
+// gives an explicit stream identity independent of a changing title.
+func Identity(in EnqueueInput) string {
 	if strings.TrimSpace(in.IdentityKey) != "" {
 		return strings.TrimSpace(in.IdentityKey)
 	}
 	if in.Kind == "remote" && strings.TrimSpace(in.RemoteURL) != "" {
-		return "pr:" + strings.ToLower(strings.TrimSuffix(strings.TrimSpace(in.RemoteURL), "/"))
+		raw := strings.TrimSpace(in.RemoteURL)
+		if parsed, err := url.Parse(raw); err == nil && parsed.Host != "" {
+			return "pr:" + strings.ToLower(parsed.Host) + strings.ToLower(strings.TrimSuffix(parsed.Path, "/"))
+		}
+		return "pr:" + strings.ToLower(strings.TrimSuffix(raw, "/"))
 	}
 	topic := strings.TrimSpace(in.ReviewTopic)
 	if topic == "" {
 		topic = strings.TrimSpace(in.Title)
 	}
-	return "local:" + in.WorkspacePath + ":" + strings.ToLower(topic)
+	return "local:" + filepath.ToSlash(filepath.Clean(strings.TrimSpace(in.WorkspacePath))) + ":" + strings.ToLower(strings.Join(strings.Fields(topic), " "))
 }
 
 const columns = `id,title,body,workspace_path,kind,remote_url,status,position,agent_id,agent_provider,copilot_session_id,acp_host,acp_port,acp_session_id,agent_kind,acp_state,acp_last_error,acp_updated_at,snapshot_manifest_path,snapshot_manifest_json,feedback_target,decision_body,base_ref,provenance_json,source_fingerprint,supersedes_id,identity_key,review_topic,removed_at,removed_reason,created_at,updated_at`
@@ -193,19 +203,29 @@ func Enqueue(db *sql.DB, in EnqueueInput) (*Item, bool, error) {
 	if in.Kind != "local" && in.Kind != "remote" {
 		return nil, false, errors.New("kind must be local or remote")
 	}
-	if in.IdempotentKey != "" {
-		if existing, err := scan(db.QueryRow(`SELECT `+columns+` FROM queue_items WHERE idempotent_key=?`, in.IdempotentKey)); err != nil {
-			return nil, false, err
-		} else if existing != nil {
-			return existing, false, nil
-		}
-	}
-	key := identity(in)
 	tx, err := db.Begin()
 	if err != nil {
 		return nil, false, err
 	}
 	defer tx.Rollback()
+	if in.IdempotentKey != "" {
+		existing, err := scan(tx.QueryRow(`SELECT `+columns+` FROM queue_items WHERE idempotent_key=?`, in.IdempotentKey))
+		if err != nil {
+			return nil, false, err
+		}
+		if existing != nil && existing.RemovedAt == nil && (existing.Status == Queued || existing.Status == InReview) {
+			return existing, false, nil
+		}
+		// A client may intentionally resubmit a terminal/deleted stream using
+		// its prior request key. Release that key before creating the new round;
+		// the old row remains fully retained through supersedes/history.
+		if existing != nil {
+			if _, err := tx.Exec(`UPDATE queue_items SET idempotent_key=NULL WHERE id=?`, existing.ID); err != nil {
+				return nil, false, err
+			}
+		}
+	}
+	key := Identity(in)
 	predecessor, err := scan(tx.QueryRow(`SELECT `+columns+` FROM queue_items WHERE identity_key=? ORDER BY created_at DESC LIMIT 1`, key))
 	if err != nil {
 		return nil, false, err
@@ -263,6 +283,9 @@ func Open(db *sql.DB, itemID string) (*Item, error) {
 	// item already being reviewed is intentionally idempotent: it must not
 	// manufacture another decision/history entry or strand the reviewer behind
 	// an invalid lifecycle transition.
+	if item.RemovedAt != nil {
+		return nil, nil
+	}
 	if item.Status == InReview {
 		return item, nil
 	}
@@ -283,6 +306,9 @@ func Requeue(db *sql.DB, itemID string) (*Item, error) {
 	item, err := Get(db, itemID)
 	if err != nil || item == nil {
 		return item, err
+	}
+	if item.RemovedAt != nil {
+		return nil, nil
 	}
 	tx, err := db.Begin()
 	if err != nil {
@@ -309,6 +335,9 @@ func Reorder(db *sql.DB, itemID string, position int) (*Item, error) {
 	target, err := Get(db, itemID)
 	if err != nil || target == nil {
 		return target, err
+	}
+	if target.RemovedAt != nil || (target.Status != Queued && target.Status != InReview) {
+		return nil, nil
 	}
 	items, err := List(db, false)
 	if err != nil {
@@ -421,6 +450,9 @@ func AddFeedback(db *sql.DB, itemID string, in FeedbackInput) ([]Feedback, error
 	}
 	if item == nil {
 		return nil, errors.New("unknown queue item")
+	}
+	if item.RemovedAt != nil {
+		return nil, errors.New("queue item was removed")
 	}
 	now := time.Now().UnixMilli()
 	if _, err = db.Exec(`INSERT INTO queue_feedback(queue_item_id,body,path,line,source_key,side,end_line,created_at) VALUES(?,?,?,?,?,?,?,?)`, itemID, in.Body, nullable(in.Path), in.Line, nullable(in.SourceKey), nullable(in.Side), in.EndLine, now); err != nil {
