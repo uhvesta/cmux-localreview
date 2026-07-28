@@ -52,6 +52,7 @@ type parityDisposition struct {
 	DeviceFlow              bool
 	NativeAskSettings       bool
 	NativeCommentCollection bool
+	NativeQueueWatch        bool
 }
 
 var parityMatrix = map[string]parityDisposition{
@@ -147,15 +148,18 @@ var parityMatrix = map[string]parityDisposition{
 	// resumable terminal protocol that no longer exists; see
 	// TestQueueControlPlaneHTTPContract and
 	// TestNativeQueuePackageExportIsPortableAndAtomic.
-	"queue_reproduce":            {Reason: "Native reproduce intentionally omits retired ACP resume fields (existingAcp/freshAcp) and gives an explicit fresh SDK /ask plan; daemon lifecycle tests verify the substitution."},
-	"queue_export":               {Execute: true},
-	"queue_open":                 {Execute: true},
-	"queue_complete":             {Execute: true},
-	"queue_requeue":              {Execute: true},
-	"queue_delete":               {Execute: true},
-	"queue_history":              {Execute: true},
-	"queue_watch_enable":         {Reason: "Queue watch requires a wall-clock polling fixture and is covered by queue watcher tests."},
-	"queue_watch_disable":        {Reason: "Queue watch requires a wall-clock polling fixture and is covered by queue watcher tests."},
+	"queue_reproduce": {Reason: "Native reproduce intentionally omits retired ACP resume fields (existingAcp/freshAcp) and gives an explicit fresh SDK /ask plan; daemon lifecycle tests verify the substitution."},
+	"queue_export":    {Execute: true},
+	"queue_open":      {Execute: true},
+	"queue_complete":  {Execute: true},
+	"queue_requeue":   {Execute: true},
+	"queue_delete":    {Execute: true},
+	"queue_history":   {Execute: true},
+	// The native watcher exposes a deterministic no-op poll seam in this
+	// matrix. These rows prove real DB registration and cancellation lifecycle
+	// without a wall-clock sleep or a synthetic Git snapshot.
+	"queue_watch_enable":         {Execute: true, NativeQueueWatch: true},
+	"queue_watch_disable":        {Execute: true, NativeQueueWatch: true},
 	"queue_hook":                 {Reason: "Hook discovery is CLI-facing and has a dedicated native CLI test."},
 	"agent_register":             {Execute: true},
 	"agent_list":                 {Execute: true},
@@ -197,7 +201,7 @@ func TestFrozenTypeScriptParityMatrix(t *testing.T) {
 		"repo_diff", "repo_diff_ignore_whitespace", "repo_revisions", "repo_line_count", "repo_blob", "repo_generated_status", "repo_fullfile", "repo_comments_empty", "create_comment", "repo_comments_saved", "comment_import",
 		"sessions", "review_history", "ui_state_empty", "ui_state_put", "export_prompt", "new_session", "comments_json", "comments_output",
 		"ask_models", "ask_conversations_empty", "ask_question_set_create", "ask_question_sets", "ask_question_set_get", "ask_question_set_update", "ask_question_set_delete", "ask_conversation_create", "ask_conversation_get", "ask_inline_conversation_reuses_context", "ask_conversation_model", "ask_conversation_settings", "ask_conversation_cancel_idle", "ask_conversation_fresh", "ask_conversation_history",
-		"queue_create_local", "queue_list_with_item", "queue_detail", "queue_reorder", "queue_add_feedback", "queue_feedback_prompt", "queue_export", "queue_open", "queue_complete", "queue_requeue", "queue_delete", "queue_history",
+		"queue_create_local", "queue_list_with_item", "queue_detail", "queue_reorder", "queue_add_feedback", "queue_feedback_prompt", "queue_export", "queue_open", "queue_complete", "queue_requeue", "queue_delete", "queue_history", "queue_watch_enable", "queue_watch_disable",
 		"agent_register", "agent_list", "agent_heartbeat", "agent_reconnect",
 	} {
 		fixture := byName[name]
@@ -207,6 +211,8 @@ func TestFrozenTypeScriptParityMatrix(t *testing.T) {
 			assertNativeAskSettingsFixture(t, fixture, response)
 		} else if disposition.NativeCommentCollection {
 			assertNativeCommentCollectionFixture(t, fixture, response)
+		} else if disposition.NativeQueueWatch {
+			assertNativeQueueWatchFixture(t, d, fixture, response, state)
 		} else {
 			assertFrozenFixtureResponse(t, fixture, response)
 		}
@@ -282,6 +288,9 @@ func startFrozenParityDaemon(t *testing.T) *Daemon {
 	// contract without a dedicated credential or network call.
 	d.askRuntime = askruntime.New(askRouteBackend{session: &askRouteSession{}, models: []copilotsdk.ModelInfo{{ID: "fixture-model", Name: "Fixture Model"}}})
 	d.askFactory = &AskRuntimeFactory{}
+	// Lifecycle rows assert registration/cancellation synchronously; they do
+	// not need a timer tick or a captured snapshot to prove the route works.
+	d.queueWatchPoll = func(string) {}
 	t.Cleanup(func() { _ = d.Close() })
 	return d
 }
@@ -485,6 +494,71 @@ func assertNativeCommentCollectionFixture(t *testing.T, fixture frozenParityFixt
 		}
 	default:
 		t.Fatalf("unexpected durable comment adapter fixture %q", fixture.Name)
+	}
+}
+
+// assertNativeQueueWatchFixture proves the watcher control plane without
+// relying on a ticker race. The injected no-op poll leaves the actual route's
+// synchronous registration, persisted interval, cancellation map, and DB
+// enabled state observable immediately after each frozen request.
+func assertNativeQueueWatchFixture(t *testing.T, d *Daemon, fixture frozenParityFixture, actual *httptest.ResponseRecorder, state map[string]string) {
+	t.Helper()
+	if actual.Code != fixture.Response.Status {
+		t.Fatalf("%s: status got=%d want=%d body=%s", fixture.Name, actual.Code, fixture.Response.Status, actual.Body.String())
+	}
+	if fixture.Response.ContentType == nil || actual.Header().Get("Content-Type") != *fixture.Response.ContentType {
+		want := ""
+		if fixture.Response.ContentType != nil {
+			want = *fixture.Response.ContentType
+		}
+		t.Fatalf("%s: content type got=%q want=%q", fixture.Name, actual.Header().Get("Content-Type"), want)
+	}
+	request, ok := fixture.Request.Body.(map[string]any)
+	if !ok {
+		t.Fatalf("%s: frozen watcher request is not an object", fixture.Name)
+	}
+	workspace, ok := request["workspacePath"].(string)
+	if !ok {
+		t.Fatalf("%s: frozen watcher request has no workspacePath", fixture.Name)
+	}
+	workspace = replaceFrozenValues(workspace, state)
+	// safeWorkspacePath resolves macOS's /var -> /private/var symlink. Match
+	// the daemon's canonical persisted path without weakening the request
+	// assertion on platforms where no symlink is present.
+	if canonical, err := filepath.EvalSymlinks(workspace); err == nil {
+		workspace = canonical
+	}
+	var response struct {
+		WorkspacePath string `json:"workspacePath"`
+		Enabled       bool   `json:"enabled"`
+		PollInterval  int    `json:"pollIntervalMs"`
+	}
+	if err := json.Unmarshal(actual.Body.Bytes(), &response); err != nil {
+		t.Fatalf("%s: invalid watcher response: %v", fixture.Name, err)
+	}
+	if response.WorkspacePath != workspace {
+		t.Fatalf("%s: workspace got=%q want=%q", fixture.Name, response.WorkspacePath, workspace)
+	}
+
+	d.queueWatchMu.Lock()
+	_, registered := d.queueWatches[workspace]
+	d.queueWatchMu.Unlock()
+	var enabled int
+	var interval int
+	if err := d.db.QueryRow(`SELECT enabled,poll_interval_ms FROM queue_watchers WHERE workspace_path=?`, workspace).Scan(&enabled, &interval); err != nil {
+		t.Fatalf("%s: watcher row: %v", fixture.Name, err)
+	}
+	switch fixture.Name {
+	case "queue_watch_enable":
+		if !response.Enabled || response.PollInterval != 1000 || !registered || enabled != 1 || interval != 1000 {
+			t.Fatalf("enable lifecycle response=%#v registered=%t db=(enabled=%d interval=%d)", response, registered, enabled, interval)
+		}
+	case "queue_watch_disable":
+		if response.Enabled || registered || enabled != 0 {
+			t.Fatalf("disable lifecycle response=%#v registered=%t dbEnabled=%d", response, registered, enabled)
+		}
+	default:
+		t.Fatalf("unexpected native queue watch fixture %q", fixture.Name)
 	}
 }
 

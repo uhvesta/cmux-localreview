@@ -74,21 +74,24 @@ type discovery struct {
 }
 
 type Daemon struct {
-	listener          net.Listener
-	server            *http.Server
-	dataDir           string
-	token             string
-	mu                sync.Mutex
-	sessions          map[string]time.Time
-	db                *sql.DB
-	review            *workspaceReview
-	github            *githubauth.ServiceClient
-	ws                *wshub.Hub
-	watchStop         context.CancelFunc
-	watchMu           sync.Mutex
-	watches           map[chan string]struct{}
-	queueWatchMu      sync.Mutex
-	queueWatches      map[string]context.CancelFunc
+	listener     net.Listener
+	server       *http.Server
+	dataDir      string
+	token        string
+	mu           sync.Mutex
+	sessions     map[string]time.Time
+	db           *sql.DB
+	review       *workspaceReview
+	github       *githubauth.ServiceClient
+	ws           *wshub.Hub
+	watchStop    context.CancelFunc
+	watchMu      sync.Mutex
+	watches      map[chan string]struct{}
+	queueWatchMu sync.Mutex
+	queueWatches map[string]context.CancelFunc
+	// queueWatchPoll is a test-only seam for deterministic watcher lifecycle
+	// verification. Nil always uses pollQueueWatcher in production.
+	queueWatchPoll    func(string)
 	authMu            sync.Mutex
 	authFlows         map[githubauth.Capability]*githubauth.LoopbackFlow
 	askMu             sync.Mutex

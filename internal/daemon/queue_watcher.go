@@ -222,26 +222,13 @@ func (d *Daemon) startQueueWatcher(workspace string, interval time.Duration) {
 	ctx, cancel := context.WithCancel(context.Background())
 	d.queueWatchMu.Lock()
 	d.queueWatches[workspace] = cancel
+	poll := d.queueWatchPoll
 	d.queueWatchMu.Unlock()
+	if poll == nil {
+		poll = d.pollQueueWatcher
+	}
 	go func() {
-		poll := func() {
-			watcher, err := d.loadQueueWatcher(workspace)
-			if err != nil || watcher == nil || !watcher.Enabled {
-				return
-			}
-			fingerprint, err := workspaceFingerprint(workspace)
-			if err != nil || (watcher.LastFingerprint.Valid && watcher.LastFingerprint.String == fingerprint) {
-				return
-			}
-			item, created, err := d.enqueueQueueSnapshot(workspace, watcher.input(), "git-poll")
-			if err != nil || item == nil {
-				return
-			}
-			if created || !watcher.LastFingerprint.Valid {
-				_, _ = d.db.Exec(`UPDATE queue_watchers SET last_fingerprint=?,last_queue_item_id=?,updated_at=? WHERE workspace_path=?`, fingerprint, item.ID, time.Now().UnixMilli(), workspace)
-			}
-		}
-		poll()
+		poll(workspace)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -249,10 +236,31 @@ func (d *Daemon) startQueueWatcher(workspace string, interval time.Duration) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				poll()
+				poll(workspace)
 			}
 		}
 	}()
+}
+
+// pollQueueWatcher performs one production watcher iteration. It is extracted
+// from startQueueWatcher so lifecycle tests can inject a no-op poll and prove
+// registration/disable without sleeping for a ticker or creating snapshots.
+func (d *Daemon) pollQueueWatcher(workspace string) {
+	watcher, err := d.loadQueueWatcher(workspace)
+	if err != nil || watcher == nil || !watcher.Enabled {
+		return
+	}
+	fingerprint, err := workspaceFingerprint(workspace)
+	if err != nil || (watcher.LastFingerprint.Valid && watcher.LastFingerprint.String == fingerprint) {
+		return
+	}
+	item, created, err := d.enqueueQueueSnapshot(workspace, watcher.input(), "git-poll")
+	if err != nil || item == nil {
+		return
+	}
+	if created || !watcher.LastFingerprint.Valid {
+		_, _ = d.db.Exec(`UPDATE queue_watchers SET last_fingerprint=?,last_queue_item_id=?,updated_at=? WHERE workspace_path=?`, fingerprint, item.ID, time.Now().UnixMilli(), workspace)
+	}
 }
 
 func (d *Daemon) stopQueueWatcher(workspace string) {

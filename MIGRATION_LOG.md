@@ -47,6 +47,17 @@ deliberately factual: a green unit test does not imply end-to-end parity.
   position, message, channel, and attached status). It does not preserve or
   waive the obsolete 404 behavior.
 
+## 2026-07-28 — Deterministic native queue-watch parity
+
+- Made frozen `queue_watch_enable` and `queue_watch_disable` rows executable
+  without wall-clock sleeps. `queueWatchPoll` is a nil-by-default test seam;
+  production keeps the real Git polling implementation, while the matrix uses
+  a no-op poll to observe synchronous lifecycle behavior.
+- The replay checks status/content, canonical workspace path, the persisted
+  enabled/disabled row and interval clamp, in-memory watcher registration, and
+  cancellation/removal. No synthetic tick or queue snapshot is needed to
+  prove the control-plane lifecycle.
+
 ## 2026-07-28 — Phase 0 started: frozen HTTP fixture corpus
 
 Done:

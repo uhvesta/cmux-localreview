@@ -87,8 +87,11 @@ route must preserve them. The SDK-backed model-list row also replays with a
 hermetic SDK facade and advertises the four supported thinking levels to the
 native picker. Legacy comment-read rows now replay as a narrow durable-comment
 adapter: the historical HTML 404 is rejected in favor of a real JSON
-collection, including the empty-to-saved formal-thread lifecycle. Deletion is
-**not** ready: the matrix still contains
+collection, including the empty-to-saved formal-thread lifecycle. Queue-watch
+enable/disable now replay using a no-op poll seam: the matrix verifies the
+real persisted watcher row, registration, interval clamp, and cancellation
+without sleeping for a wall-clock tick. Deletion is **not** ready: the matrix
+still contains
 other explicit compatibility exceptions and the required two complete
 Phase-3 browser/Electron passes have not been recorded. Do not remove `src/`
 or package dependencies based only on this preparation work.
