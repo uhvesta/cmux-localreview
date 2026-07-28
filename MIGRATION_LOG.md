@@ -933,3 +933,33 @@ Not yet claimed:
 - These recovery and boundary checks reduce Phase-3 dead ends; they do not
   replace the two authenticated computer-use acceptance passes or authorize
   the Phase-4 deletion itself.
+
+## 2026-07-28 — Integration recovery-state sweep
+
+Done:
+
+- Queue Home now keeps optional GitHub connection and federation failures
+  visible beside the affected controls, explains that existing saved data was
+  not changed, and gives feature-scoped retry actions rather than silently
+  rendering an empty state.
+- A failed GitHub disconnect is surfaced instead of being treated as a
+  successful state change. Stale remote PR publishing returns a direct
+  **Refresh PR, re-review, then publish** recovery action.
+- Review controls, remote metadata, and reproduction details now retain daemon
+  recovery guidance with retry/Queue Home routes, avoiding generic terminal
+  dead ends when a recoverable API call fails.
+- Native CLI group help is now available without daemon access, and install
+  documentation matches the release PATH and source-build prerequisites.
+
+Validated:
+
+- `go test ./internal/daemon -count=1`
+- `cd vendor/difit && bunx vitest run src/client/QueueHome.test.tsx src/client/components/AskPanel.test.tsx src/client/components/InlineAskForm.test.tsx`
+- `cd vendor/difit && bunx tsc --project tsconfig.json --noEmit`
+- Direct Go CLI group-help invocations and Bazel CLI tests.
+
+Not yet claimed:
+
+- These are static and fixture-backed recovery checks. The two complete
+  authenticated browser/Electron passes remain the only proof that all
+  recovery routes work against real credentials and live services.
