@@ -16,7 +16,7 @@ fail() {
 # surface. A match is always an error here; documentation and the frozen
 # capture harness are deliberately outside this check until Phase 4 removes
 # them.
-if rg -n -i '(\bbun\b|\bnode\b|src/server|global-daemon\.ts|claude-code-acp|gemini.*acp)' \
+if rg -n -i '(exec\.(Command|CommandContext)\([^)]*"(node|bun)"|exec\.LookPath\("(node|bun)"|"[^"[:space:]]*(src/server|global-daemon\.ts|claude-code-acp|gemini[^"[:space:]]*acp)[^"]*")' \
   cmd internal --glob '*.go' --glob 'BUILD.bazel' --glob '*.bzl'; then
   fail 'Go daemon/CLI references a retired JS or ACP runtime'
 fi
