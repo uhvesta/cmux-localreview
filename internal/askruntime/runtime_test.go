@@ -1,6 +1,7 @@
 package askruntime
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"sync"
@@ -9,6 +10,13 @@ import (
 	copilotsdk "github.com/github/copilot-sdk/go"
 	"github.com/uhvesta/cmux-localreview/internal/copilot"
 )
+
+type testTokenSource struct {
+	token string
+	err   error
+}
+
+func (s testTokenSource) CopilotToken(context.Context) (string, error) { return s.token, s.err }
 
 type fakeBackend struct {
 	models  []copilotsdk.ModelInfo
@@ -155,5 +163,37 @@ func TestRuntimePropagatesSDKStyleError(t *testing.T) {
 	<-finished
 	if len(events) < 2 || events[len(events)-1].Event != EventError || events[len(events)-1].Error != "unauthenticated" {
 		t.Fatalf("events=%#v", events)
+	}
+}
+
+func TestAskTransportUsesOnlyInjectedTokenAndSafeSSE(t *testing.T) {
+	options, err := ClientOptions(context.Background(), testTokenSource{token: "dedicated-token"}, "/workspace")
+	if err != nil || options.GitHubToken != "dedicated-token" || options.UseLoggedInUser == nil || *options.UseLoggedInUser {
+		t.Fatalf("options=%#v err=%v", options, err)
+	}
+	if _, err := ClientOptions(context.Background(), nil, "/workspace"); err == nil {
+		t.Fatal("missing credential provider must fail")
+	}
+	var stream bytes.Buffer
+	if err := WriteSSE(&stream, Delta{Event: EventDelta, ConversationID: "c", Text: "hello"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := stream.String(); got != "event: delta\ndata: {\"event\":\"delta\",\"conversationId\":\"c\",\"text\":\"hello\"}\n\n" {
+		t.Fatalf("SSE=%q", got)
+	}
+	if err := WriteSSE(&stream, Delta{Event: EventKind("bad\nboom")}); err == nil {
+		t.Fatal("event injection accepted")
+	}
+}
+
+func TestModelsFallsBackWithoutClaimingLiveSDK(t *testing.T) {
+	backend := &fakeBackend{models: []copilotsdk.ModelInfo{{ID: "gpt", Name: "GPT"}}, session: &fakeSession{}}
+	got, err := Models(context.Background(), New(backend), []Model{{ID: "fallback", Name: "Fallback"}})
+	if err != nil || got.Source != "sdk" || len(got.Models) != 1 {
+		t.Fatalf("%#v %v", got, err)
+	}
+	got, err = Models(context.Background(), New(nil), []Model{{ID: "fallback", Name: "Fallback"}})
+	if err != nil || got.Source != "fallback" || got.Warning == "" {
+		t.Fatalf("%#v %v", got, err)
 	}
 }

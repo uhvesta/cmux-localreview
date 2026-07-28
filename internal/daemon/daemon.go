@@ -53,16 +53,17 @@ type discovery struct {
 }
 
 type Daemon struct {
-	listener net.Listener
-	server   *http.Server
-	dataDir  string
-	token    string
-	mu       sync.Mutex
-	sessions map[string]time.Time
-	db       *sql.DB
-	review   *workspaceReview
-	github   *githubauth.ServiceClient
-	ws       *wshub.Hub
+	listener  net.Listener
+	server    *http.Server
+	dataDir   string
+	token     string
+	mu        sync.Mutex
+	sessions  map[string]time.Time
+	db        *sql.DB
+	review    *workspaceReview
+	github    *githubauth.ServiceClient
+	ws        *wshub.Hub
+	watchStop context.CancelFunc
 }
 
 func browserOpener(rawURL string) error {
@@ -589,7 +590,50 @@ func (d *Daemon) activateWorkspace(workspace, label string) ([]reviewRepo, error
 	d.mu.Lock()
 	d.review = &workspaceReview{Root: workspace, SessionID: sessionID, Repos: repos}
 	d.mu.Unlock()
+	d.startDiffWatcher(repos)
 	return repos, nil
+}
+
+// startDiffWatcher treats the Git working tree as the source of truth for a
+// rendered review.  It never pushes a diff (or any prompt) to Copilot: the
+// browser simply receives an invalidation and decides whether to refetch.
+// Polling is deliberate here—Git state can change through IDEs, hooks, and
+// remote worktrees, none of which are reliably covered by filesystem events.
+func (d *Daemon) startDiffWatcher(repos []reviewRepo) {
+	d.mu.Lock()
+	if d.watchStop != nil {
+		d.watchStop()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	d.watchStop = cancel
+	d.mu.Unlock()
+
+	go func() {
+		fingerprints := make(map[string]string, len(repos))
+		for _, repo := range repos {
+			value, err := gitOutput(repo.AbsolutePath, "status", "--porcelain=v1", "--untracked-files=all")
+			if err == nil {
+				fingerprints[repo.ID] = value
+			}
+		}
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				for _, repo := range repos {
+					value, err := gitOutput(repo.AbsolutePath, "status", "--porcelain=v1", "--untracked-files=all")
+					if err != nil || value == fingerprints[repo.ID] {
+						continue
+					}
+					fingerprints[repo.ID] = value
+					d.ws.BroadcastDiffUpdated(repo.ID)
+				}
+			}
+		}
+	}()
 }
 
 // apiHandler ports the queue control plane first. Unported routes fail
@@ -1738,6 +1782,12 @@ func (d *Daemon) Close() error {
 	if d.server == nil {
 		return nil
 	}
+	d.mu.Lock()
+	if d.watchStop != nil {
+		d.watchStop()
+		d.watchStop = nil
+	}
+	d.mu.Unlock()
 	d.ws.Close()
 	err := d.server.Shutdown(context.Background())
 	if d.db != nil {
