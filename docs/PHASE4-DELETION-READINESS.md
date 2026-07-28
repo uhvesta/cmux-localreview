@@ -90,8 +90,13 @@ adapter: the historical HTML 404 is rejected in favor of a real JSON
 collection, including the empty-to-saved formal-thread lifecycle. Queue-watch
 enable/disable now replay using a no-op poll seam: the matrix verifies the
 real persisted watcher row, registration, interval clamp, and cancellation
-without sleeping for a wall-clock tick. Deletion is **not** ready: the matrix
-still contains
+without sleeping for a wall-clock tick. Named question-set delivery now
+replays as a native POST-202 plus durable EventSource handoff: both combined
+and sequential turns must settle into the existing conversation, and a
+subsequent transcript read proves no question was replayed. Queue reproduction
+now replays as a safe snapshot materialization plan and explicitly rejects
+retired ACP continuation commands in favor of a fresh SDK-native `/ask`
+handoff. Deletion is **not** ready: the matrix still contains
 other explicit compatibility exceptions and the required two complete
 Phase-3 browser/Electron passes have not been recorded. Do not remove `src/`
 or package dependencies based only on this preparation work.

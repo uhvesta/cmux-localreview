@@ -17,8 +17,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	copilotsdk "github.com/github/copilot-sdk/go"
+	"github.com/uhvesta/cmux-localreview/internal/ask"
 	"github.com/uhvesta/cmux-localreview/internal/askruntime"
 	"github.com/uhvesta/cmux-localreview/internal/githubauth"
 )
@@ -46,13 +48,15 @@ type frozenParityFixture struct {
 // of the parity gate: every frozen fixture must either be replayed below or
 // carry one concrete, reviewable reason that it cannot be replayed yet.
 type parityDisposition struct {
-	Execute                 bool
-	Reason                  string
-	ForceDaemonCapability   bool
-	DeviceFlow              bool
-	NativeAskSettings       bool
-	NativeCommentCollection bool
-	NativeQueueWatch        bool
+	Execute                   bool
+	Reason                    string
+	ForceDaemonCapability     bool
+	DeviceFlow                bool
+	NativeAskSettings         bool
+	NativeCommentCollection   bool
+	NativeQueueWatch          bool
+	NativeQuestionSetDelivery bool
+	NativeQueueReproduction   bool
 }
 
 var parityMatrix = map[string]parityDisposition{
@@ -128,10 +132,13 @@ var parityMatrix = map[string]parityDisposition{
 	"ask_conversation_message_sse": {Reason: "Native stream events use an EventSource endpoint after accepted submission, intentionally replacing TS POST-SSE framing."},
 	// Idle cancellation is a deterministic safety no-op. Replaying it verifies
 	// that a repeated UI action cannot cancel a future prompt after reload.
-	"ask_conversation_cancel_idle":    {Execute: true, ForceDaemonCapability: true},
-	"ask_question_set_for_send":       {Reason: "Native question-set routes are covered by ask route tests; sequential SSE replay needs deterministic stream framing."},
-	"ask_question_set_combined_sse":   {Reason: "Native stream events use an EventSource endpoint after accepted submission, intentionally replacing TS POST-SSE framing."},
-	"ask_question_set_sequential_sse": {Reason: "Native stream events use an EventSource endpoint after accepted submission, intentionally replacing TS POST-SSE framing."},
+	"ask_conversation_cancel_idle": {Execute: true, ForceDaemonCapability: true},
+	// Native accepts a set turn before the durable EventSource delivers its
+	// response. Replay the frozen requests and assert that accepted delivery,
+	// the persisted transcript, and a subsequent read are all deterministic.
+	"ask_question_set_for_send":       {Execute: true, ForceDaemonCapability: true},
+	"ask_question_set_combined_sse":   {Execute: true, ForceDaemonCapability: true, NativeQuestionSetDelivery: true, Reason: "Native uses POST-202 plus durable EventSource events instead of response-body SSE."},
+	"ask_question_set_sequential_sse": {Execute: true, ForceDaemonCapability: true, NativeQuestionSetDelivery: true, Reason: "Native uses POST-202 plus durable EventSource events instead of response-body SSE."},
 	// Fresh/history are metadata-only lifecycle routes. They archive or read
 	// persisted conversations; neither opens an SDK session nor replays a
 	// prompt, so the frozen lifecycle can be replayed deterministically.
@@ -148,7 +155,7 @@ var parityMatrix = map[string]parityDisposition{
 	// resumable terminal protocol that no longer exists; see
 	// TestQueueControlPlaneHTTPContract and
 	// TestNativeQueuePackageExportIsPortableAndAtomic.
-	"queue_reproduce": {Reason: "Native reproduce intentionally omits retired ACP resume fields (existingAcp/freshAcp) and gives an explicit fresh SDK /ask plan; daemon lifecycle tests verify the substitution."},
+	"queue_reproduce": {Execute: true, NativeQueueReproduction: true, Reason: "Native reproduction deliberately gives a fresh SDK-native /ask plan rather than retired ACP resume fields."},
 	"queue_export":    {Execute: true},
 	"queue_open":      {Execute: true},
 	"queue_complete":  {Execute: true},
@@ -200,8 +207,8 @@ func TestFrozenTypeScriptParityMatrix(t *testing.T) {
 		"local_pr_requires_read_auth", "workspaces_empty", "queue_empty", "federation_nodes_empty", "open_workspace", "repos",
 		"repo_diff", "repo_diff_ignore_whitespace", "repo_revisions", "repo_line_count", "repo_blob", "repo_generated_status", "repo_fullfile", "repo_comments_empty", "create_comment", "repo_comments_saved", "comment_import",
 		"sessions", "review_history", "ui_state_empty", "ui_state_put", "export_prompt", "new_session", "comments_json", "comments_output",
-		"ask_models", "ask_conversations_empty", "ask_question_set_create", "ask_question_sets", "ask_question_set_get", "ask_question_set_update", "ask_question_set_delete", "ask_conversation_create", "ask_conversation_get", "ask_inline_conversation_reuses_context", "ask_conversation_model", "ask_conversation_settings", "ask_conversation_cancel_idle", "ask_conversation_fresh", "ask_conversation_history",
-		"queue_create_local", "queue_list_with_item", "queue_detail", "queue_reorder", "queue_add_feedback", "queue_feedback_prompt", "queue_export", "queue_open", "queue_complete", "queue_requeue", "queue_delete", "queue_history", "queue_watch_enable", "queue_watch_disable",
+		"ask_models", "ask_conversations_empty", "ask_question_set_create", "ask_question_sets", "ask_question_set_get", "ask_question_set_update", "ask_question_set_delete", "ask_conversation_create", "ask_conversation_get", "ask_inline_conversation_reuses_context", "ask_conversation_model", "ask_conversation_settings", "ask_conversation_cancel_idle", "ask_question_set_for_send", "ask_question_set_combined_sse", "ask_question_set_sequential_sse", "ask_conversation_fresh", "ask_conversation_history",
+		"queue_create_local", "queue_list_with_item", "queue_detail", "queue_reorder", "queue_add_feedback", "queue_feedback_prompt", "queue_reproduce", "queue_export", "queue_open", "queue_complete", "queue_requeue", "queue_delete", "queue_history", "queue_watch_enable", "queue_watch_disable",
 		"agent_register", "agent_list", "agent_heartbeat", "agent_reconnect",
 	} {
 		fixture := byName[name]
@@ -213,6 +220,10 @@ func TestFrozenTypeScriptParityMatrix(t *testing.T) {
 			assertNativeCommentCollectionFixture(t, fixture, response)
 		} else if disposition.NativeQueueWatch {
 			assertNativeQueueWatchFixture(t, d, fixture, response, state)
+		} else if disposition.NativeQuestionSetDelivery {
+			assertNativeQuestionSetDeliveryFixture(t, d, fixture, response, state)
+		} else if disposition.NativeQueueReproduction {
+			assertNativeQueueReproductionFixture(t, fixture, response, state)
 		} else {
 			assertFrozenFixtureResponse(t, fixture, response)
 		}
@@ -230,8 +241,16 @@ func TestFrozenTypeScriptParityMatrix(t *testing.T) {
 		if name == "queue_create_local" {
 			state["<uuid>"] = frozenResponseID(t, name, response.Body.Bytes(), "item")
 		}
-		if name == "ask_question_set_create" || name == "ask_conversation_create" {
-			state["<uuid>"] = frozenResponseID(t, name, response.Body.Bytes(), map[string]string{"ask_question_set_create": "questionSet", "ask_conversation_create": "conversation"}[name])
+		if name == "ask_question_set_create" || name == "ask_conversation_create" || name == "ask_question_set_for_send" {
+			field := map[string]string{"ask_question_set_create": "questionSet", "ask_conversation_create": "conversation", "ask_question_set_for_send": "questionSet"}[name]
+			id := frozenResponseID(t, name, response.Body.Bytes(), field)
+			state["<uuid>"] = id
+			if name == "ask_conversation_create" {
+				state["<conversation-id>"] = id
+			}
+			if name == "ask_question_set_for_send" {
+				state["<question-set-id>"] = id
+			}
 		}
 	}
 }
@@ -286,7 +305,7 @@ func startFrozenParityDaemon(t *testing.T) *Daemon {
 	// Model discovery is a client-level SDK operation, not a conversation turn.
 	// Keep it hermetic so the frozen model-list row proves the native picker
 	// contract without a dedicated credential or network call.
-	d.askRuntime = askruntime.New(askRouteBackend{session: &askRouteSession{}, models: []copilotsdk.ModelInfo{{ID: "fixture-model", Name: "Fixture Model"}}})
+	d.askRuntime = askruntime.New(askRouteBackend{session: &askRouteSession{emit: true}, models: []copilotsdk.ModelInfo{{ID: "fixture-model", Name: "Fixture Model"}}})
 	d.askFactory = &AskRuntimeFactory{}
 	// Lifecycle rows assert registration/cancellation synchronously; they do
 	// not need a timer tick or a captured snapshot to prove the route works.
@@ -338,7 +357,18 @@ func replayFrozenFixture(t *testing.T, d *Daemon, fixture frozenParityFixture, d
 		if err != nil {
 			t.Fatal(err)
 		}
-		body = replaceFrozenValues(string(encoded), state)
+		body = string(encoded)
+	}
+	if disposition.NativeQuestionSetDelivery {
+		questionSetID, conversationID := state["<question-set-id>"], state["<conversation-id>"]
+		if questionSetID == "" || conversationID == "" {
+			t.Fatalf("%s lacks native question-set replay state: set=%q conversation=%q", fixture.Name, questionSetID, conversationID)
+		}
+		path = strings.ReplaceAll(fixture.Request.Path, "<uuid>", questionSetID)
+		body = strings.ReplaceAll(body, "<uuid>", conversationID)
+		body = strings.ReplaceAll(body, `\u003cuuid\u003e`, conversationID)
+	} else {
+		body = replaceFrozenValues(body, state)
 	}
 	// A path substituted into the fixture body must remain visible to the
 	// request decoder; keep this assertion close to the replay boundary so a
@@ -442,6 +472,144 @@ func assertNativeAskSettingsFixture(t *testing.T, fixture frozenParityFixture, a
 	}
 	if *response.Conversation.ReasoningEffort != wantReasoning || *response.Conversation.ContextTier != wantTier {
 		t.Fatalf("%s: native picker settings got=(%q,%q) want=(%q,%q)", fixture.Name, *response.Conversation.ReasoningEffort, *response.Conversation.ContextTier, wantReasoning, wantTier)
+	}
+}
+
+// assertNativeQuestionSetDeliveryFixture adapts the retired response-body SSE
+// rows to the native durable-stream design. The same frozen request must be
+// accepted once, retain its mode and question count, settle the expected turns
+// in the existing conversation, and remain a pure transcript read afterward.
+func assertNativeQuestionSetDeliveryFixture(t *testing.T, d *Daemon, fixture frozenParityFixture, actual *httptest.ResponseRecorder, state map[string]string) {
+	t.Helper()
+	if actual.Code != http.StatusAccepted {
+		t.Fatalf("%s: native accepted-delivery status got=%d want=%d body=%s", fixture.Name, actual.Code, http.StatusAccepted, actual.Body.String())
+	}
+	if got := actual.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
+		t.Fatalf("%s: native accepted-delivery content type got=%q", fixture.Name, got)
+	}
+	var payload struct {
+		Mode              string `json:"mode"`
+		Delivery          string `json:"delivery"`
+		QuestionsAccepted int    `json:"questionsAccepted"`
+		Remaining         int    `json:"remaining"`
+		QuestionSet       struct {
+			ID string `json:"id"`
+		} `json:"questionSet"`
+		Conversation struct {
+			ID string `json:"id"`
+		} `json:"conversation"`
+	}
+	if err := json.Unmarshal(actual.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("%s: invalid native accepted-delivery JSON: %v", fixture.Name, err)
+	}
+	wantMode := "combined"
+	wantCount, wantRemaining := 2, 0
+	if fixture.Name == "ask_question_set_sequential_sse" {
+		wantMode, wantRemaining = "sequential", 1
+	}
+	if payload.Mode != wantMode || payload.Delivery != "streaming" || payload.QuestionsAccepted != wantCount || payload.Remaining != wantRemaining || payload.QuestionSet.ID != state["<question-set-id>"] || payload.Conversation.ID != state["<conversation-id>"] {
+		t.Fatalf("%s: invalid native delivery envelope: %#v", fixture.Name, payload)
+	}
+
+	conversationID := state["<conversation-id>"]
+	wantUserBodies := []string{"Please answer these review questions in order. Keep each answer clearly numbered.\n\n1. What changed?\n2. What should be tested?"}
+	if wantMode == "sequential" {
+		wantUserBodies = append(wantUserBodies, "What changed?", "What should be tested?")
+	}
+	var beforeRead []ask.Message
+	deadline := time.Now().Add(time.Second)
+	for {
+		messages, err := ask.ListMessages(context.Background(), d.db, conversationID)
+		if err == nil && questionSetTurnsSettled(messages, wantUserBodies) {
+			beforeRead = messages
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s: native delivery did not settle: messages=%#v err=%v", fixture.Name, messages, err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	read := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "http://local.test/api/ask/conversations/"+conversationID, nil)
+	request.Header.Set("Authorization", "Bearer "+d.token)
+	d.server.Handler.ServeHTTP(read, request)
+	if read.Code != http.StatusOK {
+		t.Fatalf("%s: transcript read=%d %s", fixture.Name, read.Code, read.Body.String())
+	}
+	afterRead, err := ask.ListMessages(context.Background(), d.db, conversationID)
+	if err != nil || len(afterRead) != len(beforeRead) {
+		t.Fatalf("%s: transcript read must not replay: before=%#v after=%#v err=%v", fixture.Name, beforeRead, afterRead, err)
+	}
+}
+
+func questionSetTurnsSettled(messages []ask.Message, wantUserBodies []string) bool {
+	userBodies := make([]string, 0, len(wantUserBodies))
+	for _, message := range messages {
+		if message.Pending {
+			return false
+		}
+		if message.Role == ask.RoleUser {
+			userBodies = append(userBodies, message.Body)
+		}
+	}
+	if len(userBodies) != len(wantUserBodies) {
+		return false
+	}
+	for index, want := range wantUserBodies {
+		if userBodies[index] != want {
+			return false
+		}
+	}
+	return len(messages) == len(wantUserBodies)*2
+}
+
+// assertNativeQueueReproductionFixture proves that the frozen queue item
+// still produces a safe, materializable plan. Native deliberately removes
+// ACP resume commands: opening the reproduced directory starts a fresh SDK
+// /ask conversation instead, and this adapter rejects any accidental revival
+// of a stale terminal-session instruction.
+func assertNativeQueueReproductionFixture(t *testing.T, fixture frozenParityFixture, actual *httptest.ResponseRecorder, state map[string]string) {
+	t.Helper()
+	if actual.Code != http.StatusOK {
+		t.Fatalf("%s: native reproduce status got=%d want=%d body=%s", fixture.Name, actual.Code, http.StatusOK, actual.Body.String())
+	}
+	if got := actual.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
+		t.Fatalf("%s: native reproduce content type got=%q", fixture.Name, got)
+	}
+	var payload struct {
+		ItemID           string `json:"itemId"`
+		WorkspacePath    string `json:"workspacePath"`
+		CopilotSessionID any    `json:"copilotSessionId"`
+		Snapshot         *struct {
+			ID           string `json:"id"`
+			ManifestPath string `json:"manifestPath"`
+			Repositories int    `json:"repositories"`
+		} `json:"snapshot"`
+		Commands map[string]string `json:"commands"`
+		Notes    []string          `json:"notes"`
+	}
+	if err := json.Unmarshal(actual.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("%s: invalid native reproduce JSON: %v", fixture.Name, err)
+	}
+	wantWorkspace := state["<fixture-root>/workspace"]
+	if canonical, err := filepath.EvalSymlinks(wantWorkspace); err == nil {
+		wantWorkspace = canonical
+	}
+	if payload.ItemID != state["<uuid>"] || payload.WorkspacePath != wantWorkspace || payload.Snapshot == nil || strings.TrimSpace(payload.Snapshot.ID) == "" || payload.Snapshot.Repositories != 1 {
+		t.Fatalf("%s: incomplete native reproduce plan: %#v", fixture.Name, payload)
+	}
+	reproduce := payload.Commands["reproduceSnapshot"]
+	if !strings.Contains(reproduce, "localreview reproduce ") || !strings.Contains(reproduce, payload.Snapshot.ManifestPath) || !strings.Contains(reproduce, "<empty-destination>") || strings.Contains(reproduce, "acp") {
+		t.Fatalf("%s: unsafe native reproduce command %q", fixture.Name, reproduce)
+	}
+	if open := payload.Commands["openReviewer"]; !strings.Contains(open, "localreview open <empty-destination>") {
+		t.Fatalf("%s: missing reviewer-open handoff %q", fixture.Name, open)
+	}
+	if _, staleACP := payload.Commands["reproduceCopilot"]; staleACP {
+		t.Fatalf("%s: native reproduce plan must not advertise retired ACP continuation: %#v", fixture.Name, payload)
+	}
+	if !strings.Contains(strings.Join(payload.Notes, "\n"), "fresh SDK-native /ask") {
+		t.Fatalf("%s: native reproduce plan does not explain fresh /ask handoff: %#v", fixture.Name, payload.Notes)
 	}
 }
 
