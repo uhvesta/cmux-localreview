@@ -825,6 +825,18 @@ function App() {
     }))) ?? [];
   }, [diffData, reviewPlan, staleReviewPlan]);
 
+  // The plan is a second, persisted representation of the same immutable
+  // diff.  Keep the canonical hunk list for locating a hunk in the renderer,
+  // but use Copilot's validated ranks when the reviewer has explicitly
+  // selected the plan representation.  Switching representations is purely
+  // local state: it must never cause a new Copilot turn.
+  const navigableReviewPlanHunks = useMemo(() => {
+    if (reviewPlanView !== 'plan' || staleReviewPlan || reviewPlan?.state !== 'ready') return reviewPlanHunks;
+    const ranks = new Map((reviewPlan.result?.entries ?? []).map((entry) => [entry.hunkId, entry.rank]));
+    if (ranks.size !== reviewPlanHunks.length) return reviewPlanHunks;
+    return [...reviewPlanHunks].sort((left, right) => (ranks.get(left.id)! - ranks.get(right.id)!));
+  }, [reviewPlan, reviewPlanHunks, reviewPlanView, staleReviewPlan]);
+
   const openReviewPlanHunk = useCallback((hunkID: string) => {
     if (!diffData) return;
     const hunk = reviewPlanHunks.find((candidate) => candidate.id === hunkID);
@@ -844,14 +856,14 @@ function App() {
   }, [diffData, ensureFilesRenderedUpTo, reviewPlanHunks, scrollFileIntoDiffContainer, setCursorPosition]);
 
   const moveReviewPlanHunk = useCallback((direction: -1 | 1) => {
-    if (!reviewPlanHunks.length) return;
-    const current = activePlanHunkID ? reviewPlanHunks.findIndex((hunk) => hunk.id === activePlanHunkID) : -1;
+    if (!navigableReviewPlanHunks.length) return;
+    const current = activePlanHunkID ? navigableReviewPlanHunks.findIndex((hunk) => hunk.id === activePlanHunkID) : -1;
     const next = current < 0
-      ? (direction > 0 ? 0 : reviewPlanHunks.length - 1)
-      : (current + direction + reviewPlanHunks.length) % reviewPlanHunks.length;
-    const nextHunk = reviewPlanHunks[next];
+      ? (direction > 0 ? 0 : navigableReviewPlanHunks.length - 1)
+      : (current + direction + navigableReviewPlanHunks.length) % navigableReviewPlanHunks.length;
+    const nextHunk = navigableReviewPlanHunks[next];
     if (nextHunk) openReviewPlanHunk(nextHunk.id);
-  }, [activePlanHunkID, openReviewPlanHunk, reviewPlanHunks]);
+  }, [activePlanHunkID, navigableReviewPlanHunks, openReviewPlanHunk]);
 
   const handleGenerateReviewPlan = useCallback(async () => {
     if (!diffData || !reviewPlanModel) {
