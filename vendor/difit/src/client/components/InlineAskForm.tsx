@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -22,6 +22,8 @@ interface AskMessage {
 
 interface InlineAskFormProps {
   location: InlineAskLocation;
+  /** A `/ask question` submitted from the regular inline composer. */
+  initialPrompt?: string;
   /** An answer reaches formal review only through this explicit callback. */
   onConvertToReviewComment: (body: string) => Promise<void>;
   onClose: () => void;
@@ -36,13 +38,14 @@ function label(location: InlineAskLocation): string {
  * /api/ask; no queue feedback/export path reads these messages.  Converting a
  * specific answer is an affirmative, one-way action by the reviewer.
  */
-export function InlineAskForm({ location, onConvertToReviewComment, onClose }: InlineAskFormProps) {
+export function InlineAskForm({ location, initialPrompt, onConvertToReviewComment, onClose }: InlineAskFormProps) {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<AskMessage[]>([]);
   const [prompt, setPrompt] = useState('');
   const [status, setStatus] = useState<'loading' | 'idle' | 'sending' | 'error'>('loading');
   const [error, setError] = useState<string | null>(null);
   const [convertingId, setConvertingId] = useState<number | null>(null);
+  const sentInitialPrompts = useRef(new Set<string>());
 
   useEffect(() => {
     let active = true;
@@ -69,8 +72,8 @@ export function InlineAskForm({ location, onConvertToReviewComment, onClose }: I
     return () => { active = false; };
   }, [location.filePath, location.side, location.startLine, location.endLine]);
 
-  const send = async () => {
-    const text = prompt.trim();
+  const send = async (promptOverride?: string) => {
+    const text = (promptOverride ?? prompt).trim();
     if (!text || !conversationId || status === 'sending') return;
     const optimisticUser: AskMessage = { id: -Date.now(), role: 'user', body: text, pending: false };
     const optimisticAssistant: AskMessage = { id: -(Date.now() + 1), role: 'assistant', body: '', pending: true };
@@ -111,6 +114,18 @@ export function InlineAskForm({ location, onConvertToReviewComment, onClose }: I
     }
   };
 
+  // `/ask question` in the normal comment composer opens this durable,
+  // location-scoped chat and sends the first turn as soon as its session is
+  // restored. A key keeps re-renders from sending it twice.
+  useEffect(() => {
+    const text = initialPrompt?.trim();
+    if (!text || !conversationId || status !== 'idle') return;
+    const key = `${conversationId}\u0000${text}`;
+    if (sentInitialPrompts.current.has(key)) return;
+    sentInitialPrompts.current.add(key);
+    void send(text);
+  }, [conversationId, initialPrompt, status]);
+
   const convert = async (message: AskMessage) => {
     if (!message.body.trim()) return;
     setConvertingId(message.id); setError(null);
@@ -130,7 +145,7 @@ export function InlineAskForm({ location, onConvertToReviewComment, onClose }: I
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.body || (message.pending ? '_Thinking…_' : '')}</ReactMarkdown>
       </article>)}
     </div>
-    <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') void send(); }} disabled={status === 'loading' || status === 'sending'} placeholder="Ask about this selected code…" rows={2} className="mt-2 w-full rounded border border-github-border bg-github-bg-secondary p-2 text-xs" />
+    <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') void send(); }} disabled={status === 'loading' || status === 'sending'} placeholder="Reply to this private Copilot thread…" rows={2} className="mt-2 w-full rounded border border-github-border bg-github-bg-secondary p-2 text-xs" />
     <div className="mt-2 flex justify-end"><button type="button" onClick={() => void send()} disabled={!prompt.trim() || status === 'loading' || status === 'sending'} className="rounded border border-github-border px-2 py-1 text-xs disabled:opacity-50">{status === 'sending' ? 'Asking…' : 'Ask'}</button></div>
   </section>;
 }

@@ -96,6 +96,7 @@ export const DiffChunk = memo(function DiffChunk({
   } | null>(null);
   const [hoveredLine, setHoveredLine] = useState<number | null>(null);
   const [askingSelection, setAskingSelection] = useState(false);
+  const [initialAskPrompt, setInitialAskPrompt] = useState<string | undefined>();
 
   // Handle comment trigger from keyboard navigation
   useEffect(() => {
@@ -226,6 +227,7 @@ export const DiffChunk = memo(function DiffChunk({
   const handleCancelComment = useCallback(() => {
     setCommentingLine(null);
     setAskingSelection(false);
+    setInitialAskPrompt(undefined);
   }, []);
 
   // Get the code content for the selected lines (for suggestion feature)
@@ -255,9 +257,16 @@ export const DiffChunk = memo(function DiffChunk({
   const handleSubmitComment = useCallback(
     async (body: string) => {
       if (commentingLine !== null) {
+        const askMatch = /^\/ask(?:\s+([\s\S]*))?$/i.exec(body.trim());
+        if (askMatch) {
+          setInitialAskPrompt(askMatch[1]?.trim() || undefined);
+          setAskingSelection(true);
+          return;
+        }
         const codeContent = getSelectedCodeContent();
         await onAddComment(commentingLine.lineNumber, body, codeContent, commentingLine.side);
         setCommentingLine(null);
+        setInitialAskPrompt(undefined);
       }
     },
     [commentingLine, onAddComment, getSelectedCodeContent],
@@ -566,13 +575,16 @@ export const DiffChunk = memo(function DiffChunk({
                               selectedCode={getSelectedCodeContent()}
                               syntaxTheme={syntaxTheme}
                               filename={filename}
+                              title="Add a comment or /ask"
+                              placeholder="Leave a review comment, or type /ask followed by a question…"
                               draftKey={`cmux-localreview.comment-draft:${filename}:${commentingLine.side}:${String(commentingLine.lineNumber)}`}
                             />
                             <div className="mx-3 mb-2 flex justify-end">
-                              <button type="button" className="text-xs underline text-blue-300" onClick={() => setAskingSelection(true)}>Ask privately with /ask instead</button>
+                              <button type="button" className="text-xs underline text-blue-300" onClick={() => { setInitialAskPrompt(undefined); setAskingSelection(true); }}>Open this line’s private /ask chat</button>
                             </div>
                             {askingSelection && commentingLine && (
                               <InlineAskForm
+                                initialPrompt={initialAskPrompt}
                                 location={{
                                   repoId: getApiBase().split('/').pop(),
                                   filePath: filename ?? '',
@@ -581,7 +593,7 @@ export const DiffChunk = memo(function DiffChunk({
                                   endLine: Array.isArray(commentingLine.lineNumber) ? commentingLine.lineNumber[1] : commentingLine.lineNumber,
                                   selectedCode: getSelectedCodeContent(),
                                 }}
-                                onClose={() => setAskingSelection(false)}
+                                onClose={() => { setAskingSelection(false); setInitialAskPrompt(undefined); }}
                                 onConvertToReviewComment={async (body) => {
                                   await onAddComment(commentingLine.lineNumber, body, getSelectedCodeContent(), commentingLine.side);
                                 }}
