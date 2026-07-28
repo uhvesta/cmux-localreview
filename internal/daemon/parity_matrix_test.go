@@ -54,12 +54,14 @@ type parityDisposition struct {
 	ForceDaemonCapability     bool
 	DeviceFlow                bool
 	NativeAskSettings         bool
+	NativeAskMessageDelivery  bool
 	NativeCommentCollection   bool
 	NativeQueueWatch          bool
 	NativeQuestionSetDelivery bool
 	NativeQueueReproduction   bool
 	NativeWebsocketDiff       bool
 	NativeQueueHook           bool
+	NativeFederationLifecycle bool
 }
 
 var parityMatrix = map[string]parityDisposition{
@@ -130,9 +132,12 @@ var parityMatrix = map[string]parityDisposition{
 	// effect. Native picker updates preserve explicit choices, which prevents a
 	// reviewer silently losing their requested context window. Replay the
 	// historical requests and assert that stronger native contract explicitly.
-	"ask_conversation_model":       {Execute: true, ForceDaemonCapability: true, NativeAskSettings: true},
-	"ask_conversation_settings":    {Execute: true, ForceDaemonCapability: true, NativeAskSettings: true},
-	"ask_conversation_message_sse": {Reason: "Native stream events use an EventSource endpoint after accepted submission, intentionally replacing TS POST-SSE framing."},
+	"ask_conversation_model":    {Execute: true, ForceDaemonCapability: true, NativeAskSettings: true},
+	"ask_conversation_settings": {Execute: true, ForceDaemonCapability: true, NativeAskSettings: true},
+	// The native API accepts the turn and exposes streaming through a durable
+	// EventSource endpoint. Replay the legacy request and prove its persisted
+	// turn and location settle exactly once before a transcript read.
+	"ask_conversation_message_sse": {Execute: true, ForceDaemonCapability: true, NativeAskMessageDelivery: true},
 	// Idle cancellation is a deterministic safety no-op. Replaying it verifies
 	// that a repeated UI action cannot cancel a future prompt after reload.
 	"ask_conversation_cancel_idle": {Execute: true, ForceDaemonCapability: true},
@@ -174,16 +179,21 @@ var parityMatrix = map[string]parityDisposition{
 	// the item's stable identity rather than fabricating a third queue round;
 	// replay the same request and assert the stronger idempotency/provenance
 	// contract explicitly.
-	"queue_hook":                 {Execute: true, NativeQueueHook: true},
-	"agent_register":             {Execute: true},
-	"agent_list":                 {Execute: true},
-	"agent_heartbeat":            {Execute: true},
-	"agent_reconnect":            {Execute: true},
-	"federation_node_create":     {Reason: "Frozen TS fixture predates native SSH transport; hermetic loopback tunnel API tests cover the stronger native contract."},
-	"federation_node_status":     {Reason: "Frozen TS fixture predates native SSH transport; hermetic loopback tunnel API tests cover the stronger native contract."},
-	"federation_node_disconnect": {Reason: "Frozen TS fixture predates native SSH transport; hermetic loopback tunnel API tests cover the stronger native contract."},
-	"federation_aggregate_queue": {Reason: "Frozen TS fixture predates native SSH transport; hermetic loopback tunnel API tests cover the stronger native contract."},
-	"federation_node_delete":     {Reason: "Frozen TS fixture predates native SSH transport; hermetic loopback tunnel API tests cover the stronger native contract."},
+	"queue_hook":      {Execute: true, NativeQueueHook: true},
+	"agent_register":  {Execute: true},
+	"agent_list":      {Execute: true},
+	"agent_heartbeat": {Execute: true},
+	"agent_reconnect": {Execute: true},
+	// These lifecycle rows run against the production native route and durable
+	// store. The aggregate request follows disconnect, so it intentionally
+	// proves the safe no-tunnel path; fake-loopback transport coverage remains
+	// in TestFederationNodeCRUDAndNativeLoopbackTransport. This is not an SSH
+	// host validation claim.
+	"federation_node_create":     {Execute: true, NativeFederationLifecycle: true},
+	"federation_node_status":     {Execute: true, NativeFederationLifecycle: true},
+	"federation_node_disconnect": {Execute: true, NativeFederationLifecycle: true},
+	"federation_aggregate_queue": {Execute: true, NativeFederationLifecycle: true},
+	"federation_node_delete":     {Execute: true, NativeFederationLifecycle: true},
 }
 
 func TestFrozenTypeScriptParityMatrix(t *testing.T) {
@@ -211,10 +221,10 @@ func TestFrozenTypeScriptParityMatrix(t *testing.T) {
 	for _, name := range []string{
 		"health", "unauthenticated_queue", "browser_session_exchange",
 		"github_auth_status", "github_auth_configure", "github_auth_device_start", "github_auth_device_poll", "github_auth_authenticated_status", "github_auth_disconnect",
-		"local_pr_requires_read_auth", "workspaces_empty", "queue_empty", "federation_nodes_empty", "open_workspace", "repos",
+		"local_pr_requires_read_auth", "workspaces_empty", "queue_empty", "federation_nodes_empty", "federation_node_create", "federation_node_status", "federation_node_disconnect", "federation_aggregate_queue", "federation_node_delete", "open_workspace", "repos",
 		"repo_diff", "repo_diff_ignore_whitespace", "repo_revisions", "websocket_diff_updated", "repo_line_count", "repo_blob", "repo_generated_status", "repo_fullfile", "repo_comments_empty", "create_comment", "repo_comments_saved", "comment_import",
 		"sessions", "review_history", "ui_state_empty", "ui_state_put", "export_prompt", "new_session", "comments_json", "comments_output",
-		"ask_models", "ask_conversations_empty", "ask_question_set_create", "ask_question_sets", "ask_question_set_get", "ask_question_set_update", "ask_question_set_delete", "ask_conversation_create", "ask_conversation_get", "ask_inline_conversation_reuses_context", "ask_conversation_model", "ask_conversation_settings", "ask_conversation_cancel_idle", "ask_question_set_for_send", "ask_question_set_combined_sse", "ask_question_set_sequential_sse", "ask_conversation_fresh", "ask_conversation_history",
+		"ask_models", "ask_conversations_empty", "ask_question_set_create", "ask_question_sets", "ask_question_set_get", "ask_question_set_update", "ask_question_set_delete", "ask_conversation_create", "ask_conversation_get", "ask_inline_conversation_reuses_context", "ask_conversation_model", "ask_conversation_settings", "ask_conversation_message_sse", "ask_conversation_cancel_idle", "ask_question_set_for_send", "ask_question_set_combined_sse", "ask_question_set_sequential_sse", "ask_conversation_fresh", "ask_conversation_history",
 		"queue_create_local", "queue_list_with_item", "queue_detail", "queue_reorder", "queue_add_feedback", "queue_feedback_prompt", "queue_reproduce", "queue_export", "queue_open", "queue_complete", "queue_requeue", "queue_delete", "queue_history", "queue_watch_enable", "queue_watch_disable", "queue_hook",
 		"agent_register", "agent_list", "agent_heartbeat", "agent_reconnect",
 	} {
@@ -223,6 +233,8 @@ func TestFrozenTypeScriptParityMatrix(t *testing.T) {
 		response := replayFrozenFixture(t, d, fixture, disposition, state)
 		if disposition.NativeWebsocketDiff {
 			assertNativeWebsocketDiffFixture(t, d, fixture, state)
+		} else if disposition.NativeFederationLifecycle {
+			assertNativeFederationLifecycleFixture(t, fixture, response)
 		} else if disposition.NativeQueueHook {
 			assertNativeQueueHookFixture(t, fixture, response, state)
 		} else if disposition.NativeAskSettings {
@@ -231,6 +243,8 @@ func TestFrozenTypeScriptParityMatrix(t *testing.T) {
 			assertNativeCommentCollectionFixture(t, fixture, response)
 		} else if disposition.NativeQueueWatch {
 			assertNativeQueueWatchFixture(t, d, fixture, response, state)
+		} else if disposition.NativeAskMessageDelivery {
+			assertNativeAskMessageDeliveryFixture(t, d, fixture, response, state)
 		} else if disposition.NativeQuestionSetDelivery {
 			assertNativeQuestionSetDeliveryFixture(t, d, fixture, response, state)
 		} else if disposition.NativeQueueReproduction {
@@ -309,7 +323,7 @@ func startFrozenParityDaemon(t *testing.T) *Daemon {
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	d, err := Start(ctx, Options{DataDir: t.TempDir(), GitHubAuth: githubauth.New(authSecrets{}, authConfig{}, transport, func(string) error { return nil })})
+	d, err := Start(ctx, Options{DataDir: t.TempDir(), GitHubAuth: githubauth.New(authSecrets{}, authConfig{}, transport, func(string) error { return nil }), FederationSecrets: authSecrets{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -370,7 +384,30 @@ func replayFrozenFixture(t *testing.T, d *Daemon, fixture frozenParityFixture, d
 		}
 		body = string(encoded)
 	}
-	if disposition.NativeQuestionSetDelivery {
+	if disposition.NativeAskMessageDelivery {
+		conversationID := state["<conversation-id>"]
+		if conversationID == "" {
+			t.Fatalf("%s lacks native ask-message replay state", fixture.Name)
+		}
+		path = strings.ReplaceAll(fixture.Request.Path, "<uuid>", conversationID)
+		body = strings.ReplaceAll(body, "<uuid>", conversationID)
+		body = strings.ReplaceAll(body, `\u003cuuid\u003e`, conversationID)
+		// The frozen browser bundle used prompt and expected a response-body SSE
+		// stream. Native public delivery uses body and returns a durable
+		// EventSource handoff instead; preserve the prompt and location while
+		// exercising that replacement contract.
+		var nativeBody map[string]any
+		if err := json.Unmarshal([]byte(body), &nativeBody); err != nil {
+			t.Fatalf("%s: invalid native ask-message body: %v", fixture.Name, err)
+		}
+		nativeBody["body"] = nativeBody["prompt"]
+		delete(nativeBody, "prompt")
+		encoded, err := json.Marshal(nativeBody)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body = string(encoded)
+	} else if disposition.NativeQuestionSetDelivery {
 		questionSetID, conversationID := state["<question-set-id>"], state["<conversation-id>"]
 		if questionSetID == "" || conversationID == "" {
 			t.Fatalf("%s lacks native question-set replay state: set=%q conversation=%q", fixture.Name, questionSetID, conversationID)
@@ -505,6 +542,93 @@ func assertFrozenFixtureResponse(t *testing.T, fixture frozenParityFixture, actu
 	}
 }
 
+// assertNativeFederationLifecycleFixture replays the frozen create/status/
+// disconnect/aggregate/delete sequence through the native API. It deliberately
+// does not substitute an SSH process: after disconnect an aggregate must not
+// attempt a tunnel at all. The separate federation transport test exercises a
+// loopback transport; a real remote SSH host remains a manual release gate.
+func assertNativeFederationLifecycleFixture(t *testing.T, fixture frozenParityFixture, actual *httptest.ResponseRecorder) {
+	t.Helper()
+	if actual.Code != fixture.Response.Status {
+		t.Fatalf("%s: status got=%d want=%d body=%s", fixture.Name, actual.Code, fixture.Response.Status, actual.Body.String())
+	}
+	if fixture.Response.ContentType == nil {
+		if got := actual.Header().Get("Content-Type"); got != "" {
+			t.Fatalf("%s: unexpected content type %q", fixture.Name, got)
+		}
+		return
+	}
+	if got := actual.Header().Get("Content-Type"); got != *fixture.Response.ContentType {
+		t.Fatalf("%s: content type got=%q want=%q", fixture.Name, got, *fixture.Response.ContentType)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(actual.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("%s: invalid federation JSON: %v", fixture.Name, err)
+	}
+	if strings.Contains(actual.Body.String(), "fixture-node-token") {
+		t.Fatalf("%s: browser response leaked the remote daemon capability", fixture.Name)
+	}
+	object := func(name string) map[string]any {
+		value, ok := payload[name].(map[string]any)
+		if !ok {
+			t.Fatalf("%s: missing %s object: %s", fixture.Name, name, actual.Body.String())
+		}
+		return value
+	}
+	assertNode := func(node map[string]any, enabled bool) {
+		t.Helper()
+		if node["id"] != "fixture-node" || node["label"] != "fixture remote" || node["sshTarget"] != "fixture@localhost" || node["remotePort"] != float64(57140) || node["enabled"] != enabled || node["lastError"] != nil {
+			t.Fatalf("%s: unsafe or incomplete federation node: %#v", fixture.Name, node)
+		}
+	}
+	assertRuntime := func(runtime map[string]any, state string) {
+		t.Helper()
+		if runtime["id"] != "fixture-node" || runtime["state"] != state || runtime["localPort"] != nil || runtime["cachedResponses"] != float64(0) || runtime["lastError"] != nil || runtime["available"] != true {
+			t.Fatalf("%s: unexpected federation runtime: %#v", fixture.Name, runtime)
+		}
+	}
+
+	switch fixture.Name {
+	case "federation_node_create":
+		assertNode(object("node"), true)
+	case "federation_node_status":
+		assertNode(object("node"), true)
+		assertRuntime(object("runtime"), "disconnected")
+	case "federation_node_disconnect":
+		assertNode(object("node"), false)
+		assertRuntime(object("runtime"), "disabled")
+	case "federation_aggregate_queue":
+		if payload["transportAvailable"] != true {
+			t.Fatalf("%s: transport availability missing: %s", fixture.Name, actual.Body.String())
+		}
+		nodes, ok := payload["nodes"].([]any)
+		if !ok || len(nodes) != 1 {
+			t.Fatalf("%s: disabled saved node should remain visible without fetching: %s", fixture.Name, actual.Body.String())
+		}
+		row, ok := nodes[0].(map[string]any)
+		if !ok {
+			t.Fatalf("%s: invalid aggregate row: %#v", fixture.Name, nodes[0])
+		}
+		rowNode, ok := row["node"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s: missing aggregate node: %#v", fixture.Name, row)
+		}
+		rowRuntime, ok := row["runtime"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s: missing aggregate runtime: %#v", fixture.Name, row)
+		}
+		assertNode(rowNode, false)
+		assertRuntime(rowRuntime, "disabled")
+		items, ok := row["items"].([]any)
+		if !ok || len(items) != 0 {
+			t.Fatalf("%s: disabled node must not fetch a remote queue: %#v", fixture.Name, row)
+		}
+	default:
+		t.Fatalf("unexpected federation lifecycle fixture %q", fixture.Name)
+	}
+}
+
 // assertNativeAskSettingsFixture is a compatibility adapter, not a relaxed
 // assertion. The frozen TS contract reset explicit settings when only a model
 // was changed. Native `/ask` intentionally preserves them so a reviewer does
@@ -552,6 +676,66 @@ func assertNativeAskSettingsFixture(t *testing.T, fixture frozenParityFixture, a
 	}
 	if *response.Conversation.ReasoningEffort != wantReasoning || *response.Conversation.ContextTier != wantTier {
 		t.Fatalf("%s: native picker settings got=(%q,%q) want=(%q,%q)", fixture.Name, *response.Conversation.ReasoningEffort, *response.Conversation.ContextTier, wantReasoning, wantTier)
+	}
+}
+
+// assertNativeAskMessageDeliveryFixture replaces the historical response-body
+// SSE contract with the native POST-202 plus durable EventSource design. This
+// is deliberately hermetic: the parity daemon uses its deterministic fake
+// runtime, so it proves persistence and replay safety without claiming a live
+// Copilot response.
+func assertNativeAskMessageDeliveryFixture(t *testing.T, d *Daemon, fixture frozenParityFixture, actual *httptest.ResponseRecorder, state map[string]string) {
+	t.Helper()
+	if actual.Code != http.StatusAccepted {
+		t.Fatalf("%s: native accepted-delivery status got=%d want=%d body=%s", fixture.Name, actual.Code, http.StatusAccepted, actual.Body.String())
+	}
+	if got := actual.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
+		t.Fatalf("%s: native accepted-delivery content type got=%q", fixture.Name, got)
+	}
+	var payload struct {
+		Delivery string `json:"delivery"`
+		User     struct {
+			ConversationID string        `json:"conversationId"`
+			Body           string        `json:"body"`
+			Location       *ask.Location `json:"location"`
+		} `json:"user"`
+	}
+	if err := json.Unmarshal(actual.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("%s: invalid native accepted-delivery JSON: %v", fixture.Name, err)
+	}
+	conversationID := state["<conversation-id>"]
+	request, ok := fixture.Request.Body.(map[string]any)
+	if !ok {
+		t.Fatalf("%s: frozen request is not an object", fixture.Name)
+	}
+	wantPrompt, _ := request["prompt"].(string)
+	if payload.Delivery != "streaming" || payload.User.ConversationID != conversationID || payload.User.Body != wantPrompt || payload.User.Location == nil || payload.User.Location.FilePath != "root.ts" || payload.User.Location.StartLine != 1 || payload.User.Location.SelectedCode != "export const root = 3;" {
+		t.Fatalf("%s: invalid native delivery envelope: %#v", fixture.Name, payload)
+	}
+
+	var beforeRead []ask.Message
+	deadline := time.Now().Add(time.Second)
+	for {
+		messages, err := ask.ListMessages(context.Background(), d.db, conversationID)
+		if err == nil && len(messages) == 2 && !messages[0].Pending && !messages[1].Pending && messages[0].Role == ask.RoleUser && messages[0].Body == wantPrompt && messages[1].Role == ask.RoleAssistant && messages[1].Body == "Copilot reply" {
+			beforeRead = messages
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s: native delivery did not settle: messages=%#v err=%v", fixture.Name, messages, err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	read := httptest.NewRecorder()
+	requestRead := httptest.NewRequest(http.MethodGet, "http://local.test/api/ask/conversations/"+conversationID, nil)
+	requestRead.Header.Set("Authorization", "Bearer "+d.token)
+	d.server.Handler.ServeHTTP(read, requestRead)
+	if read.Code != http.StatusOK {
+		t.Fatalf("%s: transcript read=%d %s", fixture.Name, read.Code, read.Body.String())
+	}
+	afterRead, err := ask.ListMessages(context.Background(), d.db, conversationID)
+	if err != nil || len(afterRead) != len(beforeRead) {
+		t.Fatalf("%s: transcript read must not replay: before=%#v after=%#v err=%v", fixture.Name, beforeRead, afterRead, err)
 	}
 }
 
@@ -623,7 +807,7 @@ func assertNativeQuestionSetDeliveryFixture(t *testing.T, d *Daemon, fixture fro
 }
 
 func questionSetTurnsSettled(messages []ask.Message, wantUserBodies []string) bool {
-	userBodies := make([]string, 0, len(wantUserBodies))
+	userBodies := make([]string, 0, len(messages))
 	for _, message := range messages {
 		if message.Pending {
 			return false
@@ -632,15 +816,16 @@ func questionSetTurnsSettled(messages []ask.Message, wantUserBodies []string) bo
 			userBodies = append(userBodies, message.Body)
 		}
 	}
-	if len(userBodies) != len(wantUserBodies) {
+	if len(userBodies) < len(wantUserBodies) || len(messages) < len(wantUserBodies)*2 {
 		return false
 	}
+	start := len(userBodies) - len(wantUserBodies)
 	for index, want := range wantUserBodies {
-		if userBodies[index] != want {
+		if userBodies[start+index] != want {
 			return false
 		}
 	}
-	return len(messages) == len(wantUserBodies)*2
+	return true
 }
 
 // assertNativeQueueReproductionFixture proves that the frozen queue item
