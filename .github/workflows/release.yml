@@ -69,6 +69,11 @@ jobs:
           npm --prefix desktop run verify:sidecar
       - name: Package desktop application
         run: npm --prefix desktop run package -- ${{ matrix.electron_args }}
+      - name: Verify packaged Electron boundary
+        run: |
+          artifact=$(find desktop/dist -type d \( -name '*.app' -o -name '*unpacked' \) -print -quit)
+          test -n "$artifact"
+          npm --prefix desktop run verify:package -- "$artifact"
       - name: Upload desktop release payload
         uses: actions/upload-artifact@v4
         with:

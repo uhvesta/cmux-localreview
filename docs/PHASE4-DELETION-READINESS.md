@@ -12,6 +12,7 @@ runtime until every row below is closed.
 bash scripts/verify-frozen-parity-corpus.sh
 bash scripts/verify-go-parity-matrix.sh
 bash scripts/verify-native-runtime-boundary.sh
+bash scripts/verify-release-archives.sh
 ```
 
 These commands use only Git (when available), Go, Bazel, and the checked-in
@@ -31,6 +32,16 @@ The expected corpus is intentionally retained:
 | `internal/daemon/parity_corpus_test.go` | `go test`, `bazel test` | Pins hashes and validates corpus structure without a TS runtime. |
 | `testdata/parity/ts-final/BUILD.bazel` | `//internal/daemon:daemon_test` | Makes both JSON captures explicit Bazel runfiles. |
 | `scripts/verify-frozen-parity-corpus.sh` | CI/release checklist | Native-only integrity gate; retained after Phase 4. |
+
+`verify-release-archives.sh` also rejects an archive containing anything other
+than the two promised Go executables. It is intentionally not a substitute for
+executing each foreign-architecture binary on its native release runner.
+
+For Electron, `npm --prefix desktop run verify:package -- <unpacked-app>` is
+the matching package-boundary check: it validates `app.asar`, the bundled
+`localreviewd`, and sidecar lifecycle using the packaged executable. A real
+renderer interaction pass remains a Phase-3 requirement because a display-free
+package check cannot prove a BrowserWindow rendered or accepted input.
 
 ## Frozen TypeScript dependencies to remove
 

@@ -24,6 +24,19 @@ target, shutdown/restart with the same SQLite profile, and orphan cleanup via
 npm run verify:sidecar
 ```
 
+After `npm run package:dir`, validate the unpacked artifact itself—not merely
+the checkout daemon:
+
+```sh
+npm run verify:package -- "dist/mac-arm64/CMUX Local Review.app"
+# Linux: npm run verify:package -- dist/linux-unpacked
+```
+
+This inspects `app.asar`, syntax-checks its packaged main process, confirms the
+native sidecar is executable, and runs the same lifecycle check against that
+bundled binary. It is a release-boundary check; a renderer/UI interaction pass
+still needs a real Electron window.
+
 It deliberately does not claim a full GUI acceptance pass. Follow it with the
 Phase-3 Electron checklist in [CLI workflows](../docs/CLI-WORKFLOWS.md#desktop-shell-optional):
 open the packaged app, complete one durable review action, quit, relaunch, and

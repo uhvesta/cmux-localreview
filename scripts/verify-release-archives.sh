@@ -35,6 +35,14 @@ for platform in darwin_arm64 darwin_amd64 linux_arm64 linux_amd64; do
   printf '%s\n' "$entries" | grep -Fx "$root_name/bin/localreviewd" >/dev/null || {
     echo "$archive is missing localreviewd" >&2; exit 1;
   }
+  # Native archives intentionally contain only their root, bin directory, and
+  # two Go executables. Reject accidental frontend, legacy JS, or fixture
+  # payloads rather than merely checking that the required files are present.
+  expected_entries=$(printf '%s\n%s\n%s\n%s\n' \
+    "$root_name/" "$root_name/bin/" "$root_name/bin/localreview" "$root_name/bin/localreviewd")
+  [ "$(printf '%s\n' "$entries" | sort)" = "$(printf '%s\n' "$expected_entries" | sort)" ] || {
+    echo "$archive contains unexpected non-native release entries" >&2; exit 1;
+  }
 
   expected=$(awk -v name="$(basename "$archive")" '$2 == name { print $1 }' "$checksums")
   actual=$(digest "$archive")
