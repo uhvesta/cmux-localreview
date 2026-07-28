@@ -20,6 +20,8 @@ Usage:
   scripts/phase3-acceptance.sh record --session DIR --surface web|electron \
     --item 1..7 --result pass|fail --note TEXT
   scripts/phase3-acceptance.sh status --session DIR
+  scripts/phase3-acceptance.sh report --session DIR
+  scripts/phase3-acceptance.sh verify-two --session DIR --session DIR
 
 prepare creates a disposable two-repository review workspace and separate web
 and Electron data directories. It builds the daemon, CLI, and packaged desktop
@@ -30,6 +32,12 @@ launch-web starts the isolated daemon and opens its one-time local browser URL.
 launch-electron launches the unpacked packaged artifact with a different clean
 profile. Run each checklist item through computer-use, then record the observed
 result. The ledger is append-only: later retries do not erase prior failures.
+
+report validates the ledger shape and prints an auditable structural summary of
+one session. verify-two does the same for two distinct sessions and returns
+success only when every latest web/Electron observation is a pass. Neither
+command certifies that OAuth or Copilot was real: a reviewer must inspect the
+notes and record both clean passes in MIGRATION_LOG.md before Phase 3 can pass.
 EOF
 }
 
@@ -42,6 +50,56 @@ session_path() {
   require_dir "$value"
   [ -f "$value/manifest.json" ] || die "not a Phase 3 acceptance session: $value"
   printf '%s\n' "$(cd "$value" && pwd)"
+}
+
+validate_ledger() {
+  local session=$1 ledger="$1/evidence.tsv"
+  [ -f "$ledger" ] || die "missing evidence ledger: $ledger"
+  # Keep this intentionally small and portable: a record command writes exactly
+  # five tab-separated columns and rejects control characters in the note.
+  # Validation catches hand-edited/corrupted rows before a report can be used as
+  # review evidence.
+  awk -F '\t' '
+    NR == 1 {
+      if ($0 != "timestamp\tsurface\titem\tresult\tnote") {
+        printf "invalid evidence header at line 1\n" > "/dev/stderr"; exit 1
+      }
+      next
+    }
+    NF != 5 || $1 == "" || ($2 != "web" && $2 != "electron") ||
+      ($3 !~ /^[1-7]$/) || ($4 != "pass" && $4 != "fail") || $5 == "" {
+      printf "invalid evidence row at line %d\n", NR > "/dev/stderr"; exit 1
+    }
+  ' "$ledger" || die "evidence ledger is malformed; do not use it as Phase 3 evidence"
+}
+
+manifest_value() {
+  local session=$1 key=$2
+  # The manifest is written by prepare with one scalar per line. This is not a
+  # general JSON parser; failing closed is preferable to treating a hand-edited
+  # manifest as proof of a clean profile.
+  sed -n "s/^  \"$key\": \"\(.*\)\",\{0,1\}\$/\1/p" "$session/manifest.json" | head -n 1
+}
+
+latest_result() {
+  local session=$1 surface=$2 item=$3
+  awk -F '\t' -v s="$surface" -v i="$item" '$2 == s && $3 == i { result=$4 } END { print result }' "$session/evidence.tsv"
+}
+
+session_is_structurally_complete() {
+  local session=$1 surface item result
+  validate_ledger "$session"
+  for surface in web electron; do
+    for item in 1 2 3 4 5 6 7; do
+      result=$(latest_result "$session" "$surface" "$item")
+      [ "$result" = pass ] || return 1
+    done
+  done
+}
+
+prior_failure_count() {
+  local session=$1
+  awk -F '\t' 'NR > 1 && $4 == "fail" { count++ } END { print count + 0 }' "$session/evidence.tsv"
 }
 
 write_checklist() {
@@ -72,9 +130,11 @@ The runner deliberately leaves every cell pending. Use:
 scripts/phase3-acceptance.sh record --session "$session" --surface web --item 1 --result pass --note 'what was clicked and observed'
 ~~~
 
-Do not treat a fully populated ledger as final Phase 3 certification until its
-evidence is independently reviewed and two complete clean sessions are recorded
-in \`MIGRATION_LOG.md\`.
+Run \`scripts/phase3-acceptance.sh report --session "$session"\` before
+copying evidence into the migration log. Do not treat a fully populated ledger
+as final Phase 3 certification until its notes are independently reviewed and
+two complete, distinct clean sessions pass \`verify-two\` and are recorded in
+\`MIGRATION_LOG.md\`.
 EOF
 }
 
@@ -238,16 +298,66 @@ status() {
   printf 'Phase 3 evidence session: %s\n' "$session"
   for surface in web electron; do
     for item in 1 2 3 4 5 6 7; do
-      local latest
-      latest=$(awk -F '\t' -v s="$surface" -v i="$item" '$2 == s && $3 == i { line=$0 } END { print line }' "$session/evidence.tsv")
-      if [ -n "$latest" ]; then
-        printf '  %-8s item %s: %s\n' "$surface" "$item" "$(printf '%s' "$latest" | cut -f4)"
+      local result
+      result=$(latest_result "$session" "$surface" "$item")
+      if [ -n "$result" ]; then
+        printf '  %-8s item %s: %s\n' "$surface" "$item" "$result"
       else
         printf '  %-8s item %s: pending\n' "$surface" "$item"
       fi
     done
   done
+  printf '  observations: %s; prior failed attempts: %s\n' "$(awk 'END { print (NR > 0 ? NR - 1 : 0) }' "$session/evidence.tsv")" "$(prior_failure_count "$session")"
   printf '%s\n' 'This status is evidence only. It never certifies OAuth, Copilot, or Phase 3 completion.'
+}
+
+report() {
+  [ "$#" -eq 2 ] && [ "$1" = '--session' ] || die 'report requires --session DIR'
+  local session commit workspace web_profile electron_profile failures
+  session=$(session_path "$2")
+  validate_ledger "$session"
+  commit=$(manifest_value "$session" gitCommit)
+  workspace=$(manifest_value "$session" workspace)
+  web_profile=$(manifest_value "$session" webDataDir)
+  electron_profile=$(manifest_value "$session" electronDataDir)
+  [ -n "$commit" ] && [ -n "$workspace" ] && [ -n "$web_profile" ] && [ -n "$electron_profile" ] || die 'manifest lacks clean-session identity; prepare a new session'
+  failures=$(prior_failure_count "$session")
+  printf 'Phase 3 structural evidence report\n'
+  printf '  session: %s\n  commit: %s\n  workspace: %s\n  web profile: %s\n  Electron profile: %s\n' "$session" "$commit" "$workspace" "$web_profile" "$electron_profile"
+  status --session "$session"
+  if session_is_structurally_complete "$session"; then
+    printf '  structural result: complete (all 14 latest observations are pass; retries retained: %s)\n' "$failures"
+  else
+    printf '  structural result: incomplete (every latest observation must be pass)\n'
+  fi
+  printf '%s\n' 'This is not a Phase 3 certification. Inspect notes, verify real OAuth/Copilot behavior, and copy both clean-session reports into MIGRATION_LOG.md.'
+}
+
+verify_two() {
+  local first='' second=''
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --session)
+        [ "$#" -ge 2 ] || die '--session needs a directory'
+        if [ -z "$first" ]; then first=$(session_path "$2"); elif [ -z "$second" ]; then second=$(session_path "$2"); else die 'verify-two accepts exactly two --session values'; fi
+        shift 2 ;;
+      *) die "unknown verify-two argument: $1" ;;
+    esac
+  done
+  [ -n "$first" ] && [ -n "$second" ] || die 'verify-two requires two --session values'
+  [ "$first" != "$second" ] || die 'verify-two requires two distinct clean sessions'
+  local first_workspace second_workspace first_web second_web first_electron second_electron
+  first_workspace=$(manifest_value "$first" workspace); second_workspace=$(manifest_value "$second" workspace)
+  first_web=$(manifest_value "$first" webDataDir); second_web=$(manifest_value "$second" webDataDir)
+  first_electron=$(manifest_value "$first" electronDataDir); second_electron=$(manifest_value "$second" electronDataDir)
+  [ -n "$first_workspace" ] && [ -n "$second_workspace" ] && [ -n "$first_web" ] && [ -n "$second_web" ] && [ -n "$first_electron" ] && [ -n "$second_electron" ] || die 'one session has no clean-profile identity; prepare it again'
+  [ "$first_workspace" != "$second_workspace" ] && [ "$first_web" != "$second_web" ] && [ "$first_electron" != "$second_electron" ] || die 'sessions reuse a workspace or profile and are not two clean passes'
+  report --session "$first"
+  report --session "$second"
+  if ! session_is_structurally_complete "$first" || ! session_is_structurally_complete "$second"; then
+    die 'two-session structural check is incomplete; it is not Phase 3 evidence yet'
+  fi
+  printf '%s\n' 'Two distinct sessions are structurally complete. This is still not Phase 3 certification: independently review notes, authenticated behavior, and MIGRATION_LOG.md before proceeding to Phase 4.'
 }
 
 command=${1:-}
@@ -259,6 +369,8 @@ case "$command" in
   launch-electron) launch electron "$@" ;;
   record) record "$@" ;;
   status) status "$@" ;;
+  report) report "$@" ;;
+  verify-two) verify_two "$@" ;;
   -h|--help|help) usage ;;
   *) die "unknown command: $command" ;;
 esac

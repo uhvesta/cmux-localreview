@@ -388,10 +388,29 @@ scripts/phase3-acceptance.sh record \
 scripts/phase3-acceptance.sh status --session /tmp/localreview-phase3-run-1
 ```
 
-The ledger intentionally cannot certify Phase 3 by itself: real OAuth/Copilot
-results must be observed in the UI and two full clean sessions still need to be
-reviewed and recorded in `MIGRATION_LOG.md`. Keeping this boundary prevents a
-fixture or a reopened session from being mistaken for an authenticated pass.
+Before copying a pass into the migration log, produce a deterministic report.
+It validates the append-only TSV shape, shows each latest observation and every
+prior failure count, and identifies the artifact commit and separate profiles:
+
+```sh
+scripts/phase3-acceptance.sh report --session /tmp/localreview-phase3-run-1
+```
+
+After independently reviewing two complete sessions, use the structural
+two-session check. It rejects the same session twice and rejects reused
+workspace/web/Electron profile paths:
+
+```sh
+scripts/phase3-acceptance.sh verify-two \
+  --session /tmp/localreview-phase3-run-1 \
+  --session /tmp/localreview-phase3-run-2
+```
+
+These commands intentionally cannot certify Phase 3: real OAuth/Copilot
+results must be observed in the UI, the notes must be independently reviewed,
+and both clean sessions must still be recorded in `MIGRATION_LOG.md`. Keeping
+this boundary prevents a fixture, a hand-edited ledger, or a reopened session
+from being mistaken for an authenticated pass.
 
 ## File-change reload workflow
 
