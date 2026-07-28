@@ -737,9 +737,7 @@ function App() {
         }
       },
       onDeleteAllComments: () => {
-        if (threads.length > 0 && confirm('Delete all comments?')) {
-          clearAllComments();
-        }
+        handleClearAllReviewComments();
       },
       onShowCommentsList: () => {
         setIsCommentsListOpen(true);

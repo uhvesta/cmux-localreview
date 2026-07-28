@@ -119,7 +119,7 @@ describe("buildWorkspaceApp", () => {
     expect(repoIdFor(first[0]!)).toBe(repoIdFor(second[0]!));
   });
 
-  test("resolving a thread rejects a late stale snapshot instead of resurrecting it", async () => {
+  test("comment snapshots merge safely and resolved threads stay deleted", async () => {
     const workspace = makeTmpDir();
     gitInit(join(workspace, "repo"));
     const { app, repos } = await buildWorkspaceApp({ workspaceRoot: workspace, db: makeDb() });
@@ -133,12 +133,22 @@ describe("buildWorkspaceApp", () => {
     expect(saved.status).toBe(200);
     const savedJson = (await saved.json()) as { version: number };
 
+    // A new tab can legitimately have an empty browser cache. It must not
+    // delete formal review work created by another tab merely by booting.
+    const emptySnapshot = await fetch(commentsUrl, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ threads: [], baseVersion: savedJson.version }),
+    });
+    expect(emptySnapshot.status).toBe(200);
+    const emptySnapshotJson = (await emptySnapshot.json()) as { version: number };
+    const afterEmptySnapshot = (await (await fetch(`${commentsUrl}-json`)).json()) as { threads: unknown[] };
+    expect(afterEmptySnapshot.threads).toHaveLength(1);
+
     const removed = await fetch(`${commentsUrl}/stale-thread`, { method: "DELETE" });
     expect(removed.status).toBe(200);
     const removedJson = (await removed.json()) as { version: number };
 
     const staleRetry = await fetch(commentsUrl, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ threads: initial, baseVersion: savedJson.version }),
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ threads: initial, baseVersion: emptySnapshotJson.version }),
     });
     expect(staleRetry.status).toBe(409);
     // Even a tab that has caught up with the server version cannot recreate a

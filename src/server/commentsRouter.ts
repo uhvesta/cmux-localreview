@@ -172,21 +172,14 @@ export function createCommentsRouter(deps: CommentsRouterDeps): Router {
       const nextThreads = requestedThreads.filter(
         (thread) => !isThreadTombstoned(deps.db, sessionId, deps.repoDbId, thread.id),
       );
-      const existingIds = new Set(listThreads(deps.db, sessionId, deps.repoDbId).map((t) => t.id));
-      const nextIds = new Set(nextThreads.map((t) => t.id));
-
       for (const thread of nextThreads) {
         upsertThread(deps.db, sessionId, deps.repoDbId, thread);
       }
-      for (const id of existingIds) {
-        if (!nextIds.has(id)) {
-          deleteThread(deps.db, sessionId, deps.repoDbId, id);
-          // A full snapshot that omits a thread is a reviewer deletion too
-          // (for example, “Delete all comments”), so protect it from another
-          // tab's cached snapshot just like an explicit DELETE request.
-          tombstoneThread(deps.db, sessionId, deps.repoDbId, id);
-        }
-      }
+      // A browser snapshot is merge-only.  It may be an empty local cache
+      // while another tab has already created a comment, and treating its
+      // omissions as deletions loses review work.  Deliberate removal always
+      // uses DELETE /api/comments/:threadId (the bulk UI invokes it for each
+      // thread), where we can durably tombstone the client-generated id.
 
       version += 1;
       deps.onChange?.();
