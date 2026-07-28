@@ -529,6 +529,15 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 					writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid comment thread"})
 					return
 				}
+				var tombstoned int
+				if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM comment_tombstones WHERE session_id=? AND repo_id=? AND thread_id=?)`, review.SessionID, repo.DBID, thread.ID).Scan(&tombstoned); err != nil {
+					_ = tx.Rollback()
+					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+					return
+				}
+				if tombstoned != 0 {
+					continue
+				}
 				var start, end int64
 				var single int64
 				if json.Unmarshal(thread.Position.Line, &single) == nil {
@@ -571,6 +580,40 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			writeJSON(w, http.StatusOK, map[string]any{"success": true, "merged": false, "version": now})
+			return
+		}
+		if len(parts) == 5 && parts[0] == "repos" && parts[2] == "api" && parts[3] == "comments" && r.Method == http.MethodDelete {
+			review, repo, ok := d.reviewContext(parts[1])
+			if !ok {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "Unknown review repository"})
+				return
+			}
+			threadID := parts[4]
+			if threadID == "" {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "threadId is required"})
+				return
+			}
+			now := time.Now().UnixMilli()
+			tx, err := d.db.Begin()
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			result, err := tx.Exec(`DELETE FROM comments WHERE session_id=? AND repo_id=? AND thread_id=?`, review.SessionID, repo.DBID, threadID)
+			if err == nil {
+				_, err = tx.Exec(`INSERT INTO comment_tombstones(session_id,repo_id,thread_id,deleted_at) VALUES(?,?,?,?) ON CONFLICT(session_id,repo_id,thread_id) DO UPDATE SET deleted_at=excluded.deleted_at`, review.SessionID, repo.DBID, threadID, now)
+			}
+			if err != nil {
+				_ = tx.Rollback()
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			if err = tx.Commit(); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			deleted, _ := result.RowsAffected()
+			writeJSON(w, http.StatusOK, map[string]any{"success": true, "deleted": deleted > 0, "threadId": threadID, "version": now})
 			return
 		}
 		if len(parts) == 4 && parts[0] == "repos" && parts[2] == "api" && parts[3] == "diff" && r.Method == http.MethodGet {
