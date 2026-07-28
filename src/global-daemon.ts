@@ -27,6 +27,7 @@ import { captureSubmissionProvenance, redactSubmissionMetadata, type SubmissionP
 import { workspaceSourceFingerprint } from "./server/workspaceFingerprint.ts";
 import { FederationTunnelManager, getFederationNode, listFederationNodes, removeFederationNode, setFederationNodeEnabled, upsertFederationNode } from "./server/federation.ts";
 import { AcpRemoteSession, parseLoopbackAcpEndpoint, type AcpEndpoint } from "./server/acpRemote.ts";
+import { GitHubAuthService } from "./server/githubAuth.ts";
 
 const VERSION = "0.2.0";
 
@@ -70,6 +71,7 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
   ensureDaemonDirectories();
   const db = openDb(daemonDbPath());
   const federation = new FederationTunnelManager(db);
+  const githubAuth = new GitHubAuthService();
   const token = options.token ?? newDaemonToken();
   const app = express();
   app.use(express.json({ limit: "2mb" }));
@@ -79,7 +81,7 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
   // by the active workspace app and deliberately remain local-browser usable.
   // Only the daemon control plane is bearer-protected.
   api.use((req, res, next) => {
-    if (/^\/(workspaces|queue|agents|packages|federation)(?:\/|$)/.test(req.path)) return requireAuth(token)(req, res, next);
+    if (/^\/(workspaces|queue|agents|packages|federation|github)(?:\/|$)/.test(req.path)) return requireAuth(token)(req, res, next);
     next();
   });
   app.use("/api", api);
@@ -92,6 +94,19 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
   // two simultaneous HTTP requests can both read the same undelivered rows
   // before either marks them delivered and send duplicate instructions.
   const feedbackDeliveries = new Map<string, Promise<unknown>>();
+
+  // Browser-first authentication for both GitHub API operations and the
+  // Copilot SDK. `gh` owns the OAuth credential in the OS keychain; neither
+  // a GitHub token nor a Copilot token is accepted or retained by this app.
+  api.get("/github/auth/status", async (_req, res) => {
+    res.json(await githubAuth.status());
+  });
+  api.post("/github/auth/start", (_req, res) => {
+    res.status(202).json({ login: githubAuth.start() });
+  });
+  api.post("/github/auth/cancel", (_req, res) => {
+    res.json({ login: githubAuth.cancel() });
+  });
 
   const feedbackPrompt = (item: { title: string; workspacePath: string }, feedback: QueueFeedback[], decisionBody?: string) => {
     const lines = feedback.map((entry) => `- ${entry.path ? `${entry.path}${entry.line ? `:${entry.line}` : ""}: ` : ""}${entry.body}`);

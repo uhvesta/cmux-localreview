@@ -167,10 +167,13 @@ managed remote review.
 
 ### Copilot models show unauthenticated or unavailable
 
-Authenticate the installed Copilot CLI in a terminal, then retry `/ask` model
-selection. Confirm the executable is on `PATH` (or set `COPILOT_CLI_PATH` for
-the daemon environment). A fresh `/ask` conversation uses the SDK-backed
-Copilot CLI; it is not an ACP feedback session.
+In Queue Home, choose **Authenticate with GitHub** and finish the browser
+sign-in. The GitHub CLI keeps that OAuth credential in the system credential
+store; the Copilot SDK can reuse it for `/ask`, while `gh` uses it for PR API
+work. Then retry `/ask` model selection. Confirm Copilot CLI is installed and
+on `PATH` (or set `COPILOT_CLI_PATH` for the daemon environment). A fresh
+`/ask` conversation uses the SDK-backed Copilot CLI; it is not an ACP feedback
+session.
 
 ### GitHub PR submission fails
 

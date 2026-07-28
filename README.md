@@ -137,6 +137,23 @@ checks for its self-contained Git bundles.
 
 ## GitHub PR reviews
 
+### Authenticate once from Queue Home
+
+Open Queue Home with `localreview-open --home` and choose **Authenticate with
+GitHub**. It opens GitHub's official browser OAuth flow—there is no GitHub or
+Copilot token field. On completion, `gh` keeps the OAuth credential in the
+operating-system credential store. That same login powers GitHub API work
+(private PR reads and optional review publication) and is a supported fallback
+for fresh Copilot SDK `/ask` sessions.
+
+The connection card reports the signed-in GitHub identity and whether Copilot
+CLI is installed. Open `/ask` after signing in to load the Copilot model list.
+cmux-localreview never receives, displays, or writes the GitHub OAuth token.
+
+For a headless host only, use `gh auth login --web --hostname github.com
+--git-protocol ssh --scopes repo,read:org` on that host; this is the same OAuth
+flow, not a copied-token workflow.
+
 Remote PR submission requires an authenticated `gh` CLI. The daemon resolves
 the PR's repository plus base/head SHAs before cloning, then checks out that
 exact head in a managed cache worktree. Re-submitting the same PR URL refreshes

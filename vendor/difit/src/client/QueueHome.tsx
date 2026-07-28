@@ -37,6 +37,12 @@ interface FederationQueue { node: FederationNode; items: QueueItem[]; error?: st
 
 interface FederationNodeWithRuntime extends FederationNode { runtime?: FederationRuntime; }
 
+interface GitHubAuthStatus {
+  gh: { installed: boolean; authenticated: boolean; login?: string; error?: string };
+  copilot: { installed: boolean; version?: string };
+  login: { state: 'idle' | 'waiting' | 'succeeded' | 'failed'; message?: string };
+}
+
 const buttonStyle = {
   fontSize: 12, padding: '6px 9px', borderRadius: 5, border: '1px solid rgba(127,127,127,0.45)',
   background: 'transparent', color: 'inherit', cursor: 'pointer',
@@ -96,6 +102,9 @@ export function QueueHome() {
   const [nodeAction, setNodeAction] = useState<string | null>(null);
   const [daemonToken, setDaemonToken] = useState('');
   const [authRequired, setAuthRequired] = useState(false);
+  const [githubAuth, setGithubAuth] = useState<GitHubAuthStatus | null>(null);
+  const [githubAuthLoading, setGithubAuthLoading] = useState(false);
+  const [startingGitHubAuth, setStartingGitHubAuth] = useState(false);
 
   useEffect(() => { captureDaemonTokenFromLocation(); }, []);
   const refresh = useCallback(async () => {
@@ -127,6 +136,38 @@ export function QueueHome() {
     } catch (err) { setError(err instanceof Error ? err.message : 'Unable to load the queue.'); } finally { setLoading(false); }
   }, []);
   useEffect(() => { void refresh(); }, [refresh]);
+
+  const refreshGitHubAuth = useCallback(async () => {
+    setGithubAuthLoading(true);
+    try {
+      const response = await daemonFetch('/api/github/auth/status');
+      if (!response.ok) return;
+      setGithubAuth((await response.json()) as GitHubAuthStatus);
+    } finally { setGithubAuthLoading(false); }
+  }, []);
+  useEffect(() => { void refreshGitHubAuth(); }, [refreshGitHubAuth]);
+  useEffect(() => {
+    if (githubAuth?.login.state !== 'waiting') return;
+    const timer = window.setInterval(() => { void refreshGitHubAuth(); }, 1_500);
+    return () => window.clearInterval(timer);
+  }, [githubAuth?.login.state, refreshGitHubAuth]);
+
+  const startGitHubAuth = useCallback(async () => {
+    setStartingGitHubAuth(true); setError(null);
+    try {
+      const response = await daemonFetch('/api/github/auth/start', { method: 'POST' });
+      const body = (await response.json().catch(() => null)) as { login?: GitHubAuthStatus['login']; error?: string } | null;
+      if (!response.ok) throw new Error(body?.error ?? 'Could not start GitHub sign-in.');
+      if (body?.login && githubAuth) setGithubAuth({ ...githubAuth, login: body.login });
+      await refreshGitHubAuth();
+    } catch (err) { setError(err instanceof Error ? err.message : 'Could not start GitHub sign-in.'); }
+    finally { setStartingGitHubAuth(false); }
+  }, [githubAuth, refreshGitHubAuth]);
+
+  const cancelGitHubAuth = useCallback(async () => {
+    await daemonFetch('/api/github/auth/cancel', { method: 'POST' });
+    await refreshGitHubAuth();
+  }, [refreshGitHubAuth]);
 
   const openWorkspace = useCallback(async (item: QueueItem) => {
     setOpening(true); setError(null);
@@ -229,6 +270,20 @@ export function QueueHome() {
       <input value={daemonToken} onChange={(event) => setDaemonToken(event.target.value)} type="password" autoComplete="off" aria-label="Daemon bearer token" placeholder="Daemon token" style={{ flex: 1, minWidth: 180, padding: '7px 8px', borderRadius: 5, border: '1px solid rgba(127,127,127,0.45)', background: 'transparent', color: 'inherit' }} />
       <button type="submit" disabled={!daemonToken.trim()} style={buttonStyle}>Connect</button>
     </form>}
+    {githubAuth && <section aria-label="GitHub and Copilot connection" style={{ margin: '0 0 18px', padding: 12, border: `1px solid ${githubAuth.gh.authenticated ? 'rgba(46,160,67,0.6)' : 'rgba(210,153,34,0.62)'}`, borderRadius: 8, display: 'flex', gap: 12, justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap' }}>
+      <div style={{ minWidth: 250 }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}><strong>GitHub &amp; Copilot</strong><span style={{ color: githubAuth.gh.authenticated ? '#2ea043' : '#d29922', fontSize: 12 }}>{githubAuth.gh.authenticated ? `Connected${githubAuth.gh.login ? ` as @${githubAuth.gh.login}` : ''}` : githubAuth.gh.installed ? 'Not connected' : 'GitHub CLI unavailable'}</span></div>
+        <p style={{ margin: '4px 0 0', fontSize: 12, opacity: 0.74 }}>
+          {githubAuth.login.state === 'waiting' ? githubAuth.login.message : githubAuth.gh.authenticated ? <>GitHub API calls and fresh Copilot SDK <code>/ask</code> chats use this secure GitHub CLI OAuth login. {githubAuth.copilot.installed ? 'Copilot CLI is installed.' : 'Install Copilot CLI to use /ask.'}</> : githubAuth.gh.error ?? 'Sign in with GitHub to read private PRs, publish reviews, and use /ask.'}
+        </p>
+        {githubAuth.login.state !== 'idle' && githubAuth.login.state !== 'waiting' && <p role="status" style={{ margin: '5px 0 0', fontSize: 12, color: githubAuth.login.state === 'failed' ? '#f85149' : '#2ea043' }}>{githubAuth.login.message}</p>}
+      </div>
+      <div style={{ display: 'flex', gap: 7, alignItems: 'center', flexWrap: 'wrap' }}>
+        {githubAuth.login.state === 'waiting' ? <><button onClick={() => void refreshGitHubAuth()} disabled={githubAuthLoading} style={buttonStyle}>{githubAuthLoading ? 'Checking…' : 'Check sign-in'}</button><button onClick={() => void cancelGitHubAuth()} style={buttonStyle}>Cancel</button></> : <button onClick={() => void startGitHubAuth()} disabled={startingGitHubAuth || !githubAuth.gh.installed} style={{ ...buttonStyle, borderColor: '#2ea043' }}>{startingGitHubAuth ? 'Opening GitHub…' : githubAuth.gh.authenticated ? 'Reconnect GitHub' : 'Authenticate with GitHub'}</button>}
+        <button onClick={() => void refreshGitHubAuth()} disabled={githubAuthLoading} style={buttonStyle}>Refresh status</button>
+      </div>
+      <div style={{ width: '100%', fontSize: 11, opacity: 0.64 }}>This opens GitHub’s browser sign-in and stores OAuth in your system credential store. No GitHub token is pasted into or saved by cmux-localreview.</div>
+    </section>}
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 22, alignItems: 'start' }}>
       <section aria-label="Local review queue">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10 }}><h2 style={{ fontSize: 16, margin: 0 }}>Local</h2><span style={{ fontSize: 12, opacity: 0.62 }}>{localItems.length} snapshot{localItems.length === 1 ? '' : 's'}</span></div>
