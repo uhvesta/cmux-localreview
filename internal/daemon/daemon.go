@@ -184,14 +184,17 @@ func (d *Daemon) authorized(next http.Handler) http.Handler {
 		}
 		d.mu.Unlock()
 		if !headerOK && (!cookiePresent || !cookieOK) {
-			http.Error(w, `{"error":"A local browser session or daemon capability is required"}`, http.StatusUnauthorized)
+			// This is an API response, including when no capability was supplied.
+			// Keep the frozen TypeScript JSON media contract rather than letting
+			// http.Error silently downgrade it to text/plain.
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "A local browser session or daemon capability is required"})
 			return
 		}
 		if !headerOK && r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
 			expectedOrigin := "http://" + r.Host
 			fetchSite := r.Header.Get("Sec-Fetch-Site")
 			if r.Header.Get("Origin") != expectedOrigin || fetchSite == "cross-site" || fetchSite == "same-site" {
-				http.Error(w, `{"error":"Browser mutations must originate from this daemon's exact loopback origin"}`, http.StatusForbidden)
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": "Browser mutations must originate from this daemon's exact loopback origin"})
 				return
 			}
 		}
@@ -1832,9 +1835,44 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 		var input struct {
 			Decision string `json:"decision"`
 			Body     string `json:"body"`
+			// Publish is deliberately opt-in.  A remote queue item is still a
+			// useful local review artifact without GitHub write authority, so it
+			// must never turn a requested publish into a misleading local-only
+			// success.
+			Publish bool `json:"publish"`
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&input); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid decision"})
+			return
+		}
+		if input.Publish {
+			item, getErr := queueStore.Get(d.db, parts[1])
+			if getErr != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": getErr.Error()})
+				return
+			}
+			if item == nil || item.RemovedAt != nil {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "Unknown or removed queue item"})
+				return
+			}
+			if item.Kind != "remote" || item.RemoteURL == nil {
+				writeJSON(w, http.StatusBadRequest, map[string]any{
+					"error":              "GitHub publishing can only be requested for a remote pull-request queue item. No local decision was saved.",
+					"code":               "github_review_publish_not_remote",
+					"publishRequested":   true,
+					"localDecisionSaved": false,
+				})
+				return
+			}
+			// The native daemon deliberately has no GitHub review-write adapter
+			// yet.  Do this check before queueStore.Decide so an explicit publish
+			// request cannot be recorded as a local decision by accident.
+			writeJSON(w, http.StatusNotImplemented, map[string]any{
+				"error":              "GitHub review publishing is not available in the native daemon yet. No local decision was saved; choose Save locally to record this review without publishing it.",
+				"code":               "github_review_publish_unsupported",
+				"publishRequested":   true,
+				"localDecisionSaved": false,
+			})
 			return
 		}
 		item, err := queueStore.Decide(d.db, parts[1], queueStore.Status(input.Decision), input.Body)

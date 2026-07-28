@@ -116,6 +116,7 @@ export function ReviewControlPanel({ collapsed, onToggleCollapsed, refreshNonce 
   const [remoteStatus, setRemoteStatus] = useState<RemoteStatus | null>(null);
   const [feedbackBody, setFeedbackBody] = useState('');
   const [deliveryPolicy, setDeliveryPolicy] = useState<'queue' | 'interrupt'>('queue');
+  const [decisionDestination, setDecisionDestination] = useState<'local' | 'github'>('local');
   const [working, setWorking] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -198,8 +199,8 @@ export function ReviewControlPanel({ collapsed, onToggleCollapsed, refreshNonce 
   const openNext = useCallback(() => run('open-next', () => daemonFetch('/api/queue/open-next', { method: 'POST' }), 'Opened the next queued review.'), [run]);
   const decide = useCallback((item: QueueItem, decision: Extract<QueueStatus, 'approved' | 'changes_requested' | 'completed'>) =>
     run(`decision:${item.id}`, () => daemonFetch(`/api/queue/${encodeURIComponent(item.id)}/decision`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision }),
-    }), `Marked ${decision.replace('_', ' ')} locally.`), [run]);
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision, publish: item.kind === 'remote' && decisionDestination === 'github' }),
+    }), decisionDestination === 'github' ? `Published ${decision.replace('_', ' ')} to GitHub.` : `Marked ${decision.replace('_', ' ')} locally.`), [decisionDestination, run]);
   const requeue = useCallback((item: QueueItem) => run(`requeue:${item.id}`, () => daemonFetch(`/api/queue/${encodeURIComponent(item.id)}/requeue`, { method: 'POST' }), 'Requeued at the end of the queue.'), [run]);
   const remove = useCallback((item: QueueItem) => {
     if (!window.confirm(`Remove “${item.title}” without reviewing it? You can submit the same topic again later as a fresh review round.`)) return;
@@ -269,9 +270,17 @@ export function ReviewControlPanel({ collapsed, onToggleCollapsed, refreshNonce 
             <div style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}><strong>{selected.title}</strong><span style={{ marginLeft: 'auto', color: '#58a6ff' }}>{selected.status.replace('_', ' ')}</span></div>
             {selected.body && <p style={{ ...muted, whiteSpace: 'pre-wrap' }}>{selected.body}</p>}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 8 }}>
+              {selected.kind === 'remote' && <div style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 5, ...muted }}>
+                <label htmlFor={`decision-destination-${selected.id}`}>Decision destination</label>
+                <select id={`decision-destination-${selected.id}`} value={decisionDestination} onChange={(event) => setDecisionDestination(event.target.value as 'local' | 'github')} aria-label="Decision destination" disabled={disabled} style={{ fontSize: 11 }}>
+                  <option value="local">Save locally</option>
+                  <option value="github">Publish to GitHub</option>
+                </select>
+                {decisionDestination === 'github' && <span role="status" style={{ color: '#f2cc60' }}>GitHub publishing is unavailable in this native build. A publish attempt will be rejected and will not save a local decision.</span>}
+              </div>}
               {selected.status === 'in_review' && <>
-                <button onClick={() => void decide(selected, 'approved')} style={buttonStyle} disabled={disabled}>{selected.kind === 'remote' ? 'Approve locally' : 'Approve'}</button>
-                <button onClick={() => void decide(selected, 'changes_requested')} style={buttonStyle} disabled={disabled}>{selected.kind === 'remote' ? 'Request changes locally' : 'Request changes'}</button>
+                <button onClick={() => void decide(selected, 'approved')} style={buttonStyle} disabled={disabled}>{selected.kind === 'remote' ? decisionDestination === 'github' ? 'Publish approval' : 'Approve locally' : 'Approve'}</button>
+                <button onClick={() => void decide(selected, 'changes_requested')} style={buttonStyle} disabled={disabled}>{selected.kind === 'remote' ? decisionDestination === 'github' ? 'Publish request changes' : 'Request changes locally' : 'Request changes'}</button>
                 <button onClick={() => void decide(selected, 'completed')} style={buttonStyle} disabled={disabled}>Complete</button>
               </>}
               {selected.status !== 'in_review' && <button onClick={() => void requeue(selected)} style={buttonStyle} disabled={disabled}>Requeue</button>}

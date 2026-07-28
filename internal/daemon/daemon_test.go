@@ -468,6 +468,56 @@ func TestQueueControlPlaneHTTPContract(t *testing.T) {
 	}
 }
 
+// An explicit GitHub publish request must never degrade into a local queue
+// decision.  Native review-write support is intentionally not present yet, so
+// the caller receives an actionable 501 and can deliberately choose a local
+// decision instead.
+func TestRemotePublishDecisionIsRejectedWithoutSavingLocalDecision(t *testing.T) {
+	dir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d, err := Start(ctx, Options{DataDir: dir, UIDir: filepath.Join(dir, "missing-ui")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	item, created, err := queueStore.Enqueue(d.db, queueStore.EnqueueInput{
+		Title:         "Remote PR",
+		WorkspacePath: filepath.Join(dir, "remote-worktree"),
+		Kind:          "remote",
+		RemoteURL:     "https://github.com/acme/widget/pull/7",
+	})
+	if err != nil || !created {
+		t.Fatalf("enqueue remote: item=%#v created=%v err=%v", item, created, err)
+	}
+	if _, err := queueStore.Open(d.db, item.ID); err != nil {
+		t.Fatalf("open remote: %v", err)
+	}
+	request, err := http.NewRequest(http.MethodPost, "http://127.0.0.1:"+strconv.Itoa(d.Port())+"/api/queue/"+item.ID+"/decision", strings.NewReader(`{"decision":"approved","publish":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+d.token)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusNotImplemented || !strings.Contains(string(body), "No local decision was saved") || !strings.Contains(string(body), "github_review_publish_unsupported") {
+		t.Fatalf("publish response=%d %s", response.StatusCode, body)
+	}
+	persisted, err := queueStore.Get(d.db, item.ID)
+	if err != nil || persisted == nil || persisted.Status != queueStore.InReview {
+		t.Fatalf("publish must leave item in review: item=%#v err=%v", persisted, err)
+	}
+	decisions, err := queueStore.DecisionsForItem(d.db, item.ID)
+	if err != nil || len(decisions) != 0 {
+		t.Fatalf("publish must not create local history: decisions=%#v err=%v", decisions, err)
+	}
+}
+
 func TestQueueHomeReadModelsAreAvailableBeforeWorkspaceActivation(t *testing.T) {
 	dir := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())

@@ -65,12 +65,15 @@ bun src/localreview-github-app.ts status
 | --- | --- | --- |
 | `The read GitHub App is not connected` | PR read App is not connected | Configure/connect **PR read** in Queue Home or with `localreview-github-app connect --capability read`. |
 | PR cannot resolve | Wrong URL, missing App installation, or inaccessible repository | Verify canonical URL and install the PR read App on that repository. |
-| Review is stale | PR head changed after opening | Refresh remote PRs, reopen, then publish. |
-| Inline comment rejected | Anchor is outdated/unsupported | Refresh and correct the anchor; the publish App never silently redirects a review. |
+| Review is stale | PR head changed after opening | Refresh remote PRs and reopen before recording a local decision. |
+| Publish to GitHub is unavailable | The native daemon has no GitHub Reviews write adapter yet | Choose **Save locally**. A publish request is rejected and no local decision is saved as a fallback. |
+| Inline comment rejected | Anchor is outdated/unsupported | Refresh and correct the anchor before saving local feedback; a future publish adapter must never silently redirect a review. |
 | Cache missing | Worktree/mirror was cleaned | Re-add the PR URL. |
 
-Approval, request-changes, and comments affect GitHub. Confirm the target PR
-and head SHA in the detail view before publishing.
+In the native daemon, approval, request-changes, and comments remain local
+until a GitHub Reviews write adapter is added. Confirm the target PR and head
+SHA in the detail view before recording a local decision; an attempted GitHub
+publish is intentionally rejected rather than silently treated as local.
 
 ## `/ask` has no model, authentication fails, or streaming stalls
 

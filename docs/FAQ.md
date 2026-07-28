@@ -76,11 +76,13 @@ Do not treat requeue as a way to update an item’s source state.
 
 ### Will approve or request changes write to GitHub?
 
-For a remote PR, these are local lifecycle actions unless you explicitly choose
-**Publish to GitHub** and have connected the separate **PR publish** GitHub App
-capability. Inline anchors are used when GitHub accepts them; otherwise the
-system uses a summary-review fallback. Confirm the PR URL and current head SHA
-before publishing.
+For a remote PR, **Approve locally** and **Request changes locally** are local
+lifecycle actions. The current native daemon does not include a GitHub Reviews
+write adapter: choosing **Publish to GitHub** is rejected clearly, and does not
+record a local decision as a fallback. This is intentional so that a reviewer
+can never mistake a local-only success for a published GitHub review. A future
+write implementation will require the separately connected **PR publish**
+GitHub App capability and a current PR head SHA.
 
 ## Copilot, ACP, and `/ask`
 

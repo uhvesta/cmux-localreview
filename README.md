@@ -198,11 +198,15 @@ review round linked to the prior item returns to the queue. `POST
 /api/queue/:id/cleanup` removes the managed worktree (pass `{ "removeMirror":
 true }` only when its reusable mirror should be discarded too).
 
-Publishing is through GitHub’s Reviews API using the separate publish App and
-is never implied by a local approve/request-changes lifecycle action; the UI
-requires an explicitly labelled, confirmed publish action. A
-stale or invalid inline anchor is rejected rather than silently publishing
-against a newer head or changing transport.
+The native Go daemon currently supports the complete **local** remote-review
+lifecycle, but deliberately does **not** ship a GitHub Reviews write adapter
+yet. Choosing **Publish to GitHub** is explicit and returns an actionable
+“publishing unavailable” result; it does not fall back to saving an approval,
+request for changes, or comment locally. Choose **Save locally** when the
+review should remain in this daemon. A future write adapter will continue to
+require a separately connected PR publish App and an explicitly labelled,
+confirmed publish action; stale or invalid inline anchors must be rejected
+rather than redirected to another commit.
 
 ## Submission context and automatic queueing
 
