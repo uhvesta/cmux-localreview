@@ -1,9 +1,12 @@
 package copilot
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	copilotsdk "github.com/github/copilot-sdk/go"
+	"github.com/github/copilot-sdk/go/rpc"
 )
 
 func TestClientConfigBuildsDedicatedSDKRuntimeOptionsWithoutIO(t *testing.T) {
@@ -35,8 +38,41 @@ func TestSessionConfigBuildsModelAndStreamingControlsWithoutIO(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SDKConfig() error = %v", err)
 	}
-	if config.SessionID != "ask-123" || config.Model != "gpt-5" || config.ReasoningEffort != "high" || config.ContextTier != copilotsdk.ContextTierLongContext || config.Streaming == nil || !*config.Streaming {
+	if config.SessionID != "ask-123" || config.Model != "gpt-5" || config.ReasoningEffort != "high" || config.ContextTier != copilotsdk.ContextTierLongContext || config.Streaming == nil || !*config.Streaming || config.OnPermissionRequest == nil {
 		t.Fatalf("config = %#v", config)
+	}
+}
+
+func TestAskPermissionHandlerAllowsOnlyWorkspaceReads(t *testing.T) {
+	workspace := t.TempDir()
+	inside := filepath.Join(workspace, "review.go")
+	if err := os.WriteFile(inside, []byte("package review"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config, err := (SessionConfig{ID: "ask-123", Model: "gpt-5", WorkingDirectory: workspace, Streaming: true}).SDKConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := config.OnPermissionRequest(copilotsdk.PermissionRequestRead{Path: inside}, copilotsdk.PermissionInvocation{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := decision.(*rpc.PermissionDecisionApproveOnce); !ok {
+		t.Fatalf("inside read decision=%T", decision)
+	}
+	decision, err = config.OnPermissionRequest(copilotsdk.PermissionRequestRead{Path: "../outside.go"}, copilotsdk.PermissionInvocation{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := decision.(*rpc.PermissionDecisionReject); !ok {
+		t.Fatalf("outside read decision=%T", decision)
+	}
+	decision, err = config.OnPermissionRequest(copilotsdk.PermissionRequestShell{}, copilotsdk.PermissionInvocation{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := decision.(*rpc.PermissionDecisionReject); !ok {
+		t.Fatalf("shell decision=%T", decision)
 	}
 }
 

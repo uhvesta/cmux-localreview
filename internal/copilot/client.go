@@ -6,9 +6,11 @@ package copilot
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 
 	copilotsdk "github.com/github/copilot-sdk/go"
+	"github.com/github/copilot-sdk/go/rpc"
 )
 
 // ClientConfig identifies a fresh, daemon-owned Copilot SDK runtime. Secrets
@@ -85,7 +87,56 @@ func (config SessionConfig) SDKConfig() (*copilotsdk.SessionConfig, error) {
 		ContextTier:      config.ContextTier,
 		WorkingDirectory: config.WorkingDirectory,
 		Streaming:        &streaming,
+		// /ask is a read-only reviewer.  Do not leave permissions pending in a
+		// headless daemon: allow a normal read under the reviewed workspace and
+		// reject every write, shell, network, MCP, memory, or sandbox-bypass
+		// request. This keeps an inline question capable of inspecting its
+		// supplied path without granting an agent ambient machine authority.
+		OnPermissionRequest: reviewReadPermission(config.WorkingDirectory),
 	}, nil
+}
+
+func reviewReadPermission(workingDirectory string) copilotsdk.PermissionHandlerFunc {
+	root, err := filepath.Abs(workingDirectory)
+	if err == nil {
+		if resolved, resolveErr := filepath.EvalSymlinks(root); resolveErr == nil {
+			root = resolved
+		}
+	}
+	return func(request copilotsdk.PermissionRequest, _ copilotsdk.PermissionInvocation) (rpc.PermissionDecision, error) {
+		read, ok := request.(copilotsdk.PermissionRequestRead)
+		if !ok {
+			if pointer, pointerOK := request.(*copilotsdk.PermissionRequestRead); pointerOK && pointer != nil {
+				read, ok = *pointer, true
+			}
+		}
+		if !ok || err != nil || (read.RequestSandboxBypass != nil && *read.RequestSandboxBypass) || !pathInside(root, read.Path) {
+			feedback := "cmux-localreview /ask permits only ordinary reads inside the reviewed workspace"
+			return &rpc.PermissionDecisionReject{Feedback: &feedback}, nil
+		}
+		return &rpc.PermissionDecisionApproveOnce{}, nil
+	}
+}
+
+func pathInside(root, requested string) bool {
+	if strings.TrimSpace(root) == "" || strings.TrimSpace(requested) == "" {
+		return false
+	}
+	candidate := requested
+	if !filepath.IsAbs(candidate) {
+		candidate = filepath.Join(root, candidate)
+	}
+	abs, err := filepath.Abs(candidate)
+	if err != nil {
+		return false
+	}
+	// Resolve existing links before containment checking so a workspace symlink
+	// cannot turn an apparently local file read into an external one.
+	if resolved, resolveErr := filepath.EvalSymlinks(abs); resolveErr == nil {
+		abs = resolved
+	}
+	rel, err := filepath.Rel(root, abs)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // CreateSession is the explicit I/O boundary used when a reviewer asks to

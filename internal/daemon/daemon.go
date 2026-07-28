@@ -2134,7 +2134,21 @@ func Start(ctx context.Context, options Options) (*Daemon, error) {
 		}
 		github = githubauth.New(secrets, githubauth.NewFileConfigStore(filepath.Join(dir, "github-apps.json")), http.DefaultClient, browserOpener)
 	}
-	d := &Daemon{listener: listener, dataDir: dir, token: token, sessions: make(map[string]time.Time), watches: make(map[chan string]struct{}), queueWatches: make(map[string]context.CancelFunc), authFlows: make(map[githubauth.Capability]*githubauth.LoopbackFlow), askRuntime: options.AskRuntime, askFactory: options.AskRuntimeFactory, askWatchers: make(map[string]map[chan askruntime.Delta]struct{}), queueDeliveries: make(map[string]struct{}), cmuxSocketPath: options.CmuxSocketPath, db: db, github: github, ws: wshub.New(wshub.Options{Path: "/ws"})}
+	// The native daemon always owns a real SDK runtime factory in production.
+	// It remains lazy: no credential is read and no Copilot child process is
+	// started until the reviewer explicitly loads models or sends a turn. Tests
+	// and embedders can still inject a deterministic runtime/factory.
+	askFactory := options.AskRuntimeFactory
+	if options.AskRuntime == nil && askFactory == nil {
+		copilotHome := filepath.Join(dir, "copilot-sdk")
+		if err := os.MkdirAll(copilotHome, 0o700); err != nil {
+			_ = listener.Close()
+			_ = db.Close()
+			return nil, err
+		}
+		askFactory = NewProductionAskRuntimeFactory(github, dir)
+	}
+	d := &Daemon{listener: listener, dataDir: dir, token: token, sessions: make(map[string]time.Time), watches: make(map[chan string]struct{}), queueWatches: make(map[string]context.CancelFunc), authFlows: make(map[githubauth.Capability]*githubauth.LoopbackFlow), askRuntime: options.AskRuntime, askFactory: askFactory, askWatchers: make(map[string]map[chan askruntime.Delta]struct{}), queueDeliveries: make(map[string]struct{}), cmuxSocketPath: options.CmuxSocketPath, db: db, github: github, ws: wshub.New(wshub.Options{Path: "/ws"})}
 	if err := d.restoreActiveWorkspace(); err != nil {
 		// Persisted active workspace state is best-effort at startup. An absent
 		// worktree must not prevent Queue Home from recovering it or opening a

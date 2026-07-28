@@ -5,12 +5,18 @@ go_library(
     srcs = ["client.go"],
     importpath = "github.com/uhvesta/cmux-localreview/internal/copilot",
     visibility = ["//visibility:public"],
-    deps = ["@com_github_github_copilot_sdk_go//:go_default_library"],
+    deps = [
+        "@com_github_github_copilot_sdk_go//:go_default_library",
+        "@com_github_github_copilot_sdk_go//rpc:go_default_library",
+    ],
 )
 
 go_test(
     name = "copilot_test",
     srcs = ["client_test.go"],
     embed = [":copilot"],
-    deps = ["@com_github_github_copilot_sdk_go//:go_default_library"],
+    deps = [
+        "@com_github_github_copilot_sdk_go//:go_default_library",
+        "@com_github_github_copilot_sdk_go//rpc:go_default_library",
+    ],
 )
