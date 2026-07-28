@@ -43,6 +43,11 @@ the matching package-boundary check: it validates `app.asar`, the bundled
 renderer interaction pass remains a Phase-3 requirement because a display-free
 package check cannot prove a BrowserWindow rendered or accepted input.
 
+The desktop artifact job must stage the same Vite output embedded in the Go
+sidecar before it builds that binary. A healthy sidecar alone does not prove
+the renderer is current: compare a clean-profile packaged window's visible
+Queue Home copy/controls with the current UI before recording an Electron pass.
+
 ## Frozen TypeScript dependencies to remove
 
 | Path / dependency | Current role | Phase-4 action | Proof required first |
@@ -104,7 +109,10 @@ real persisted watcher row, registration, interval clamp, and cancellation
 without sleeping for a wall-clock tick. Named question-set delivery now
 replays as a native POST-202 plus durable EventSource handoff: both combined
 and sequential turns must settle into the existing conversation, and a
-subsequent transcript read proves no question was replayed. Queue reproduction
+subsequent transcript read proves no question was replayed. Ordinary `/ask`
+message delivery is covered by the same native handoff: the frozen legacy
+request retains its file/line selection, the deterministic fixture turn
+settles once, and reopening the transcript cannot resubmit it. Queue reproduction
 now replays as a safe snapshot materialization plan and explicitly rejects
 retired ACP continuation commands in favor of a fresh SDK-native `/ask`
 handoff. Deletion is **not** ready: the matrix still contains

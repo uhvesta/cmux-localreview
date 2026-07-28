@@ -37,6 +37,12 @@ native sidecar is executable, and runs the same lifecycle check against that
 bundled binary. It is a release-boundary check; a renderer/UI interaction pass
 still needs a real Electron window.
 
+The desktop release job stages the current Vite output into the Go binary
+before it packages the sidecar. If a local package shows UI copy or controls
+that differ from `vendor/difit`, run `bash scripts/stage-ui-assets.sh`, rebuild
+`//cmd/localreviewd:localreviewd`, then package again; never certify the older
+artifact based only on its sidecar health.
+
 It deliberately does not claim a full GUI acceptance pass. Follow it with the
 Phase-3 Electron checklist in [CLI workflows](../docs/CLI-WORKFLOWS.md#desktop-shell-optional):
 open the packaged app, complete one durable review action, quit, relaunch, and
