@@ -66,6 +66,8 @@ type Daemon struct {
 	watchStop context.CancelFunc
 	watchMu   sync.Mutex
 	watches   map[chan string]struct{}
+	authMu    sync.Mutex
+	authFlows map[githubauth.Capability]*githubauth.LoopbackFlow
 }
 
 func browserOpener(rawURL string) error {
@@ -751,13 +753,29 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 					Flow string `json:"flow"`
 				}
 				_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&input)
-				start, flow, err := (githubauth.API{Service: d.github}).Start(r.Context(), githubauth.StartRequest{Capability: capability, Flow: input.Flow})
+				// A loopback OAuth listener must survive this short-lived API request
+				// until GitHub redirects the browser back. Daemon shutdown owns the
+				// process lifetime; request cancellation must not cancel login.
+				start, flow, err := (githubauth.API{Service: d.github}).Start(context.Background(), githubauth.StartRequest{Capability: capability, Flow: input.Flow})
 				if err != nil {
 					writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 					return
 				}
 				if flow != nil {
-					go func() { _ = flow.Wait(context.Background()) }()
+					d.authMu.Lock()
+					if prior := d.authFlows[capability]; prior != nil {
+						prior.Close()
+					}
+					d.authFlows[capability] = flow
+					d.authMu.Unlock()
+					go func(capability githubauth.Capability, flow *githubauth.LoopbackFlow) {
+						_ = flow.Wait(context.Background())
+						d.authMu.Lock()
+						if d.authFlows[capability] == flow {
+							delete(d.authFlows, capability)
+						}
+						d.authMu.Unlock()
+					}(capability, flow)
 				}
 				writeJSON(w, http.StatusAccepted, start)
 				return
@@ -1808,7 +1826,7 @@ func Start(ctx context.Context, options Options) (*Daemon, error) {
 		}
 		github = githubauth.New(secrets, githubauth.NewFileConfigStore(filepath.Join(dir, "github-apps.json")), http.DefaultClient, browserOpener)
 	}
-	d := &Daemon{listener: listener, dataDir: dir, token: token, sessions: make(map[string]time.Time), watches: make(map[chan string]struct{}), db: db, github: github, ws: wshub.New(wshub.Options{Path: "/ws"})}
+	d := &Daemon{listener: listener, dataDir: dir, token: token, sessions: make(map[string]time.Time), watches: make(map[chan string]struct{}), authFlows: make(map[githubauth.Capability]*githubauth.LoopbackFlow), db: db, github: github, ws: wshub.New(wshub.Options{Path: "/ws"})}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1849,6 +1867,12 @@ func (d *Daemon) Close() error {
 		d.watchStop = nil
 	}
 	d.mu.Unlock()
+	d.authMu.Lock()
+	for capability, flow := range d.authFlows {
+		flow.Close()
+		delete(d.authFlows, capability)
+	}
+	d.authMu.Unlock()
 	d.ws.Close()
 	err := d.server.Shutdown(context.Background())
 	if d.db != nil {
