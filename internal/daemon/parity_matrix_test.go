@@ -85,7 +85,7 @@ var parityMatrix = map[string]parityDisposition{
 
 	"repo_revisions":                         {Execute: true, ForceDaemonCapability: true, Reason: "Replayed with the daemon capability: native reviewer reads are deliberately capability-protected."},
 	"repo_comments_empty":                    {Reason: "Legacy difit comment-empty 404 semantics are intentionally replaced by durable native comment collections; dedicated comment tests cover the native contract."},
-	"create_comment":                         {Reason: "Frozen request uses legacy difit comment schema; native durable-thread migration is covered by daemon comment tests until an adapter fixture is added."},
+	"create_comment":                         {Execute: true, ForceDaemonCapability: true, Reason: "Frozen difit short comment shape is translated at the native boundary into a durable formal thread."},
 	"repo_comments_saved":                    {Reason: "Frozen request uses legacy difit comment schema; native durable-thread migration is covered by daemon comment tests until an adapter fixture is added."},
 	"comment_import":                         {Reason: "Comment import supports richer native provenance and needs a normalized fixture projection."},
 	"review_history":                         {Reason: "Historical review semantics are covered by native session/comment integration tests; fixture projection remains to be normalized."},
@@ -95,17 +95,17 @@ var parityMatrix = map[string]parityDisposition{
 	"comments_json":                          {Reason: "Legacy difit JSON projection differs from native durable-thread schema."},
 	"comments_output":                        {Reason: "Native formal export is workspace-level and deliberately does not make repository comments an export side channel."},
 	"ask_models":                             {Reason: "Native SDK model discovery is tested with a fake official SDK backend; frozen fixture has a TS-only model capability shape."},
-	"ask_conversations_empty":                {Reason: "Native durable /ask store has focused route tests; multi-step replay is added with SDK streaming fixture work."},
-	"ask_question_set_create":                {Reason: "Native question-set routes are covered by ask route tests; sequential SSE replay needs deterministic stream framing."},
-	"ask_question_sets":                      {Reason: "Native question-set routes are covered by ask route tests; sequential SSE replay needs deterministic stream framing."},
-	"ask_question_set_get":                   {Reason: "Native question-set routes are covered by ask route tests; sequential SSE replay needs deterministic stream framing."},
-	"ask_question_set_update":                {Reason: "Native question-set routes are covered by ask route tests; sequential SSE replay needs deterministic stream framing."},
-	"ask_question_set_delete":                {Reason: "Native question-set routes are covered by ask route tests; sequential SSE replay needs deterministic stream framing."},
-	"ask_conversation_create":                {Reason: "Native SDK conversation creation is covered by ask route tests; fixture replay is pending deterministic SDK stream coverage."},
-	"ask_conversation_get":                   {Reason: "Native SDK conversation creation is covered by ask route tests; fixture replay is pending deterministic SDK stream coverage."},
-	"ask_inline_conversation_reuses_context": {Reason: "Native inline-location persistence is covered by ask route tests; fixture replay is pending deterministic SDK stream coverage."},
-	"ask_conversation_model":                 {Reason: "Native per-conversation model selection is covered by ask route tests using the official SDK facade."},
-	"ask_conversation_settings":              {Reason: "Native per-conversation settings are covered by ask route tests using the official SDK facade."},
+	"ask_conversations_empty":                {Execute: true, ForceDaemonCapability: true, Reason: "Replayed with the daemon capability: native reviewer reads are deliberately capability-protected."},
+	"ask_question_set_create":                {Execute: true, ForceDaemonCapability: true},
+	"ask_question_sets":                      {Execute: true, ForceDaemonCapability: true},
+	"ask_question_set_get":                   {Execute: true, ForceDaemonCapability: true},
+	"ask_question_set_update":                {Execute: true, ForceDaemonCapability: true},
+	"ask_question_set_delete":                {Execute: true, ForceDaemonCapability: true},
+	"ask_conversation_create":                {Execute: true, ForceDaemonCapability: true},
+	"ask_conversation_get":                   {Execute: true, ForceDaemonCapability: true},
+	"ask_inline_conversation_reuses_context": {Execute: true, ForceDaemonCapability: true},
+	"ask_conversation_model":                 {Reason: "Native model switching preserves an explicitly selected reasoning/context setting; the frozen TS route cleared those values. ask route tests cover the native persisted-picker behavior."},
+	"ask_conversation_settings":              {Reason: "Native model switching preserves an explicitly selected reasoning/context setting; the frozen TS route cleared those values. ask route tests cover the native persisted-picker behavior."},
 	"ask_conversation_message_sse":           {Reason: "Native stream events use an EventSource endpoint after accepted submission, intentionally replacing TS POST-SSE framing."},
 	"ask_conversation_cancel_idle":           {Reason: "Native cancellation is covered by ask route tests with a fake official SDK session."},
 	"ask_question_set_for_send":              {Reason: "Native question-set routes are covered by ask route tests; sequential SSE replay needs deterministic stream framing."},
@@ -122,7 +122,8 @@ var parityMatrix = map[string]parityDisposition{
 	// ACP is a deliberate non-goal of the Go migration. The native reproduce
 	// plan exposes a fresh SDK-native /ask session instead of advertising a
 	// resumable terminal protocol that no longer exists; see
-	// TestQueueControlPlaneLifecycle and TestNativeReproducePlan.
+	// TestQueueControlPlaneHTTPContract and
+	// TestNativeQueuePackageExportIsPortableAndAtomic.
 	"queue_reproduce":            {Reason: "Native reproduce intentionally omits retired ACP resume fields (existingAcp/freshAcp) and gives an explicit fresh SDK /ask plan; daemon lifecycle tests verify the substitution."},
 	"queue_export":               {Execute: true},
 	"queue_open":                 {Execute: true},
@@ -170,8 +171,9 @@ func TestFrozenTypeScriptParityMatrix(t *testing.T) {
 		"health", "unauthenticated_queue", "browser_session_exchange",
 		"github_auth_status", "github_auth_configure", "github_auth_device_start", "github_auth_device_poll", "github_auth_authenticated_status", "github_auth_disconnect",
 		"local_pr_requires_read_auth", "workspaces_empty", "queue_empty", "federation_nodes_empty", "open_workspace", "repos",
-		"repo_diff", "repo_diff_ignore_whitespace", "repo_revisions", "repo_line_count", "repo_blob", "repo_generated_status", "repo_fullfile",
+		"repo_diff", "repo_diff_ignore_whitespace", "repo_revisions", "repo_line_count", "repo_blob", "repo_generated_status", "repo_fullfile", "create_comment",
 		"ui_state_empty", "ui_state_put", "export_prompt", "sessions", "new_session",
+		"ask_conversations_empty", "ask_question_set_create", "ask_question_sets", "ask_question_set_get", "ask_question_set_update", "ask_question_set_delete", "ask_conversation_create", "ask_conversation_get", "ask_inline_conversation_reuses_context",
 		"queue_create_local", "queue_list_with_item", "queue_detail", "queue_reorder", "queue_add_feedback", "queue_feedback_prompt", "queue_export", "queue_open", "queue_complete", "queue_requeue", "queue_delete", "queue_history",
 		"agent_register", "agent_list", "agent_heartbeat", "agent_reconnect",
 	} {
@@ -192,6 +194,9 @@ func TestFrozenTypeScriptParityMatrix(t *testing.T) {
 		}
 		if name == "queue_create_local" {
 			state["<uuid>"] = frozenResponseID(t, name, response.Body.Bytes(), "item")
+		}
+		if name == "ask_question_set_create" || name == "ask_conversation_create" {
+			state["<uuid>"] = frozenResponseID(t, name, response.Body.Bytes(), map[string]string{"ask_question_set_create": "questionSet", "ask_conversation_create": "conversation"}[name])
 		}
 	}
 }

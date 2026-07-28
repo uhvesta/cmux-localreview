@@ -122,7 +122,7 @@ func (d *Daemon) handleAsk(w http.ResponseWriter, r *http.Request, path string) 
 			askError(w, err)
 			return true
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"conversations": items})
+		writeJSON(w, http.StatusOK, map[string]any{"activeReviewSessionId": d.askSessionID(), "conversations": items})
 		return true
 	}
 	if path == "/ask/conversations" && r.Method == http.MethodPost {

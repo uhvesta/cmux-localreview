@@ -1481,6 +1481,31 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusNotFound, map[string]string{"error": "Unknown review repository"})
 				return
 			}
+			var rawPayload map[string]json.RawMessage
+			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&rawPayload); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid comment data"})
+				return
+			}
+			// The frozen TypeScript corpus includes difit's short-lived
+			// {comments:[{file,line,body}]} snapshot shape. Translate it at the
+			// boundary into a durable thread snapshot so older reviewer bundles
+			// can still save a comment while every read/export remains native.
+			if _, hasThreads := rawPayload["threads"]; !hasThreads {
+				var legacy []struct {
+					ID   string `json:"id"`
+					File string `json:"file"`
+					Line int    `json:"line"`
+					Body string `json:"body"`
+				}
+				if encoded, ok := rawPayload["comments"]; ok && json.Unmarshal(encoded, &legacy) == nil && len(legacy) > 0 {
+					threads := make([]map[string]any, 0, len(legacy))
+					for _, comment := range legacy {
+						threads = append(threads, map[string]any{"id": comment.ID, "filePath": comment.File, "position": map[string]any{"side": "new", "line": comment.Line}, "messages": []map[string]string{{"id": comment.ID, "body": comment.Body}}})
+					}
+					rawPayload["threads"], _ = json.Marshal(threads)
+				}
+			}
+			encodedPayload, _ := json.Marshal(rawPayload)
 			var payload struct {
 				BaseVersion *int `json:"baseVersion"`
 				Threads     []struct {
@@ -1497,7 +1522,7 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 					} `json:"codeSnapshot"`
 				} `json:"threads"`
 			}
-			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&payload); err != nil {
+			if err := json.Unmarshal(encodedPayload, &payload); err != nil {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid comment data"})
 				return
 			}
