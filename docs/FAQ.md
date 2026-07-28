@@ -66,13 +66,15 @@ fallbacks.
 
 ## Can I inspect a GitHub PR without publishing feedback?
 
-Yes. Connect the `read` capability and queue the PR with:
+Yes. Connect the `read` capability, then choose **Review locally** in Queue
+Home or run:
 
 ```sh
-localreview remote submit https://github.com/OWNER/REPOSITORY/pull/123
+localreview open --pr https://github.com/OWNER/REPOSITORY/pull/123
 ```
 
-Then use the local diff and `/ask`. A `write` capability is not needed for
+This opens the local diff and `/ask` without creating a queue item or a
+publication path. A `write` capability is not needed for
 local review. Native GitHub-review publishing is currently intentionally
 rejected rather than silently saved as a local review; save locally if that is
 the intended outcome.

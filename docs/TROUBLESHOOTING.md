@@ -76,6 +76,13 @@ reopened. If a turn is visibly streaming, cancel it before starting a different
 turn. A saved error means delivery failed and is useful diagnostics, not a
 hidden retry request.
 
+The native daemon starts the Copilot SDK lazily only after an explicit model
+load or prompt. Its isolated SDK state lives under the daemon data directory
+(`copilot-sdk/`, mode `0700`); it never adopts an ambient `gh` or Copilot CLI
+login. An explicit `copilot GitHub App is not connected` error therefore means
+the dedicated capability still needs to be authorized, not that the prompt was
+silently sent.
+
 ## GitHub PR cannot be added or appears stale
 
 Connect the least-privileged `read` capability and check its state:
