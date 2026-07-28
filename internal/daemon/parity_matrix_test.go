@@ -48,6 +48,7 @@ type parityDisposition struct {
 	Reason                string
 	ForceDaemonCapability bool
 	DeviceFlow            bool
+	NativeAskSettings     bool
 }
 
 var parityMatrix = map[string]parityDisposition{
@@ -112,13 +113,17 @@ var parityMatrix = map[string]parityDisposition{
 	"ask_conversation_create":                {Execute: true, ForceDaemonCapability: true},
 	"ask_conversation_get":                   {Execute: true, ForceDaemonCapability: true},
 	"ask_inline_conversation_reuses_context": {Execute: true, ForceDaemonCapability: true},
-	"ask_conversation_model":                 {Reason: "Native model switching preserves an explicitly selected reasoning/context setting; the frozen TS route cleared those values. ask route tests cover the native persisted-picker behavior."},
-	"ask_conversation_settings":              {Reason: "Native model switching preserves an explicitly selected reasoning/context setting; the frozen TS route cleared those values. ask route tests cover the native persisted-picker behavior."},
-	"ask_conversation_message_sse":           {Reason: "Native stream events use an EventSource endpoint after accepted submission, intentionally replacing TS POST-SSE framing."},
-	"ask_conversation_cancel_idle":           {Reason: "Native cancellation is covered by ask route tests with a fake official SDK session."},
-	"ask_question_set_for_send":              {Reason: "Native question-set routes are covered by ask route tests; sequential SSE replay needs deterministic stream framing."},
-	"ask_question_set_combined_sse":          {Reason: "Native stream events use an EventSource endpoint after accepted submission, intentionally replacing TS POST-SSE framing."},
-	"ask_question_set_sequential_sse":        {Reason: "Native stream events use an EventSource endpoint after accepted submission, intentionally replacing TS POST-SSE framing."},
+	// The frozen model route cleared thinking/context settings as a side
+	// effect. Native picker updates preserve explicit choices, which prevents a
+	// reviewer silently losing their requested context window. Replay the
+	// historical requests and assert that stronger native contract explicitly.
+	"ask_conversation_model":          {Execute: true, ForceDaemonCapability: true, NativeAskSettings: true},
+	"ask_conversation_settings":       {Execute: true, ForceDaemonCapability: true, NativeAskSettings: true},
+	"ask_conversation_message_sse":    {Reason: "Native stream events use an EventSource endpoint after accepted submission, intentionally replacing TS POST-SSE framing."},
+	"ask_conversation_cancel_idle":    {Reason: "Native cancellation is covered by ask route tests with a fake official SDK session."},
+	"ask_question_set_for_send":       {Reason: "Native question-set routes are covered by ask route tests; sequential SSE replay needs deterministic stream framing."},
+	"ask_question_set_combined_sse":   {Reason: "Native stream events use an EventSource endpoint after accepted submission, intentionally replacing TS POST-SSE framing."},
+	"ask_question_set_sequential_sse": {Reason: "Native stream events use an EventSource endpoint after accepted submission, intentionally replacing TS POST-SSE framing."},
 	// Fresh/history are metadata-only lifecycle routes. They archive or read
 	// persisted conversations; neither opens an SDK session nor replays a
 	// prompt, so the frozen lifecycle can be replayed deterministically.
@@ -184,14 +189,18 @@ func TestFrozenTypeScriptParityMatrix(t *testing.T) {
 		"local_pr_requires_read_auth", "workspaces_empty", "queue_empty", "federation_nodes_empty", "open_workspace", "repos",
 		"repo_diff", "repo_diff_ignore_whitespace", "repo_revisions", "repo_line_count", "repo_blob", "repo_generated_status", "repo_fullfile", "create_comment", "comment_import",
 		"sessions", "review_history", "ui_state_empty", "ui_state_put", "export_prompt", "new_session", "comments_json", "comments_output",
-		"ask_conversations_empty", "ask_question_set_create", "ask_question_sets", "ask_question_set_get", "ask_question_set_update", "ask_question_set_delete", "ask_conversation_create", "ask_conversation_get", "ask_inline_conversation_reuses_context", "ask_conversation_fresh", "ask_conversation_history",
+		"ask_conversations_empty", "ask_question_set_create", "ask_question_sets", "ask_question_set_get", "ask_question_set_update", "ask_question_set_delete", "ask_conversation_create", "ask_conversation_get", "ask_inline_conversation_reuses_context", "ask_conversation_model", "ask_conversation_settings", "ask_conversation_fresh", "ask_conversation_history",
 		"queue_create_local", "queue_list_with_item", "queue_detail", "queue_reorder", "queue_add_feedback", "queue_feedback_prompt", "queue_export", "queue_open", "queue_complete", "queue_requeue", "queue_delete", "queue_history",
 		"agent_register", "agent_list", "agent_heartbeat", "agent_reconnect",
 	} {
 		fixture := byName[name]
 		disposition := parityMatrix[name]
 		response := replayFrozenFixture(t, d, fixture, disposition, state)
-		assertFrozenFixtureResponse(t, fixture, response)
+		if disposition.NativeAskSettings {
+			assertNativeAskSettingsFixture(t, fixture, response)
+		} else {
+			assertFrozenFixtureResponse(t, fixture, response)
+		}
 		if name == "repos" {
 			var body struct {
 				Repos []struct {
@@ -360,6 +369,56 @@ func assertFrozenFixtureResponse(t *testing.T, fixture frozenParityFixture, actu
 			t.Fatalf("%s: invalid JSON %v: %s", fixture.Name, err, actual.Body.String())
 		}
 		assertJSONShape(t, fixture.Name, fixture.Response.Body, got)
+	}
+}
+
+// assertNativeAskSettingsFixture is a compatibility adapter, not a relaxed
+// assertion. The frozen TS contract reset explicit settings when only a model
+// was changed. Native `/ask` intentionally preserves them so a reviewer does
+// not silently lose thinking/context preferences. We still replay the frozen
+// request, status, content type, and conversation envelope, then require the
+// stronger persisted values at the API boundary.
+func assertNativeAskSettingsFixture(t *testing.T, fixture frozenParityFixture, actual *httptest.ResponseRecorder) {
+	t.Helper()
+	if actual.Code != fixture.Response.Status {
+		t.Fatalf("%s: status got=%d want=%d body=%s", fixture.Name, actual.Code, fixture.Response.Status, actual.Body.String())
+	}
+	if fixture.Response.ContentType == nil || actual.Header().Get("Content-Type") != *fixture.Response.ContentType {
+		want := ""
+		if fixture.Response.ContentType != nil {
+			want = *fixture.Response.ContentType
+		}
+		t.Fatalf("%s: content type got=%q want=%q", fixture.Name, actual.Header().Get("Content-Type"), want)
+	}
+	var response struct {
+		Conversation struct {
+			ID              string  `json:"id"`
+			Model           *string `json:"model"`
+			ReasoningEffort *string `json:"reasoningEffort"`
+			ContextTier     *string `json:"contextTier"`
+		} `json:"conversation"`
+	}
+	if err := json.Unmarshal(actual.Body.Bytes(), &response); err != nil {
+		t.Fatalf("%s: invalid JSON: %v", fixture.Name, err)
+	}
+	if strings.TrimSpace(response.Conversation.ID) == "" || response.Conversation.Model == nil || response.Conversation.ReasoningEffort == nil || response.Conversation.ContextTier == nil {
+		t.Fatalf("%s: incomplete native conversation settings: %s", fixture.Name, actual.Body.String())
+	}
+	request, ok := fixture.Request.Body.(map[string]any)
+	if !ok {
+		t.Fatalf("%s: frozen request is not an object", fixture.Name)
+	}
+	model, _ := request["model"].(string)
+	if *response.Conversation.Model != model {
+		t.Fatalf("%s: model got=%q want=%q", fixture.Name, *response.Conversation.Model, model)
+	}
+	wantReasoning, wantTier := "high", "long_context" // create fixture values
+	if fixture.Name == "ask_conversation_settings" {
+		wantReasoning, _ = request["reasoningEffort"].(string)
+		wantTier, _ = request["contextTier"].(string)
+	}
+	if *response.Conversation.ReasoningEffort != wantReasoning || *response.Conversation.ContextTier != wantTier {
+		t.Fatalf("%s: native picker settings got=(%q,%q) want=(%q,%q)", fixture.Name, *response.Conversation.ReasoningEffort, *response.Conversation.ContextTier, wantReasoning, wantTier)
 	}
 }
 

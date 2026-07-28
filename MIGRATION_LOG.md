@@ -17,6 +17,17 @@ deliberately factual: a green unit test does not imply end-to-end parity.
 - This reduces explicit matrix debt only. It is not a Phase-4 completion
   claim; other exceptions and both required computer-use passes remain open.
 
+## 2026-07-28 — Native `/ask` model-picker parity
+
+- Made frozen `ask_conversation_model` and `ask_conversation_settings`
+  requests executable against the native daemon. The matrix adapter checks the
+  historical request/status/content-type envelope while requiring the stronger
+  native semantic: a model-only change preserves explicit reasoning effort and
+  context-tier settings instead of silently clearing them.
+- The adapter is intentionally narrow and does not modify the frozen corpus.
+  It records a reviewed contract divergence that improves the native picker;
+  it is not a generic exception or a Phase-4 completion claim.
+
 ## 2026-07-28 — Phase 0 started: frozen HTTP fixture corpus
 
 Done:
