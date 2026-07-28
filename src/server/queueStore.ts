@@ -282,11 +282,65 @@ export function addFeedback(db: Database, id: string, body: string, path?: strin
   db.query(`UPDATE queue_items SET updated_at = ? WHERE id = ?`).run(Date.now(), id);
 }
 
+export interface FormalFeedbackInput {
+  /** Stable per-comment-thread key, namespaced by repository. */
+  sourceKey: string;
+  body: string;
+  /** Path is relative to the submitted workspace, never an absolute source path. */
+  path: string;
+  line: number;
+  endLine: number;
+  side: "old" | "new";
+}
+
+/**
+ * Synchronize one repository's visible formal diff threads into the queue.
+ * `/ask` threads never call this function. Manual queue feedback has no
+ * source_key and therefore survives comment saves/resolves untouched.
+ */
+export function syncFormalFeedback(
+  db: Database,
+  queueItemId: string,
+  sourcePrefix: string,
+  entries: FormalFeedbackInput[],
+): void {
+  if (!getQueueItem(db, queueItemId)) throw new Error(`Unknown queue item: ${queueItemId}`);
+  const now = Date.now();
+  db.transaction(() => {
+    const incoming = new Set(entries.map((entry) => entry.sourceKey));
+    const existing = db.query(`SELECT source_key FROM queue_feedback WHERE queue_item_id = ? AND source_key LIKE ?`)
+      .all(queueItemId, `${sourcePrefix}%`) as { source_key: string }[];
+    for (const row of existing) {
+      if (!incoming.has(row.source_key)) {
+        db.query(`DELETE FROM queue_feedback WHERE queue_item_id = ? AND source_key = ?`).run(queueItemId, row.source_key);
+      }
+    }
+    for (const entry of entries) {
+      db.query(`INSERT INTO queue_feedback(queue_item_id, body, path, line, source_key, side, end_line, created_at)
+                VALUES(?,?,?,?,?,?,?,?)
+                ON CONFLICT(queue_item_id, source_key) WHERE source_key IS NOT NULL DO UPDATE SET
+                  body=excluded.body, path=excluded.path, line=excluded.line,
+                  side=excluded.side, end_line=excluded.end_line, created_at=excluded.created_at,
+                  delivered_at=CASE WHEN queue_feedback.body IS excluded.body
+                    AND queue_feedback.path IS excluded.path
+                    AND queue_feedback.line IS excluded.line
+                    AND queue_feedback.side IS excluded.side
+                    AND queue_feedback.end_line IS excluded.end_line
+                    THEN queue_feedback.delivered_at ELSE NULL END`)
+        .run(queueItemId, entry.body, entry.path, entry.line, entry.sourceKey, entry.side, entry.endLine, now);
+    }
+    db.query(`UPDATE queue_items SET updated_at = ? WHERE id = ?`).run(now, queueItemId);
+  })();
+}
+
 export interface QueueFeedback {
   id: number;
   body: string;
   path: string | null;
   line: number | null;
+  sourceKey: string | null;
+  side: "old" | "new" | null;
+  endLine: number | null;
   createdAt: number;
   deliveredAt: number | null;
 }
@@ -314,8 +368,8 @@ export function decisionHistoryForItem(db: Database, id: string): QueueDecision[
 
 export function feedbackForItem(db: Database, id: string, options: { undeliveredOnly?: boolean } = {}): QueueFeedback[] {
   const undelivered = options.undeliveredOnly ? " AND delivered_at IS NULL" : "";
-  return (db.query(`SELECT id, body, path, line, created_at, delivered_at FROM queue_feedback WHERE queue_item_id = ?${undelivered} ORDER BY id`).all(id) as { id:number;body:string;path:string|null;line:number|null;created_at:number;delivered_at:number|null }[])
-    .map((row) => ({ id: row.id, body: row.body, path: row.path, line: row.line, createdAt: row.created_at, deliveredAt: row.delivered_at }));
+  return (db.query(`SELECT id, body, path, line, source_key, side, end_line, created_at, delivered_at FROM queue_feedback WHERE queue_item_id = ?${undelivered} ORDER BY id`).all(id) as { id:number;body:string;path:string|null;line:number|null;source_key:string|null;side:"old"|"new"|null;end_line:number|null;created_at:number;delivered_at:number|null }[])
+    .map((row) => ({ id: row.id, body: row.body, path: row.path, line: row.line, sourceKey: row.source_key, side: row.side, endLine: row.end_line, createdAt: row.created_at, deliveredAt: row.delivered_at }));
 }
 
 /** Mark feedback only after ACP accepts the combined prompt. */

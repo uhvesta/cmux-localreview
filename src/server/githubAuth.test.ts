@@ -21,9 +21,9 @@ describe("GitHubAuthService", () => {
       return new Response(JSON.stringify({ message: "unexpected" }), { status: 500 });
     }) as typeof fetch;
     const service = new GitHubAuthService(secrets, fetcher, async () => undefined, "/tmp/cmux-localreview-github-auth-test.json");
-    service.configure("read", "Iv1.readClient");
-    service.configure("write", "Iv1.writeClient");
-    service.configure("copilot", "Iv1.copilotClient");
+    await service.configure("read", "Iv1.readClient");
+    await service.configure("write", "Iv1.writeClient");
+    await service.configure("copilot", "Iv1.copilotClient");
 
     const device = await service.start("copilot");
     expect(device).toMatchObject({ userCode: "ABCD-EFGH", verificationUri: "https://github.com/login/device" });
@@ -39,6 +39,15 @@ describe("GitHubAuthService", () => {
 
     await service.disconnect("copilot");
     await expect(service.token("copilot")).rejects.toThrow("not connected");
+  });
+
+  test("revokes a saved capability token when its GitHub App client ID changes", async () => {
+    const secrets = memorySecrets();
+    const service = new GitHubAuthService(secrets, fetch, async () => undefined, "/tmp/cmux-localreview-github-auth-client-change.json");
+    await service.configure("read", "Iv1.firstClient");
+    await secrets.set("cmux-localreview.github-app", "github.com:read", JSON.stringify({ accessToken: "old", clientId: "Iv1.firstClient" }));
+    await service.configure("read", "Iv1.secondClient");
+    await expect(service.token("read")).rejects.toThrow("not connected");
   });
 
   test("requires configured capability instead of falling back to gh or another capability", async () => {

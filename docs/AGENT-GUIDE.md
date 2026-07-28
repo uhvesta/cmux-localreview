@@ -97,8 +97,9 @@ new Git source fingerprint; it does not mutate the old snapshot.
 bun src/queue-submit.ts /path/to/repository --watch --poll-interval 5000
 ```
 
-To queue a GitHub PR, submit its URL. This requires an authenticated `gh`
-CLI, and the daemon manages the mirror/worktree cache.
+To queue a GitHub PR, submit its URL after connecting the dedicated **PR
+read** GitHub App capability. The daemon manages the mirror/worktree cache;
+it never falls back to `gh`, a PAT, or a Copilot CLI login.
 
 ```sh
 bun src/queue-submit.ts https://github.com/OWNER/REPOSITORY/pull/123
@@ -109,7 +110,9 @@ bun src/queue-submit.ts https://github.com/OWNER/REPOSITORY/pull/123
 From Queue Home, select an item and choose **Open workspace**. In the reviewer:
 
 1. Confirm the displayed path, base/head/branch metadata, and snapshot or
-   remote cache status.
+   remote cache status. Local queue items open a daemon-owned materialization
+   of the retained snapshot and compare its synthetic snapshot commit to its
+   captured parent—never to edits made later in the source directory.
 2. Inspect the diff and leave formal review comments.
 3. Use **Copy feedback prompt** when a human or another tool should receive
    the feedback manually.
@@ -117,7 +120,8 @@ From Queue Home, select an item and choose **Open workspace**. In the reviewer:
    endpoint/session. Choose `queue` to wait for idle, or `interrupt` only when
    it is appropriate to cancel a daemon-issued in-flight turn.
 5. Use approve, request changes, complete, or requeue only for the queue item
-   actually open. Remote approvals/requested changes can publish a GitHub
+   actually open. Remote decisions are local by default; use the separately
+   labelled, confirmed publish controls when you intend a GitHub
    review, so they are deliberate external actions.
 
 If ACP shows busy, error, or unavailable, do not keep retrying blindly. The

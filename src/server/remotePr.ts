@@ -214,7 +214,7 @@ export function remotePullRequestFromQueueItem(item: QueueItem): RemotePullReque
   return pr as RemotePullRequest;
 }
 
-function reviewBody(item: QueueItem, feedback: { body: string; path: string | null; line: number | null }[]): string {
+function reviewBody(item: QueueItem, feedback: { body: string; path: string | null; line: number | null; side?: "old" | "new" | null }[]): string {
   const summary = feedback
     .filter((entry) => !entry.path || !entry.line)
     .map((entry) => entry.path ? `- ${entry.path}: ${entry.body}` : `- ${entry.body}`);
@@ -247,12 +247,12 @@ async function assertReviewHeadIsCurrent(pr: RemotePullRequest, readToken: strin
  * safe transport/authentication check and for publishing formal feedback
  * without falsely approving or requesting changes on a pull request.
  */
-export async function submitRemoteDecision(item: QueueItem, decision: "approved" | "changes_requested" | "comment", feedback: { body: string; path: string | null; line: number | null }[], tokens: { read: string; write: string }): Promise<RemoteReviewResult> {
+export async function submitRemoteDecision(item: QueueItem, decision: "approved" | "changes_requested" | "comment", feedback: { body: string; path: string | null; line: number | null; side?: "old" | "new" | null }[], tokens: { read: string; write: string }): Promise<RemoteReviewResult> {
   if (!item.remoteUrl) throw new Error("Remote review is missing its PR URL");
   const pr = remotePullRequestFromQueueItem(item) ?? await resolveRemotePullRequest(item.remoteUrl, tokens.read);
   await assertReviewHeadIsCurrent(pr, tokens.read);
   const inline = feedback.filter((entry) => entry.path && entry.line && entry.line > 0).map((entry) => ({
-    path: entry.path!, line: entry.line!, side: "RIGHT", body: entry.body,
+    path: entry.path!, line: entry.line!, side: entry.side === "old" ? "LEFT" : "RIGHT", body: entry.body,
   }));
   const body = reviewBody(item, feedback);
   const payload = {

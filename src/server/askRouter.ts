@@ -15,6 +15,7 @@ import {
   resumeAskConversation,
   updateAskConversation,
   updateAskMessage,
+  settleInterruptedAskMessages,
 } from "./askStore.ts";
 import {
   createQuestionSet,
@@ -39,6 +40,8 @@ export interface AskRouterOptions {
   repoRoots?: ReadonlyMap<string, string>;
   /** Returns the daemon-owned token for the dedicated Copilot GitHub App. */
   copilotToken?: () => Promise<string>;
+  /** Binds new chats to the exact queued revision open in this reviewer. */
+  getQueueItemId?: () => string | undefined;
 }
 
 /**
@@ -98,6 +101,8 @@ export class AskService {
   // necessarily created its session. Remember an immediate Stop so it wins
   // once initialization completes instead of misleadingly returning false.
   private readonly pendingAborts = new Set<string>();
+  /** Claimed before persisting the user turn, closing the concurrent POST race. */
+  private readonly claimedTurns = new Set<string>();
 
   constructor(
     private readonly db: Database,
@@ -153,6 +158,7 @@ export class AskService {
     this.active.clear();
     this.initializing.clear();
     this.pendingAborts.clear();
+    this.claimedTurns.clear();
     await this.client?.stop();
     this.client = undefined;
   }
@@ -169,6 +175,20 @@ export class AskService {
     if (!active?.sending) return false;
     await active.session.abort();
     return true;
+  }
+
+  tryClaimTurn(conversationId: string): boolean {
+    if (this.claimedTurns.has(conversationId)) return false;
+    this.claimedTurns.add(conversationId);
+    return true;
+  }
+
+  isBusy(conversationId: string): boolean {
+    return this.claimedTurns.has(conversationId) || this.initializing.has(conversationId) || this.active.get(conversationId)?.sending === true;
+  }
+
+  releaseTurn(conversationId: string): void {
+    this.claimedTurns.delete(conversationId);
   }
 
   private mayRead(request: PermissionRequest): boolean {
@@ -227,57 +247,44 @@ export class AskService {
     onDelta: (delta: string) => void,
     location?: AskLocation,
   ): Promise<{ messageId: number; content: string; aborted: boolean }> {
-    const conversation = getAskConversation(this.db, conversationId);
-    if (!conversation) throw new Error("Unknown /ask conversation");
-    this.initializing.add(conversationId);
-    let active: ActiveAsk;
-    try { active = await this.sessionFor(conversationId); }
-    finally { this.initializing.delete(conversationId); }
-    if (this.pendingAborts.delete(conversationId)) {
-      const assistant = insertAskMessage(this.db, {
-        conversationId,
-        role: "assistant",
-        body: "",
-        pending: false,
-        location,
-      });
-      return { messageId: assistant.id, content: "", aborted: true };
-    }
-    if (active.sending) throw new Error("This /ask conversation is already responding");
-    const assistant = insertAskMessage(this.db, {
-      conversationId,
-      role: "assistant",
-      body: "",
-      pending: true,
-      location,
-    });
-    active.sending = true;
-    let content = "";
-    let aborted = false;
-    const unsubscribeDelta = active.session.on("assistant.message_delta", (event) => {
-      content += event.data.deltaContent;
-      updateAskMessage(this.db, assistant.id, { body: content, pending: true });
-      onDelta(event.data.deltaContent);
-    });
-    const unsubscribeFinal = active.session.on("assistant.message", (event) => {
-      content = event.data.content;
-    });
-    const unsubscribeIdle = active.session.on("session.idle", (event) => {
-      aborted = event.data.aborted === true;
-    });
-
     try {
-      const final = await active.session.sendAndWait({
-        prompt: formatAskPrompt(this.realWorkspaceRoot, prompt, location ?? conversation.context ?? undefined, this.repoRoots),
+      const conversation = getAskConversation(this.db, conversationId);
+      if (!conversation) throw new Error("Unknown /ask conversation");
+      this.initializing.add(conversationId);
+      let active: ActiveAsk;
+      try { active = await this.sessionFor(conversationId); }
+      finally { this.initializing.delete(conversationId); }
+      if (this.pendingAborts.delete(conversationId)) {
+        const assistant = insertAskMessage(this.db, { conversationId, role: "assistant", body: "", pending: false, location });
+        return { messageId: assistant.id, content: "", aborted: true };
+      }
+      if (active.sending) throw new Error("This /ask conversation is already responding");
+      const assistant = insertAskMessage(this.db, { conversationId, role: "assistant", body: "", pending: true, location });
+      active.sending = true;
+      let content = "";
+      let aborted = false;
+      const unsubscribeDelta = active.session.on("assistant.message_delta", (event) => {
+        content += event.data.deltaContent;
+        updateAskMessage(this.db, assistant.id, { body: content, pending: true });
+        onDelta(event.data.deltaContent);
       });
-      if (final?.data.content) content = final.data.content;
-      return { messageId: assistant.id, content, aborted };
+      const unsubscribeFinal = active.session.on("assistant.message", (event) => { content = event.data.content; });
+      const unsubscribeIdle = active.session.on("session.idle", (event) => { aborted = event.data.aborted === true; });
+      try {
+        const final = await active.session.sendAndWait({
+          prompt: formatAskPrompt(this.realWorkspaceRoot, prompt, location ?? conversation.context ?? undefined, this.repoRoots),
+        });
+        if (final?.data.content) content = final.data.content;
+        return { messageId: assistant.id, content, aborted };
+      } finally {
+        unsubscribeDelta();
+        unsubscribeFinal();
+        unsubscribeIdle();
+        active.sending = false;
+        updateAskMessage(this.db, assistant.id, { body: content, pending: false });
+      }
     } finally {
-      unsubscribeDelta();
-      unsubscribeFinal();
-      unsubscribeIdle();
-      active.sending = false;
-      updateAskMessage(this.db, assistant.id, { body: content, pending: false });
+      this.claimedTurns.delete(conversationId);
     }
   }
 
@@ -378,7 +385,9 @@ export function createAskRouter(options: AskRouterOptions): { router: Router; as
   const router = express.Router();
   router.use(express.json({ limit: "1mb" }));
   const askService = new AskService(options.db, options.workspaceRoot, options.repoRoots, options.copilotToken);
+  settleInterruptedAskMessages(options.db);
   const reviewSessionId = () => options.getReviewSessionId?.() ?? 0;
+  const queueItemId = () => options.getQueueItemId?.();
 
   router.get("/api/ask/models", async (_req, res) => {
     try {
@@ -389,13 +398,13 @@ export function createAskRouter(options: AskRouterOptions): { router: Router; as
   });
 
   router.get("/api/ask/conversations", (req, res) => {
-    const queueItemId = bodyString(req.query.queueItemId);
+    const requestedQueueItemId = bodyString(req.query.queueItemId) ?? queueItemId();
     const includeHistory = req.query.history === "1" || req.query.history === "true";
     const activeReviewSessionId = reviewSessionId();
     res.json({
       activeReviewSessionId,
       conversations: listAskConversations(options.db, {
-        queueItemId,
+        queueItemId: requestedQueueItemId,
         reviewSessionId: includeHistory || !activeReviewSessionId ? undefined : activeReviewSessionId,
         includeArchived: includeHistory,
       }),
@@ -463,7 +472,7 @@ export function createAskRouter(options: AskRouterOptions): { router: Router; as
     const model = bodyString(req.body?.model);
     const effort = reasoningEffort(req.body?.reasoningEffort);
     const tier = contextTier(req.body?.contextTier);
-    const queueItemId = bodyString(req.body?.queueItemId);
+    const requestedQueueItemId = bodyString(req.body?.queueItemId) ?? queueItemId();
     const context = askLocation(req.body?.context);
     const invalidLocation = locationError(options.workspaceRoot, options.repoRoots, context);
     if (invalidLocation) {
@@ -479,7 +488,7 @@ export function createAskRouter(options: AskRouterOptions): { router: Router; as
           return;
         }
       }
-      res.status(201).json({ conversation: createAskConversation(options.db, { model, reasoningEffort: effort, contextTier: tier, queueItemId, context, reviewSessionId: reviewSessionId() || undefined }) });
+      res.status(201).json({ conversation: createAskConversation(options.db, { model, reasoningEffort: effort, contextTier: tier, queueItemId: requestedQueueItemId, context, reviewSessionId: reviewSessionId() || undefined }) });
     } catch (error) {
       res.status(503).json({ error: `Unable to initialize Copilot: ${String(error)}` });
     }
@@ -517,7 +526,7 @@ export function createAskRouter(options: AskRouterOptions): { router: Router; as
           return;
         }
       }
-      res.status(201).json({ conversation: createAskConversation(options.db, { model, reviewSessionId: activeReviewSessionId || undefined }), reused: false, shared: true });
+      res.status(201).json({ conversation: createAskConversation(options.db, { model, queueItemId: queueItemId(), reviewSessionId: activeReviewSessionId || undefined }), reused: false, shared: true });
     } catch (error) {
       res.status(503).json({ error: `Unable to initialize Copilot: ${String(error)}` });
     }
@@ -549,12 +558,18 @@ export function createAskRouter(options: AskRouterOptions): { router: Router; as
         const validation = validateModelSettings(models, model, effort);
         if (validation) { res.status(400).json({ error: validation }); return; }
       }
+      const activeConversation = activeReviewSessionId ? getActiveAskConversation(options.db, activeReviewSessionId) : undefined;
+      if (activeConversation && askService.isBusy(activeConversation.id)) {
+        res.status(409).json({ error: "Wait for or cancel the active /ask response before starting a fresh session." });
+        return;
+      }
       if (activeReviewSessionId) archiveActiveAskConversations(options.db, activeReviewSessionId);
       res.status(201).json({
         conversation: createAskConversation(options.db, {
           model,
           reasoningEffort: effort,
           contextTier: tier,
+          queueItemId: queueItemId(),
           reviewSessionId: activeReviewSessionId || undefined,
         }),
       });
@@ -658,6 +673,11 @@ export function createAskRouter(options: AskRouterOptions): { router: Router; as
       return;
     }
 
+    if (!askService.tryClaimTurn(conversation.id)) {
+      res.status(409).json({ error: "This /ask conversation is already responding. Wait for it to finish or cancel it before sending another question." });
+      return;
+    }
+
     insertAskMessage(options.db, { conversationId: conversation.id, role: "user", body: prompt, location });
     res.status(200);
     res.set({
@@ -679,6 +699,7 @@ export function createAskRouter(options: AskRouterOptions): { router: Router; as
     } catch (error) {
       writeSse(res, "error", { error: String(error) });
     } finally {
+      askService.releaseTurn(conversation.id);
       res.end();
     }
   });
@@ -722,12 +743,21 @@ export function createAskRouter(options: AskRouterOptions): { router: Router; as
     writeSse(res, "started", { conversationId: conversation.id, questionSetId: questionSet.id, mode, count: prompts.length });
     try {
       for (const [index, prompt] of prompts.entries()) {
+        if (!askService.tryClaimTurn(conversation.id)) throw new Error("This /ask conversation is already responding");
         insertAskMessage(options.db, { conversationId: conversation.id, role: "user", body: prompt });
         writeSse(res, "question_started", { index, prompt });
-        const result = await askService.send(conversation.id, prompt, (delta) => {
-          writeSse(res, "delta", { index, delta });
-        });
+        let result;
+        try {
+          result = await askService.send(conversation.id, prompt, (delta) => {
+            writeSse(res, "delta", { index, delta });
+          });
+        } finally {
+          // `send` releases its own real SDK claim. Keeping this explicit
+          // also makes the route safe with a failed/mocked transport.
+          askService.releaseTurn(conversation.id);
+        }
         writeSse(res, "question_done", { index, ...result });
+        if (result.aborted) break;
       }
       writeSse(res, "done", { conversationId: conversation.id, count: prompts.length });
     } catch (error) {

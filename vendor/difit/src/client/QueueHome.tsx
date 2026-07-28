@@ -128,12 +128,13 @@ export function QueueHome() {
   const [githubClientId, setGithubClientId] = useState('');
   const [githubAction, setGithubAction] = useState<GitHubCapability | null>(null);
   const [deviceCode, setDeviceCode] = useState<{ capability: GitHubCapability; userCode: string; verificationUri: string } | null>(null);
+  const [showHistory, setShowHistory] = useState(true);
 
   useEffect(() => { captureDaemonTokenFromLocation(); }, []);
   const refresh = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const [queueResponse, workspacesResponse, federationResponse, nodesResponse] = await Promise.all([daemonFetch('/api/queue'), daemonFetch('/api/workspaces'), daemonFetch('/api/federation/queue'), daemonFetch('/api/federation/nodes')]);
+      const [queueResponse, workspacesResponse, federationResponse, nodesResponse] = await Promise.all([daemonFetch(`/api/queue${showHistory ? '?history=true' : ''}`), daemonFetch('/api/workspaces'), daemonFetch('/api/federation/queue'), daemonFetch('/api/federation/nodes')]);
       if (!queueResponse.ok || !workspacesResponse.ok) {
         const needsToken = queueResponse.status === 401 || workspacesResponse.status === 401;
         setAuthRequired(needsToken);
@@ -157,7 +158,7 @@ export function QueueHome() {
         setNodes(withRuntime);
       }
     } catch (err) { setError(err instanceof Error ? err.message : 'Unable to load the queue.'); } finally { setLoading(false); }
-  }, []);
+  }, [showHistory]);
   useEffect(() => { void refresh(); }, [refresh]);
 
   const refreshGitHubAuth = useCallback(async () => {
@@ -317,7 +318,7 @@ export function QueueHome() {
   return <main style={{ minHeight: '100vh', boxSizing: 'border-box', maxWidth: 1080, margin: '0 auto', padding: '28px 24px 64px', fontFamily: 'system-ui, sans-serif' }}>
     <header style={{ display: 'flex', gap: 14, justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', marginBottom: 26 }}>
       <div><div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', opacity: 0.62 }}>CMUX LOCAL REVIEW</div><h1 style={{ margin: '5px 0 0', fontSize: 28 }}>Queue Home</h1><p style={{ margin: '7px 0 0', opacity: 0.72, fontSize: 13 }}>{activeWorkspace ? <>Active workspace: <code>{activeWorkspace}</code></> : 'No review workspace is open. Select a queue item to begin.'}</p></div>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>{activeWorkspace && <button onClick={() => window.location.assign('/review')} style={buttonStyle}>Current review</button>}<button onClick={() => void refresh()} disabled={loading || opening} style={buttonStyle}>{loading ? 'Loading…' : 'Refresh'}</button><button onClick={() => void openNext()} disabled={opening || queuedCount === 0} style={{ ...buttonStyle, borderColor: '#2ea043' }}>Open next ({queuedCount})</button></div>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>{activeWorkspace && <button onClick={() => window.location.assign('/review')} style={buttonStyle}>Current review</button>}<label style={{ fontSize: 12, display: 'flex', gap: 4, alignItems: 'center' }}><input type="checkbox" checked={showHistory} onChange={(event) => setShowHistory(event.target.checked)} /> Show review history</label><button onClick={() => void refresh()} disabled={loading || opening} style={buttonStyle}>{loading ? 'Loading…' : 'Refresh'}</button><button onClick={() => void openNext()} disabled={opening || queuedCount === 0} style={{ ...buttonStyle, borderColor: '#2ea043' }}>Open next ({queuedCount})</button></div>
     </header>
     {error && <div role="alert" style={{ marginBottom: 16, padding: '10px 12px', borderRadius: 6, color: '#f85149', border: '1px solid rgba(248,81,73,0.5)' }}>{error}</div>}
     {authRequired && <form onSubmit={(event) => { event.preventDefault(); if (saveDaemonToken(daemonToken)) { setDaemonToken(''); void refresh(); } }} style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '0 0 16px', padding: 12, border: '1px solid rgba(210,153,34,0.55)', borderRadius: 6 }} aria-label="Connect Queue Home to local daemon">

@@ -52,9 +52,9 @@ export async function main(argv = process.argv): Promise<void> {
   const program = new Command();
   program.name("localreview-github-app").description("Configure dedicated GitHub App device-flow capabilities for cmux-localreview");
   program.command("guide").description("Print the three least-privilege GitHub App registrations to create").action(guide);
-  program.command("configure").requiredOption("--capability <read|write|copilot>").requiredOption("--client-id <id>").description("Save a public GitHub App client ID").action((options: { capability: string; clientId: string }) => {
+  program.command("configure").requiredOption("--capability <read|write|copilot>").requiredOption("--client-id <id>").description("Save a public GitHub App client ID").action(async (options: { capability: string; clientId: string }) => {
     const selected = capability(options.capability);
-    new GitHubAuthService().configure(selected, options.clientId);
+    await new GitHubAuthService().configure(selected, options.clientId);
     console.log(`Saved ${selected} GitHub App client ID. Run localreview-github-app connect --capability ${selected}.`);
   });
   program.command("connect").requiredOption("--capability <read|write|copilot>").description("Run the GitHub App device flow and keep its token in the system secret store").action(async (options: { capability: string }) => {

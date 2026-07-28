@@ -31,7 +31,10 @@ function sha256File(path: string): string {
 }
 
 async function snapshotRepo(repo: RepoInfo, id: string, destination: string, baseRef?: string): Promise<SnapshotRepo> {
-  const indexPath = tempIndexPath(destination, `${id}-${repo.workspaceRelativePath}`);
+  const indexPath = tempIndexPath(
+    destination,
+    `${id}-${safeArtifactName(repo.workspaceRelativePath)}-${createHash("sha256").update(repo.workspaceRelativePath).digest("hex").slice(0, 10)}`,
+  );
   const env = { GIT_INDEX_FILE: indexPath };
   try {
     let baseSha: string | null = null;
@@ -44,7 +47,11 @@ async function snapshotRepo(repo: RepoInfo, id: string, destination: string, bas
     const commitArgs = ["commit-tree", tree, "-m", message];
     if (baseSha) commitArgs.push("-p", baseSha);
     const snapshotSha = await git(commitArgs, repo.absolutePath, env);
-    const slug = safeArtifactName(repo.workspaceRelativePath === "." ? basename(repo.absolutePath) : repo.workspaceRelativePath);
+    // Two nested repos can share a basename (for example apps/a/api and
+    // apps/b/api). Keep a readable name but include the full relative path's
+    // digest so their retained bundles can never overwrite each other.
+    const repoIdentity = repo.workspaceRelativePath === "." ? `root:${repo.absolutePath}` : repo.workspaceRelativePath;
+    const slug = `${safeArtifactName(repo.workspaceRelativePath === "." ? basename(repo.absolutePath) : repo.workspaceRelativePath)}-${createHash("sha256").update(repoIdentity).digest("hex").slice(0, 10)}`;
     const ref = `refs/cmux-localreview/snapshots/${id}/${slug}`;
     await git(["update-ref", ref, snapshotSha], repo.absolutePath);
     const bundle = join(destination, `${slug}.bundle`);

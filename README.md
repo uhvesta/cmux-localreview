@@ -186,7 +186,9 @@ review round linked to the prior item returns to the queue. `POST
 /api/queue/:id/cleanup` removes the managed worktree (pass `{ "removeMirror":
 true }` only when its reusable mirror should be discarded too).
 
-Publishing is through GitHub’s Reviews API using the separate publish App. A
+Publishing is through GitHub’s Reviews API using the separate publish App and
+is never implied by a local approve/request-changes lifecycle action; the UI
+requires an explicitly labelled, confirmed publish action. A
 stale or invalid inline anchor is rejected rather than silently publishing
 against a newer head or changing transport.
 
@@ -238,7 +240,9 @@ it. No cmux keystrokes are used for this path.
 `/localreview-submit` skill can invoke either from the branch being reviewed.
 It takes the snapshot before it sends the queue request, so the
 queue holds the submitted Git state rather than a pointer to a mutable working
-tree. It captures `cwd`, branch/base/head through the snapshot, cmux
+tree. Queue Home materializes that snapshot into a daemon-owned review
+directory and compares it with its captured parent/base before rendering the
+diff. It captures `cwd`, branch/base/head through the snapshot, cmux
 surface/workspace provenance when available, and redacted originating-agent
 metadata.
 

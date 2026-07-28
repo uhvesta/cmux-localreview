@@ -8,8 +8,8 @@ import express, { type Express, type Request, type Response } from "express";
 
 import { openDb } from "./server/db.ts";
 import { daemonDbPath, ensureDaemonDirectories, localreviewDataDir, newDaemonToken, writeDiscovery } from "./server/daemonPaths.ts";
-import { createWorkspaceSnapshot } from "./server/snapshots.ts";
-import { addFeedback, decideQueueItem, decisionHistoryForItem, enqueue, feedbackForItem, getQueueItem, listQueue, markFeedbackDelivered, openNext, openQueueItem, refreshRemoteQueue, removeQueueItem, requeueQueueItem, reorderQueue, updateAcpState, type QueueFeedback, type QueueStatus } from "./server/queueStore.ts";
+import { createWorkspaceSnapshot, materializeSnapshot } from "./server/snapshots.ts";
+import { addFeedback, decideQueueItem, decisionHistoryForItem, enqueue, feedbackForItem, getQueueItem, listQueue, markFeedbackDelivered, openNext, openQueueItem, refreshRemoteQueue, removeQueueItem, requeueQueueItem, reorderQueue, updateAcpState, type QueueFeedback, type QueueItem, type QueueStatus } from "./server/queueStore.ts";
 import { buildWorkspaceApp, type WorkspaceApp } from "./server/app.ts";
 import { WsHub } from "./server/wsHub.ts";
 import { exportReviewPackage, materializeReviewPackage } from "./server/reviewPackage.ts";
@@ -150,11 +150,11 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
   api.get("/github/auth/status", async (_req, res) => {
     res.json(await githubAuth.status());
   });
-  api.post("/github/auth/configure", (req, res) => {
+  api.post("/github/auth/configure", async (req, res) => {
     const capability = bodyString(req.body?.capability);
     const clientId = bodyString(req.body?.clientId);
     if ((capability !== "read" && capability !== "write" && capability !== "copilot") || !clientId) { res.status(400).json({ error: "capability (read, write, or copilot) and clientId are required" }); return; }
-    try { githubAuth.configure(capability, clientId); res.status(204).end(); }
+    try { await githubAuth.configure(capability, clientId); res.status(204).end(); }
     catch (error) { res.status(400).json({ error: String(error) }); }
   });
   api.post("/github/auth/:capability/start", async (req, res) => {
@@ -408,6 +408,8 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
       // the capability-specific App token. It does not inherit Copilot CLI,
       // `gh`, environment, or browser credentials.
       copilotToken: () => githubAuth.token("copilot"),
+      queueItemId,
+      queueDb: queueItemId ? db : undefined,
     });
     const startedHub = hub;
     let cleanupBtw: (() => void) | undefined;
@@ -447,13 +449,35 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
     } catch (error) { res.status(400).json({ error: String(error) }); }
   });
 
+  /** Materialize and open the exact immutable revision represented by a queue item. */
+  const openQueuedReview = async (item: QueueItem) => {
+    // A local queue item always opens its retained Git bundles, never the
+    // mutable directory that happened to be submitted. Remote PR items are
+    // already backed by a managed immutable worktree.
+    const reviewWorkspacePath = item.kind === "local" && item.snapshotManifestPath
+      ? join(localreviewDataDir(), "review-workspaces", item.id)
+      : item.workspacePath;
+    if (item.kind === "local" && item.snapshotManifestPath) await materializeSnapshot(item.snapshotManifestPath, reviewWorkspacePath);
+    // Synthetic snapshot commits are parented to their capture base. The
+    // clean materialized checkout has no uncommitted changes, so comparing
+    // to `.` would show an empty diff; compare to that parent instead.
+    const comparisonBase = item.kind === "local" && item.snapshotManifestPath
+      // `baseRef` names the source repository's pre-capture revision. Once
+      // materialized, HEAD is the synthetic snapshot commit, so HEAD^ is the
+      // stable equivalent of that captured base even when baseRef was HEAD.
+      ? "HEAD^"
+      : item.baseRef ?? undefined;
+    const review = await activate(reviewWorkspacePath, comparisonBase, item.agentId ?? undefined, item.id);
+    return { review, reviewWorkspacePath };
+  };
+
   /** Open a specific queue item; never infer the target from a workspace path. */
   api.post("/queue/:id/open", async (req, res) => {
     const item = openQueueItem(db, req.params.id);
     if (!item) { res.status(409).json({ error: "Only an active queued or in-review item can be opened." }); return; }
     try {
-      const review = await activate(item.workspacePath, item.baseRef ?? undefined, item.agentId ?? undefined, item.id);
-      res.json({ item, workspacePath: item.workspacePath, repos: review.workspace.repos.map((repo) => ({ id: repo.repoId, path: repo.repo.workspaceRelativePath })), reviewUrl: `/review?queueItem=${encodeURIComponent(item.id)}` });
+      const { review, reviewWorkspacePath } = await openQueuedReview(item);
+      res.json({ item, sourceWorkspacePath: item.workspacePath, workspacePath: reviewWorkspacePath, repos: review.workspace.repos.map((repo) => ({ id: repo.repoId, path: repo.repo.workspaceRelativePath })), reviewUrl: `/review?queueItem=${encodeURIComponent(item.id)}` });
     } catch (error) { res.status(500).json({ error: String(error), item }); }
   });
 
@@ -556,7 +580,7 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
   api.post("/queue/open-next", async (_req, res) => {
     const item = openNext(db);
     if (!item) { res.status(404).json({ error: "No queued review items" }); return; }
-    try { await activate(item.workspacePath, item.baseRef ?? undefined, item.agentId ?? undefined, item.id); res.json({ item, reviewUrl: `/review?queueItem=${encodeURIComponent(item.id)}` }); } catch (error) { res.status(500).json({ error: String(error), item }); }
+    try { await openQueuedReview(item); res.json({ item, reviewUrl: `/review?queueItem=${encodeURIComponent(item.id)}` }); } catch (error) { res.status(500).json({ error: String(error), item }); }
   });
   api.post("/queue/:id/reorder", (req, res) => { const item = reorderQueue(db, req.params.id, Number(req.body?.position)); item ? res.json({ item }) : res.status(404).json({ error: "Unknown queue item" }); });
   api.post("/queue/:id/requeue", (req, res) => {
@@ -625,7 +649,9 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
       // accepted the outgoing review. The temporary body is used for API
       // publication before committing the local lifecycle transition.
       const outgoing = { ...before, decisionBody: bodyString(req.body?.body) ?? null };
-      const remoteReview = before.kind === "remote" && (decision === "approved" || decision === "changes_requested")
+      // Local lifecycle actions never publish to GitHub implicitly. External
+      // publication is an explicit, separately-labelled reviewer choice.
+      const remoteReview = before.kind === "remote" && req.body?.publishGitHub === true && (decision === "approved" || decision === "changes_requested")
         ? await submitRemoteDecision(outgoing, decision, feedbackForItem(db, before.id), {
           read: await githubAuth.token("read"),
           write: await githubAuth.token("write"),

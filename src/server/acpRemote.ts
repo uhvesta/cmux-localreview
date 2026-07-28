@@ -41,13 +41,12 @@ export function parseLoopbackAcpEndpoint(input: { host?: unknown; port?: unknown
   return { host, port, sessionId, cwd };
 }
 
-function allowRequestedPermission(request: RequestPermissionRequest): RequestPermissionResponse {
-  // This connection exists solely to deliver an explicit reviewer instruction
-  // to the original agent. ACP still asks for every consequential tool call;
-  // select its normal allow-once option rather than pretending this is /btw's
-  // read-only question channel.
-  const option = request.options.find((entry) => entry.kind.startsWith("allow"));
-  return option ? { outcome: { outcome: "selected", optionId: option.optionId } } : { outcome: { outcome: "cancelled" } };
+function rejectRequestedPermission(_request: RequestPermissionRequest): RequestPermissionResponse {
+  // The feedback bridge may attach to an existing, powerful agent session,
+  // but it is not a substitute for the person approving that agent's tools.
+  // Never silently grant filesystem, shell, or network authority merely
+  // because a reviewer delivered a text prompt through ACP.
+  return { outcome: { outcome: "cancelled" } };
 }
 
 function connect(endpoint: AcpEndpoint, timeoutMs: number): Promise<Socket> {
@@ -103,7 +102,7 @@ export class AcpRemoteSession {
         // response is authoritative for returning to idle.
         options.onUpdate?.(notification);
       },
-      requestPermission: async (request) => allowRequestedPermission(request),
+      requestPermission: async (request) => rejectRequestedPermission(request),
     };
     const conn = new ClientSideConnection(() => client, stream);
     try {

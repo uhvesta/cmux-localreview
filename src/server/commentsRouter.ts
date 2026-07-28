@@ -118,6 +118,8 @@ export interface CommentsRouterDeps {
     endLine: number,
   ) => Promise<string | undefined> | string | undefined;
   onChange?: () => void;
+  /** Mirrors only formal (non-/ask) threads into the active queue item. */
+  syncFormalFeedback?: (threads: DiffCommentThread[]) => Promise<void> | void;
 }
 
 /**
@@ -138,6 +140,10 @@ export function createCommentsRouter(deps: CommentsRouterDeps): Router {
     const sessionId = deps.getSessionId();
     await refreshOrphanFlags(deps.db, sessionId, deps.repoDbId, deps.currentContentAt);
     return listThreads(deps.db, sessionId, deps.repoDbId);
+  }
+
+  async function persistFormalFeedback(threads: DiffCommentThread[]): Promise<void> {
+    await deps.syncFormalFeedback?.(threads);
   }
 
   router.get("/api/comments-json", async (_req, res) => {
@@ -182,6 +188,7 @@ export function createCommentsRouter(deps: CommentsRouterDeps): Router {
       // thread), where we can durably tombstone the client-generated id.
 
       version += 1;
+      await persistFormalFeedback(await refreshedThreads());
       deps.onChange?.();
 
       res.json({
@@ -196,16 +203,17 @@ export function createCommentsRouter(deps: CommentsRouterDeps): Router {
     }
   });
 
-  router.delete("/api/comments/:threadId", (req, res) => {
+  router.delete("/api/comments/:threadId", async (req, res) => {
     const sessionId = deps.getSessionId();
     const deleted = deleteThread(deps.db, sessionId, deps.repoDbId, req.params.threadId);
     tombstoneThread(deps.db, sessionId, deps.repoDbId, req.params.threadId);
     version += 1;
+    await persistFormalFeedback(await refreshedThreads());
     deps.onChange?.();
     res.json({ success: true, deleted, threadId: req.params.threadId, version });
   });
 
-  router.post("/api/comment-imports", (req, res) => {
+  router.post("/api/comment-imports", async (req, res) => {
     try {
       const imported = parseThreadsPayload(
         typeof req.body === "string"
@@ -218,6 +226,7 @@ export function createCommentsRouter(deps: CommentsRouterDeps): Router {
         upsertThread(deps.db, sessionId, deps.repoDbId, thread);
       }
       version += 1;
+      await persistFormalFeedback(await refreshedThreads());
       deps.onChange?.();
       res.json({ success: true, changed: imported.length > 0, count: imported.length, warnings: [] });
     } catch (error) {

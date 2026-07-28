@@ -208,10 +208,10 @@ export function ReviewControlPanel({ collapsed, onToggleCollapsed, refreshNonce 
   }, []);
 
   const openNext = useCallback(() => run('open-next', () => daemonFetch('/api/queue/open-next', { method: 'POST' }), 'Opened the next queued review.'), [run]);
-  const decide = useCallback((item: QueueItem, decision: Extract<QueueStatus, 'approved' | 'changes_requested' | 'completed'>) =>
+  const decide = useCallback((item: QueueItem, decision: Extract<QueueStatus, 'approved' | 'changes_requested' | 'completed'>, publishGitHub = false) =>
     run(`decision:${item.id}`, () => daemonFetch(`/api/queue/${encodeURIComponent(item.id)}/decision`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision }),
-    }), `Marked ${decision.replace('_', ' ')}.`), [run]);
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision, publishGitHub }),
+    }), publishGitHub ? `Published ${decision.replace('_', ' ')} to GitHub.` : `Marked ${decision.replace('_', ' ')} locally.`), [run]);
   const requeue = useCallback((item: QueueItem) => run(`requeue:${item.id}`, () => daemonFetch(`/api/queue/${encodeURIComponent(item.id)}/requeue`, { method: 'POST' }), 'Requeued at the end of the queue.'), [run]);
   const remove = useCallback((item: QueueItem) => {
     if (!window.confirm(`Remove “${item.title}” without reviewing it? You can submit the same topic again later as a fresh review round.`)) return;
@@ -293,15 +293,15 @@ export function ReviewControlPanel({ collapsed, onToggleCollapsed, refreshNonce 
             {selected.body && <p style={{ ...muted, whiteSpace: 'pre-wrap' }}>{selected.body}</p>}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 8 }}>
               {selected.status === 'in_review' && <>
-                <button onClick={() => void decide(selected, 'approved')} style={buttonStyle} disabled={disabled}>Approve</button>
-                <button onClick={() => void decide(selected, 'changes_requested')} style={buttonStyle} disabled={disabled}>Request changes</button>
+                <button onClick={() => void decide(selected, 'approved')} style={buttonStyle} disabled={disabled}>{selected.kind === 'remote' ? 'Approve locally' : 'Approve'}</button>
+                <button onClick={() => void decide(selected, 'changes_requested')} style={buttonStyle} disabled={disabled}>{selected.kind === 'remote' ? 'Request changes locally' : 'Request changes'}</button>
                 <button onClick={() => void decide(selected, 'completed')} style={buttonStyle} disabled={disabled}>Complete</button>
               </>}
               {selected.status !== 'in_review' && <button onClick={() => void requeue(selected)} style={buttonStyle} disabled={disabled}>Requeue</button>}
               {!selected.removedAt && <button onClick={() => remove(selected)} style={{ ...buttonStyle, color: '#e5534b' }} disabled={disabled}>Remove</button>}
               <button onClick={() => void reorder(selected, Math.max(1, selected.position - 1))} style={buttonStyle} disabled={disabled || selected.position <= 1}>Move up</button>
               <button onClick={() => void reorder(selected, selected.position + 1)} style={buttonStyle} disabled={disabled}>Move down</button>
-              {selected.kind === 'remote' && <><button onClick={() => void refreshRemote(selected)} style={buttonStyle} disabled={disabled}>Refresh PR</button><button onClick={() => void publishComment(selected)} style={buttonStyle} disabled={disabled}>Publish comment</button><button onClick={() => void cleanupRemote(selected)} style={buttonStyle} disabled={disabled}>Clean worktree</button></>}
+              {selected.kind === 'remote' && <><button onClick={() => void refreshRemote(selected)} style={buttonStyle} disabled={disabled}>Refresh PR</button><button onClick={() => { if (window.confirm('Publish an approval to GitHub now? This is an external action.')) void decide(selected, 'approved', true); }} style={buttonStyle} disabled={disabled}>Publish approval</button><button onClick={() => { if (window.confirm('Publish a request for changes to GitHub now? This is an external action.')) void decide(selected, 'changes_requested', true); }} style={buttonStyle} disabled={disabled}>Publish request changes</button><button onClick={() => void publishComment(selected)} style={buttonStyle} disabled={disabled}>Publish comment</button><button onClick={() => void cleanupRemote(selected)} style={buttonStyle} disabled={disabled}>Clean worktree</button></>}
               <button onClick={() => void exportPackage(selected)} style={buttonStyle} disabled={disabled || !selected.snapshotManifestPath}>Export</button>
             </div>
             <hr style={{ borderColor: 'rgba(127,127,127,0.25)', margin: '10px 0' }} />

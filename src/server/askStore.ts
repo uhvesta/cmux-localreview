@@ -220,3 +220,18 @@ export function updateAskMessage(
     id,
   );
 }
+
+/**
+ * A daemon or browser may disappear while an SDK turn is streaming. On the
+ * next start, retain the transcript but make its interrupted state explicit
+ * instead of showing a permanent spinner.
+ */
+export function settleInterruptedAskMessages(db: Database): number {
+  const result = db.query(
+    `UPDATE ask_messages
+        SET pending = 0,
+            body = CASE WHEN body = '' THEN 'Response interrupted before it completed.' ELSE body END
+      WHERE pending = 1`,
+  ).run();
+  return result.changes;
+}

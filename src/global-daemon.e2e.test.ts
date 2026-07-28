@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -115,14 +115,47 @@ describe("global daemon authenticated queue lifecycle", () => {
       expect(created.item.reviewTopic).toBe("parser-boundaries");
       expect(created.item.identityKey).toBe(`local:${workspace}:parser-boundaries`);
 
+      writeFileSync(join(workspace, "reviewed.ts"), "export const answer = 43;\n");
       const secondResponse = await authed("/api/queue", {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ workspacePath: workspace, title: "Second stream", topic: "separate-topic" }),
       });
       const second = await secondResponse.json() as { item: { id: string } };
+      // The source can change after submit; opening must use the retained
+      // snapshot rather than silently reviewing those later edits.
+      writeFileSync(join(workspace, "reviewed.ts"), "export const answer = 999;\n");
       const openedSpecific = await authed(`/api/queue/${second.item.id}/open`, { method: "POST" });
       expect(openedSpecific.status).toBe(200);
-      expect(await openedSpecific.json()).toMatchObject({ item: { id: second.item.id, status: "in_review" }, reviewUrl: `/review?queueItem=${second.item.id}` });
+      const openedSpecificJson = await openedSpecific.json() as { item: { id: string; status: string }; workspacePath: string; sourceWorkspacePath: string; reviewUrl: string };
+      expect(openedSpecificJson).toMatchObject({ item: { id: second.item.id, status: "in_review" }, sourceWorkspacePath: workspace, reviewUrl: `/review?queueItem=${second.item.id}` });
+      expect(openedSpecificJson.workspacePath).not.toBe(workspace);
+      expect(readFileSync(join(openedSpecificJson.workspacePath, "reviewed.ts"), "utf8")).toBe("export const answer = 43;\n");
+
+      // A formal inline diff thread is queue feedback, using a path relative
+      // to the review workspace. `/ask` threads are deliberately excluded.
+      const repos = await (await fetch(`${baseUrl}/api/repos`)).json() as { repos: { id: string }[] };
+      const immutableDiff = await (await fetch(`${baseUrl}/api/repos/${repos.repos[0]!.id}/api/diff`)).json() as { files: { path: string }[] };
+      expect(immutableDiff.files.map((file) => file.path)).toContain("reviewed.ts");
+      const commentsUrl = `${baseUrl}/api/repos/${repos.repos[0]!.id}/api/comments`;
+      const savedFormal = await fetch(commentsUrl, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ comments: [{ id: "formal-thread", file: "reviewed.ts", line: 1, body: "Use a named constant." }] }),
+      });
+      expect(savedFormal.status).toBe(200);
+      const savedAsk = await fetch(commentsUrl, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ comments: [
+          { id: "formal-thread", file: "reviewed.ts", line: 1, body: "Use a named constant." },
+          { id: "ask-thread", file: "reviewed.ts", line: 1, body: "/ask why is this here?" },
+        ] }),
+      });
+      expect(savedAsk.status).toBe(200);
+      const formalDetail = await (await authed(`/api/queue/${second.item.id}`)).json() as { feedback: { body: string; path: string | null; sourceKey: string | null }[] };
+      expect(formalDetail.feedback).toHaveLength(1);
+      expect(formalDetail.feedback[0]).toMatchObject({ body: "Use a named constant.", path: "reviewed.ts", sourceKey: expect.stringContaining("formal:") });
+      expect((await fetch(`${commentsUrl}/formal-thread`, { method: "DELETE" })).status).toBe(200);
+      const resolvedDetail = await (await authed(`/api/queue/${second.item.id}`)).json() as { feedback: unknown[] };
+      expect(resolvedDetail.feedback).toEqual([]);
       const afterSpecificOpen = await (await authed("/api/queue?history=true")).json() as { items: { id: string; status: string }[] };
       expect(afterSpecificOpen.items.find((item) => item.id === created.item.id)?.status).toBe("queued");
       expect(afterSpecificOpen.items.find((item) => item.id === second.item.id)?.status).toBe("in_review");

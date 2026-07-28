@@ -25,7 +25,7 @@ export interface GitHubAuthStatus {
 }
 
 interface AppConfig { clientIds: Partial<Record<GitHubCapability, string>>; }
-interface TokenRecord { accessToken: string; refreshToken?: string; expiresAt?: number; login?: string; }
+interface TokenRecord { accessToken: string; refreshToken?: string; expiresAt?: number; login?: string; clientId?: string; }
 interface PendingLogin { deviceCode: string; clientId: string; expiresAt: number; intervalMs: number; userCode: string; verificationUri: string; }
 type FetchLike = typeof fetch;
 
@@ -69,11 +69,17 @@ export class GitHubAuthService {
     private readonly configFile = configPath(),
   ) { this.config = readConfig(configFile); }
 
-  configure(capability: GitHubCapability, clientId: string): void {
+  async configure(capability: GitHubCapability, clientId: string): Promise<void> {
     if (!CAPABILITIES.includes(capability)) throw new Error("Unknown GitHub capability");
     if (!/^Iv1\.[A-Za-z0-9]+$/.test(clientId.trim()) && clientId.trim().length < 8) throw new Error("GitHub App client ID looks invalid");
-    this.config.clientIds[capability] = clientId.trim();
+    const normalized = clientId.trim();
+    const changed = this.config.clientIds[capability] !== normalized;
+    this.config.clientIds[capability] = normalized;
     writeConfig(this.config, this.configFile);
+    // A token issued to a different App registration must never inherit this
+    // capability merely because its public client id was later replaced.
+    if (changed) await this.secrets.remove(SERVICE, account(capability));
+    this.pending.delete(capability);
     this.state.set(capability, "idle"); this.messages.delete(capability);
   }
 
@@ -138,6 +144,7 @@ export class GitHubAuthService {
       accessToken: body.access_token,
       refreshToken: typeof body.refresh_token === "string" ? body.refresh_token : undefined,
       expiresAt: typeof body.expires_in === "number" ? Date.now() + body.expires_in * 1_000 : undefined,
+      clientId: pending.clientId,
     };
     const viewer = await this.viewer(token.accessToken);
     token.login = viewer.login;
@@ -157,6 +164,10 @@ export class GitHubAuthService {
   async token(capability: GitHubCapability): Promise<string> {
     const token = await this.readToken(capability);
     if (!token) throw new Error(`The ${capability} GitHub App is not connected.`);
+    if (token.clientId && token.clientId !== this.clientId(capability)) {
+      await this.secrets.remove(SERVICE, account(capability));
+      throw new Error(`The ${capability} GitHub App registration changed. Connect it again.`);
+    }
     if (!token.expiresAt || token.expiresAt > Date.now() + 60_000) return token.accessToken;
     if (!token.refreshToken) throw new Error(`The ${capability} GitHub App token expired. Connect it again.`);
     const response = await this.fetcher("https://github.com/login/oauth/access_token", {
@@ -165,7 +176,7 @@ export class GitHubAuthService {
     });
     const body = await json(response);
     if (!response.ok || typeof body.access_token !== "string") throw new Error(concise(String(body.error_description ?? body.error ?? `The ${capability} GitHub App token could not refresh.`)));
-    const next: TokenRecord = { accessToken: body.access_token, refreshToken: typeof body.refresh_token === "string" ? body.refresh_token : undefined, expiresAt: typeof body.expires_in === "number" ? Date.now() + body.expires_in * 1_000 : undefined, login: token.login };
+    const next: TokenRecord = { accessToken: body.access_token, refreshToken: typeof body.refresh_token === "string" ? body.refresh_token : undefined, expiresAt: typeof body.expires_in === "number" ? Date.now() + body.expires_in * 1_000 : undefined, login: token.login, clientId: this.clientId(capability) };
     await this.writeToken(capability, next);
     return next.accessToken;
   }

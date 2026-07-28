@@ -394,6 +394,18 @@ const MIGRATIONS: Migration[] = [
       db.run(`CREATE INDEX idx_queue_items_active_position ON queue_items(removed_at, status, position)`);
     },
   },
+  {
+    // Formal diff comments are also queue feedback.  A stable source key
+    // lets the workspace-side comment UI update or resolve a comment without
+    // duplicating (or accidentally deleting) manually added queue feedback.
+    version: 18,
+    up: (db) => {
+      db.run(`ALTER TABLE queue_feedback ADD COLUMN source_key TEXT`);
+      db.run(`ALTER TABLE queue_feedback ADD COLUMN side TEXT`);
+      db.run(`ALTER TABLE queue_feedback ADD COLUMN end_line INTEGER`);
+      db.run(`CREATE UNIQUE INDEX idx_queue_feedback_source_key ON queue_feedback(queue_item_id, source_key) WHERE source_key IS NOT NULL`);
+    },
+  },
 ];
 
 export function runMigrations(db: Database): void {

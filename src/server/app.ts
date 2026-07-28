@@ -27,6 +27,7 @@ import { createFullFileRouter } from "./fullFileRouter.ts";
 import { buildExportPrompt } from "./exportFormatting.ts";
 import { createBtwRouter } from "./btwRouter.ts";
 import { createAskRouter } from "./askRouter.ts";
+import { syncFormalFeedback, type FormalFeedbackInput } from "./queueStore.ts";
 import type { BtwManager } from "./btwManager.ts";
 import type { TerminalBtw } from "./terminalBtw.ts";
 import type { WsHub } from "./wsHub.ts";
@@ -53,6 +54,10 @@ export interface WorkspaceServerOptions {
   onTerminalDeliveryFailure?: (agentId: string, error: unknown) => void;
   /** Dedicated GitHub App token for the fresh Copilot SDK `/ask` runtime. */
   copilotToken?: () => Promise<string>;
+  /** Active global queue item: formal diff comments are mirrored to it. */
+  queueItemId?: string;
+  /** Daemon-owned queue DB. Kept distinct from the review workspace DB. */
+  queueDb?: Database;
 }
 
 /** Stable short id for a repo, derived from its durable identity (gitDir). */
@@ -116,6 +121,30 @@ export async function buildWorkspaceApp(options: WorkspaceServerOptions): Promis
           return undefined;
         }
       },
+      syncFormalFeedback: options.queueItemId && options.queueDb
+        ? (threads) => {
+          const prefix = `formal:${repoId}:`;
+          const entries: FormalFeedbackInput[] = threads
+            .filter((thread) => !thread.messages.some((message) => message.body.trim().startsWith("/ask")))
+            .map((thread) => {
+              const line = typeof thread.position.line === "number" ? thread.position.line : thread.position.line.start;
+              const endLine = typeof thread.position.line === "number" ? thread.position.line : thread.position.line.end;
+              // difit paths are repository-relative; queue paths are always
+              // workspace-relative so multi-repo reviews are unambiguous.
+              const path = repo.workspaceRelativePath === "." ? thread.filePath : `${repo.workspaceRelativePath}/${thread.filePath}`;
+              return {
+                sourceKey: `${prefix}${thread.id}`,
+                body: thread.messages.map((message) => message.body.trim()).filter(Boolean).join("\n\n"),
+                path,
+                line,
+                endLine,
+                side: thread.position.side,
+              };
+            })
+            .filter((entry) => entry.body.length > 0);
+          syncFormalFeedback(options.queueDb!, options.queueItemId!, prefix, entries);
+        }
+        : undefined,
     });
 
     // Mounted before diffApp.app so these SQLite-backed routes shadow
@@ -240,6 +269,7 @@ export async function buildWorkspaceApp(options: WorkspaceServerOptions): Promis
     getReviewSessionId: getSessionId,
     repoRoots: new Map(mounted.map((item) => [item.repoId, item.repo.absolutePath])),
     copilotToken: options.copilotToken,
+    getQueueItemId: () => options.queueItemId,
   });
   app.use(ask.router);
 

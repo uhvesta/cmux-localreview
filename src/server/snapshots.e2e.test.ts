@@ -77,4 +77,26 @@ describe("multi-repository snapshot reproduction fixture", () => {
       else process.env.CMUX_LOCALREVIEW_DATA_DIR = priorDataDir;
     }
   });
+
+  test("keeps bundles distinct when nested repositories share a basename", async () => {
+    const root = tempRoot();
+    const priorDataDir = process.env.CMUX_LOCALREVIEW_DATA_DIR;
+    process.env.CMUX_LOCALREVIEW_DATA_DIR = join(root, "daemon-data");
+    const workspace = join(root, "workspace");
+    const first = join(workspace, "apps", "one", "api");
+    const second = join(workspace, "apps", "two", "api");
+    createRepo(first, "one\n");
+    createRepo(second, "two\n");
+    try {
+      const captured = await createWorkspaceSnapshot(workspace);
+      expect(new Set(captured.manifest.repos.map((repo) => repo.bundle)).size).toBe(2);
+      const reproduced = join(root, "reproduced");
+      await materializeSnapshot(captured.manifestPath, reproduced);
+      expect(readFileSync(join(reproduced, "apps", "one", "api", "tracked.txt"), "utf8")).toBe("one\n");
+      expect(readFileSync(join(reproduced, "apps", "two", "api", "tracked.txt"), "utf8")).toBe("two\n");
+    } finally {
+      if (priorDataDir === undefined) delete process.env.CMUX_LOCALREVIEW_DATA_DIR;
+      else process.env.CMUX_LOCALREVIEW_DATA_DIR = priorDataDir;
+    }
+  });
 });
