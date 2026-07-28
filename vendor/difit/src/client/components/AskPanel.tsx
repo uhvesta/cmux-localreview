@@ -36,6 +36,24 @@ const panelButton = {
   background: 'transparent', color: 'inherit', cursor: 'pointer',
 } as const;
 
+/**
+ * The daemon intentionally keeps provider details out of the browser API, but
+ * an older or interrupted OAuth setup can still return a useful internal
+ * credential error while accepting a turn.  Do not make the reviewer decode
+ * that message: their draft/transcript is durable, and Queue Home owns the
+ * only safe way to configure the dedicated Copilot OAuth connection.
+ */
+export function copilotRecoveryMessage(error: unknown, fallback: string): string {
+  const detail = error instanceof Error ? error.message : '';
+  const normalized = detail.toLowerCase();
+  if (normalized.includes('dedicated copilot credential')
+    || normalized.includes('copilot github app is not connected')
+    || normalized.includes('copilot credential is not connected')) {
+    return 'Copilot is not connected. Open Queue Home, configure the dedicated Copilot /ask OAuth client, then connect it. This saved question will not be resent unless you choose Retry last question.';
+  }
+  return detail || fallback;
+}
+
 function storedDraft(): string {
   try { return window.localStorage.getItem(ASK_DRAFT_STORAGE_KEY) ?? ''; } catch { return ''; }
 }
@@ -154,14 +172,14 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
       if (selected) await loadConversation(selected);
       else { setConversationId(null); setMessages([]); }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to load /ask.');
+      setError(copilotRecoveryMessage(err, 'Unable to load /ask.'));
     }
   }, [conversationId, loadConversation, showHistory]);
 
   useEffect(() => {
     if (!requestedConversationId || collapsed) return;
     void loadConversation(requestedConversationId)
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Could not open the inline /ask conversation.'))
+      .catch((err: unknown) => setError(copilotRecoveryMessage(err, 'Could not open the inline /ask conversation.')))
       .finally(() => onRequestedConversationOpened?.());
   }, [collapsed, loadConversation, onRequestedConversationOpened, requestedConversationId]);
 
@@ -225,7 +243,7 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
       const response = await daemonFetch(`/api/ask/conversations/${encodeURIComponent(conversationId)}/resume`, { method: 'POST' });
       if (!response.ok) throw new Error('This historical Ask session cannot be resumed for the current review.');
       await refresh();
-    } catch (err) { setError(err instanceof Error ? err.message : 'Unable to resume this Ask session.'); }
+    } catch (err) { setError(copilotRecoveryMessage(err, 'Unable to resume this Ask session.')); }
   }, [conversationId, refresh]);
 
   const updateSettings = useCallback(async (next: { model?: string; reasoningEffort?: ReasoningEffort | ''; contextTier?: ContextTier }) => {
@@ -257,7 +275,7 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
         if (data.conversation) setConversations((current) => current.map((item) => item.id === data.conversation!.id ? data.conversation! : item));
       }
       setModel(nextModel); setReasoningEffort(nextEffort); setContextTier(nextTier);
-    } catch (err) { setError(err instanceof Error ? err.message : 'Unable to update Copilot settings.'); }
+    } catch (err) { setError(copilotRecoveryMessage(err, 'Unable to update Copilot settings.')); }
   }, [contextTier, conversationId, model, reasoningEffort]);
 
   const sendPrompt = useCallback(async (text: string) => {
@@ -361,7 +379,7 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
       setRetryPrompt(null);
     } catch (err) {
       if ((err as { name?: string }).name !== 'AbortError') {
-        setError(err instanceof Error ? err.message : 'Failed to send /ask message.');
+        setError(copilotRecoveryMessage(err, 'Failed to send /ask message.'));
         setRetryPrompt(text);
         // The regular draft store persists this text across a reload; a failed
         // transient stream must never strand the reviewer without their words.
@@ -514,7 +532,7 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
     </div>
     {historicalConversations.length > 0 && <label style={{ margin: '7px 10px 0', fontSize: 11, opacity: 0.78 }}><input type="checkbox" checked={showHistory} onChange={(event) => setShowHistory(event.target.checked)} /> Show previous Ask sessions ({historicalConversations.length})</label>}
     {visibleConversations.length > 0 && <select aria-label="Ask conversation" value={conversationId ?? ''} onChange={(event) => void loadConversation(event.target.value)} style={{ margin: '7px 10px 0', fontSize: 11, background: 'transparent', color: 'inherit' }}>{visibleConversations.map((item) => <option key={item.id} value={item.id}>{item.archivedAt || item.reviewSessionId !== activeReviewSessionId ? 'Previous · ' : 'Current · '}{item.id.slice(0, 8)} {item.model ? `· ${item.model}` : ''}</option>)}</select>}
-    {error && <div role="alert" style={{ padding: '7px 10px', color: '#e5534b', fontSize: 11 }}>{error} {retryPrompt && <button onClick={() => void send(retryPrompt)} disabled={sending} style={{ ...panelButton, marginLeft: 5 }}>Retry last question</button>} <button onClick={() => void refresh()} style={{ ...panelButton, marginLeft: 5 }}>Refresh chat</button></div>}
+    {error && <div role="alert" style={{ padding: '7px 10px', color: '#e5534b', fontSize: 11 }}>{error} {error.startsWith('Copilot is not connected.') && <button onClick={() => { window.location.assign('/queue'); }} style={{ ...panelButton, marginLeft: 5 }}>Open Queue Home</button>} {retryPrompt && <button onClick={() => void send(retryPrompt)} disabled={sending} style={{ ...panelButton, marginLeft: 5 }}>Retry last question</button>} <button onClick={() => void refresh()} style={{ ...panelButton, marginLeft: 5 }}>Refresh chat</button></div>}
     {historicalConversation && <div role="status" style={{ padding: '7px 10px', color: '#b6c2cf', fontSize: 11, borderBottom: '1px solid rgba(127,127,127,0.25)' }}>Previous Ask session — read-only so it does not clutter or alter this review round.{selectedConversation?.reviewSessionId === activeReviewSessionId && <button onClick={() => void resumeConversation()} style={{ ...panelButton, marginLeft: 6 }}>Resume this session</button>}</div>}
     {editingQuestionSet && <div style={{ padding: 9, borderBottom: '1px solid rgba(127,127,127,0.3)', display: 'grid', gap: 5 }}>
       <label style={{ fontSize: 10, opacity: 0.7 }}>Named question set — separate questions with a blank line; order is preserved.</label>

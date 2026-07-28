@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { AskPanel } from './AskPanel';
+import { AskPanel, copilotRecoveryMessage } from './AskPanel';
 
 describe('AskPanel workspace defaults', () => {
   let fetchMock: ReturnType<typeof vi.fn>;
@@ -44,5 +44,19 @@ describe('AskPanel workspace defaults', () => {
     // unchanged server defaults must not spin in a continuous fetch loop.
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(fetchMock.mock.calls.filter(([url]) => url === '/api/ask/models').length).toBeLessThanOrEqual(3);
+  });
+});
+
+describe('AskPanel credential recovery', () => {
+  it('turns an internal missing-credential failure into an actionable, no-replay explanation', () => {
+    expect(copilotRecoveryMessage(
+      new Error('load dedicated Copilot credential: the copilot GitHub App is not connected'),
+      'fallback',
+    )).toBe('Copilot is not connected. Open Queue Home, configure the dedicated Copilot /ask OAuth client, then connect it. This saved question will not be resent unless you choose Retry last question.');
+  });
+
+  it('does not rewrite unrelated failures', () => {
+    expect(copilotRecoveryMessage(new Error('Copilot stream disconnected before the question started.'), 'fallback'))
+      .toBe('Copilot stream disconnected before the question started.');
   });
 });
