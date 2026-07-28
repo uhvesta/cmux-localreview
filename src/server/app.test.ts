@@ -119,6 +119,31 @@ describe("buildWorkspaceApp", () => {
     expect(repoIdFor(first[0]!)).toBe(repoIdFor(second[0]!));
   });
 
+  test("resolving a thread rejects a late stale snapshot instead of resurrecting it", async () => {
+    const workspace = makeTmpDir();
+    gitInit(join(workspace, "repo"));
+    const { app, repos } = await buildWorkspaceApp({ workspaceRoot: workspace, db: makeDb() });
+    const { baseUrl } = await listen(app);
+    const commentsUrl = `${baseUrl}/api/repos/${repos[0]!.repoId}/api/comments`;
+    const initial = [{ id: "stale-thread", filePath: "a.txt", position: { side: "new", line: 1 }, messages: [{ id: "stale-thread", body: "remove me" }] }];
+
+    const saved = await fetch(commentsUrl, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ threads: initial, baseVersion: 0 }),
+    });
+    expect(saved.status).toBe(200);
+    const savedJson = (await saved.json()) as { version: number };
+
+    const removed = await fetch(`${commentsUrl}/stale-thread`, { method: "DELETE" });
+    expect(removed.status).toBe(200);
+
+    const staleRetry = await fetch(commentsUrl, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ threads: initial, baseVersion: savedJson.version }),
+    });
+    expect(staleRetry.status).toBe(409);
+    const current = (await (await fetch(`${commentsUrl}-json`)).json()) as { threads: unknown[] };
+    expect(current.threads).toHaveLength(0);
+  });
+
   test("blob route rejects path traversal within a mounted repo", async () => {
     const workspace = makeTmpDir();
     gitInit(join(workspace, "repo"));

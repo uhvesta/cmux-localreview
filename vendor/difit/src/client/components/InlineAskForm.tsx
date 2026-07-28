@@ -24,6 +24,8 @@ interface InlineAskFormProps {
   location: InlineAskLocation;
   /** A `/ask question` submitted from the regular inline composer. */
   initialPrompt?: string;
+  /** Clears the one-shot draft in the parent before a remount can replay it. */
+  onInitialPromptSent?: () => void;
   /** An answer reaches formal review only through this explicit callback. */
   onConvertToReviewComment: (body: string) => Promise<void>;
   onClose: () => void;
@@ -38,7 +40,7 @@ function label(location: InlineAskLocation): string {
  * /api/ask; no queue feedback/export path reads these messages.  Converting a
  * specific answer is an affirmative, one-way action by the reviewer.
  */
-export function InlineAskForm({ location, initialPrompt, onConvertToReviewComment, onClose }: InlineAskFormProps) {
+export function InlineAskForm({ location, initialPrompt, onInitialPromptSent, onConvertToReviewComment, onClose }: InlineAskFormProps) {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<AskMessage[]>([]);
   const [prompt, setPrompt] = useState('');
@@ -142,8 +144,11 @@ export function InlineAskForm({ location, initialPrompt, onConvertToReviewCommen
     const key = `${conversationId}\u0000${text}`;
     if (sentInitialPrompts.current.has(key)) return;
     sentInitialPrompts.current.add(key);
+    // The question belongs to this initial send only. Persisted transcripts
+    // are restored on later opens, but must never replay an old turn.
+    onInitialPromptSent?.();
     void send(text);
-  }, [conversationId, initialPrompt, status]);
+  }, [conversationId, initialPrompt, onInitialPromptSent, status]);
 
   const convert = async (message: AskMessage) => {
     if (!message.body.trim()) return;

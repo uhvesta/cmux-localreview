@@ -279,6 +279,9 @@ function App() {
     commentsContextKey !== null && commentsContextKey === bootstrappedCommentsKey;
   const bootstrappingCommentsKeyRef = useRef<string | null>(null);
   const skipNextCommentSyncRef = useRef(false);
+  // All comment writes share one order. In particular, resolving a stale
+  // thread cannot race an earlier full-snapshot save and be resurrected.
+  const commentWriteChainRef = useRef<Promise<void>>(Promise.resolve());
   // Last server comment version seen; echoed back as baseVersion so the server can detect concurrent writes.
   const serverCommentVersionRef = useRef<number | null>(null);
   const pendingBootstrapAfterLocalResetRef = useRef(false);
@@ -306,35 +309,50 @@ function App() {
   }, [getCommentApiUrl]);
 
   const syncThreadsToServer = useCallback(
-    async (nextThreads: DiffCommentThread[]) => {
-      const response = await fetch(getCommentApiUrl('/api/comments'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          threads: nextThreads,
-          baseVersion: serverCommentVersionRef.current ?? undefined,
-        }),
+    (nextThreads: DiffCommentThread[]) => {
+      const operation = commentWriteChainRef.current.catch(() => undefined).then(async () => {
+        const response = await fetch(getCommentApiUrl('/api/comments'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            threads: nextThreads,
+            baseVersion: serverCommentVersionRef.current ?? undefined,
+          }),
+        });
+        const result = (await response.json().catch(() => ({}))) as {
+          version?: number;
+          merged?: boolean;
+          threads?: DiffCommentThread[];
+        };
+        if (typeof result.version === 'number') serverCommentVersionRef.current = result.version;
+        if (!response.ok && !result.merged) throw new Error(`Failed to save comments: ${response.status}`);
+        // A conflict is deliberate: adopt the canonical server list instead
+        // of retrying the stale snapshot that would revive removed comments.
+        if (result.merged && Array.isArray(result.threads)) {
+          skipNextCommentSyncRef.current = true;
+          replaceThreads(result.threads);
+        }
       });
-      if (!response.ok) {
-        return;
-      }
-
-      const result = (await response.json()) as {
-        version?: number;
-        merged?: boolean;
-        threads?: DiffCommentThread[];
-      };
-      if (typeof result.version === 'number') {
-        serverCommentVersionRef.current = result.version;
-      }
-      // Server merged in a concurrent change; adopt it so we don't push a stale set back.
-      if (result.merged && Array.isArray(result.threads)) {
-        skipNextCommentSyncRef.current = true;
-        replaceThreads(result.threads);
-      }
+      commentWriteChainRef.current = operation.catch(() => undefined);
+      return operation;
     },
     [getCommentApiUrl, replaceThreads],
   );
+
+  const handleRemoveThread = useCallback((threadId: string) => {
+    // Optimistic removal makes resolving stale comments immediate. The direct
+    // DELETE is serialized with snapshot saves and is authoritative on disk.
+    removeThread(threadId);
+    const operation = commentWriteChainRef.current.catch(() => undefined).then(async () => {
+      const response = await fetch(getCommentApiUrl(`/api/comments/${encodeURIComponent(threadId)}`), { method: 'DELETE' });
+      if (response.status === 404) return; // It was only a local draft.
+      const result = (await response.json().catch(() => ({}))) as { version?: number };
+      if (!response.ok) throw new Error(`Failed to resolve comment: ${response.status}`);
+      if (typeof result.version === 'number') serverCommentVersionRef.current = result.version;
+    });
+    commentWriteChainRef.current = operation.catch(() => undefined);
+    void operation.catch((error) => console.error('Failed to resolve comment:', error));
+  }, [getCommentApiUrl, removeThread]);
 
   // Viewed files management
   const {
@@ -1618,7 +1636,7 @@ function App() {
                       onToggleAllCollapsed={toggleAllFilesCollapsed}
                       onAddComment={handleAddComment}
                       onGenerateThreadPrompt={handleGenerateThreadPrompt}
-                      onRemoveThread={removeThread}
+                      onRemoveThread={handleRemoveThread}
                       onReplyToThread={handleReplyToThread}
                       onRemoveMessage={removeMessage}
                       onUpdateMessage={updateMessage}
@@ -1699,7 +1717,7 @@ function App() {
           onNavigate={handleNavigateToComment}
           comments={normalizedThreads}
           showAuthorBadges={showAuthorBadges}
-          onRemoveThread={removeThread}
+          onRemoveThread={handleRemoveThread}
           onGenerateThreadPrompt={handleGenerateThreadPrompt}
           onReplyToThread={handleReplyToThread}
           onRemoveMessage={removeMessage}

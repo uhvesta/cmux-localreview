@@ -878,6 +878,7 @@ export function SideBySideDiffChunk({
                             {askingSelection && commentingLine && (
                               <InlineAskForm
                                 initialPrompt={initialAskPrompt}
+                                onInitialPromptSent={() => setInitialAskPrompt(undefined)}
                                 location={{
                                   repoId: getApiBase().split('/').pop(),
                                   filePath: filename ?? '',

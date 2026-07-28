@@ -150,6 +150,19 @@ export function createCommentsRouter(deps: CommentsRouterDeps): Router {
   router.post("/api/comments", async (req, res) => {
     try {
       const sessionId = deps.getSessionId();
+      const requestedBaseVersion = typeof req.body?.baseVersion === "number" ? req.body.baseVersion : undefined;
+      // Whole-thread snapshots are convenient for the diff client, but a
+      // late save from another tab must never resurrect a thread the reviewer
+      // has just resolved. The client will adopt this canonical response.
+      if (requestedBaseVersion !== undefined && requestedBaseVersion !== version) {
+        res.status(409).json({
+          error: "Comments changed in another request; refresh the local state.",
+          merged: true,
+          version,
+          threads: await refreshedThreads(),
+        });
+        return;
+      }
       const nextThreads = parseThreadsPayload(req.body);
       const existingIds = new Set(listThreads(deps.db, sessionId, deps.repoDbId).map((t) => t.id));
       const nextIds = new Set(nextThreads.map((t) => t.id));

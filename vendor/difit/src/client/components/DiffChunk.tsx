@@ -585,6 +585,7 @@ export const DiffChunk = memo(function DiffChunk({
                             {askingSelection && commentingLine && (
                               <InlineAskForm
                                 initialPrompt={initialAskPrompt}
+                                onInitialPromptSent={() => setInitialAskPrompt(undefined)}
                                 location={{
                                   repoId: getApiBase().split('/').pop(),
                                   filePath: filename ?? '',
