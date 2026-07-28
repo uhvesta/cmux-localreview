@@ -31,6 +31,10 @@ Done:
 - The capture is repeatable: two consecutive runs produce byte-identical
   `http.json`; UUIDs, hashes, temporary paths, timestamps, and snapshot
   bundle names are normalized while response field presence is retained.
+- Added a separate, repeatable remote-PR corpus using a disposable bare Git
+  remote plus synthetic GitHub App/API responses. It covers successful remote
+  queueing, retained snapshot metadata, cache/worktree status, opening, and
+  safe cleanup without touching GitHub or the user's cache.
 - Fixed the Go developer build contract by generating a real Go module vendor
   tree alongside the existing `vendor/difit` and `vendor/cmux-hub` UI sources;
   plain `go build ./...` and `go test ./...` now work without a hidden

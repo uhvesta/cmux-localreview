@@ -1,0 +1,428 @@
+{
+  "version": 1,
+  "source": "ts-final",
+  "generatedBy": "scripts/capture-remote-parity-fixtures.ts",
+  "fixtures": [
+    {
+      "name": "configure_read",
+      "request": {
+        "method": "POST",
+        "path": "/api/github/auth/configure",
+        "body": {
+          "capability": "read",
+          "clientId": "Iv1.remoteFixture"
+        }
+      },
+      "response": {
+        "status": 204,
+        "contentType": null,
+        "body": ""
+      }
+    },
+    {
+      "name": "start_read",
+      "request": {
+        "method": "POST",
+        "path": "/api/github/auth/read/start",
+        "body": {}
+      },
+      "response": {
+        "status": 202,
+        "contentType": "application/json; charset=utf-8",
+        "body": {
+          "userCode": "REMOTE-123",
+          "verificationUri": "https://github.com/login/device"
+        }
+      }
+    },
+    {
+      "name": "poll_read",
+      "request": {
+        "method": "POST",
+        "path": "/api/github/auth/read/poll",
+        "body": {}
+      },
+      "response": {
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "body": {
+          "configured": true,
+          "authenticated": true,
+          "loginState": "succeeded",
+          "message": "Connected as @remote-fixture.",
+          "login": "remote-fixture"
+        }
+      }
+    },
+    {
+      "name": "queue_remote_pr",
+      "request": {
+        "method": "POST",
+        "path": "/api/queue",
+        "body": {
+          "remoteUrl": "https://github.com/fixture/repository/pull/42",
+          "title": "Fixture remote PR"
+        }
+      },
+      "response": {
+        "status": 201,
+        "contentType": "application/json; charset=utf-8",
+        "body": {
+          "item": {
+            "id": "<uuid>",
+            "title": "Fixture remote PR",
+            "body": "",
+            "workspacePath": "<fixture-root>/cache/worktrees/997c5f732ca0e385ce3c70d52bc83e0c9d89993f3f304af29ab426c4738f6d92/pr-42/<sha>",
+            "kind": "remote",
+            "remoteUrl": "https://github.com/fixture/repository/pull/42",
+            "status": "queued",
+            "position": 1,
+            "agentId": null,
+            "agentProvider": null,
+            "copilotSessionId": null,
+            "acpHost": null,
+            "acpPort": null,
+            "acpSessionId": null,
+            "agentKind": null,
+            "acpState": "unavailable",
+            "acpLastError": null,
+            "acpUpdatedAt": null,
+            "snapshotManifestPath": "<fixture-root>/data/artifacts/snapshots/<uuid>/manifest.json",
+            "snapshotManifest": {
+              "version": 1,
+              "id": "<uuid>",
+              "workspacePath": "<fixture-root>/cache/worktrees/997c5f732ca0e385ce3c70d52bc83e0c9d89993f3f304af29ab426c4738f6d92/pr-42/<sha>",
+              "provenance": {
+                "version": 1,
+                "workspacePath": "<fixture-root>/cache/worktrees/997c5f732ca0e385ce3c70d52bc83e0c9d89993f3f304af29ab426c4738f6d92/pr-42/<sha>",
+                "caller": {
+                  "cwd": "/Users/avestabarzegar/agentmax/cmux-localreview",
+                  "cmuxSurfaceId": null,
+                  "cmuxWorkspaceId": null
+                },
+                "cmux": {
+                  "available": false,
+                  "surfaces": [],
+                  "error": "connect ENOENT /Users/avestabarzegar/.local/state/cmux/cmux.sock"
+                }
+              },
+              "repos": [
+                {
+                  "workspaceRelativePath": ".",
+                  "sourcePath": "<fixture-root>/cache/worktrees/997c5f732ca0e385ce3c70d52bc83e0c9d89993f3f304af29ab426c4738f6d92/pr-42/<sha>",
+                  "baseSha": "<sha>",
+                  "snapshotSha": "<sha>",
+                  "bundle": "<bundle>",
+                  "bundleSha256": "<hash>"
+                }
+              ],
+              "remotePullRequest": {
+                "url": "https://github.com/fixture/repository/pull/42",
+                "number": 42,
+                "title": "Fixture remote PR",
+                "body": "",
+                "state": "OPEN",
+                "isDraft": false,
+                "repository": "fixture/repository",
+                "repositoryUrl": "<fixture-root>/remote.git",
+                "headRefName": "fixture",
+                "headSha": "<sha>",
+                "baseRefName": "main",
+                "baseSha": "<sha>"
+              },
+              "remoteWorkspace": {
+                "mirrorPath": "<fixture-root>/cache/mirrors/997c5f732ca0e385ce3c70d52bc83e0c9d89993f3f304af29ab426c4738f6d92.git",
+                "worktreePath": "<fixture-root>/cache/worktrees/997c5f732ca0e385ce3c70d52bc83e0c9d89993f3f304af29ab426c4738f6d92/pr-42/<sha>"
+              }
+            },
+            "feedbackTarget": null,
+            "baseRef": "<sha>",
+            "provenance": {
+              "version": 1,
+              "workspacePath": "<fixture-root>/cache/worktrees/997c5f732ca0e385ce3c70d52bc83e0c9d89993f3f304af29ab426c4738f6d92/pr-42/<sha>",
+              "caller": {
+                "cwd": "/Users/avestabarzegar/agentmax/cmux-localreview",
+                "cmuxSurfaceId": null,
+                "cmuxWorkspaceId": null
+              },
+              "cmux": {
+                "available": false,
+                "surfaces": [],
+                "error": "connect ENOENT /Users/avestabarzegar/.local/state/cmux/cmux.sock"
+              }
+            },
+            "sourceFingerprint": "<hash>",
+            "supersedesId": null,
+            "identityKey": "pr:github.com/fixture/repository/pull/42",
+            "reviewTopic": null,
+            "removedReason": null,
+            "decisionBody": null
+          },
+          "created": true,
+          "headChanged": false
+        }
+      }
+    },
+    {
+      "name": "remote_status",
+      "request": {
+        "method": "GET",
+        "path": "/api/queue/<uuid>/remote-status"
+      },
+      "response": {
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "body": {
+          "pullRequest": {
+            "url": "https://github.com/fixture/repository/pull/42",
+            "number": 42,
+            "title": "Fixture remote PR",
+            "body": "",
+            "state": "OPEN",
+            "isDraft": false,
+            "repository": "fixture/repository",
+            "repositoryUrl": "<fixture-root>/remote.git",
+            "headRefName": "fixture",
+            "headSha": "<sha>",
+            "baseRefName": "main",
+            "baseSha": "<sha>"
+          },
+          "cache": {
+            "mirrorPath": "<fixture-root>/cache/mirrors/997c5f732ca0e385ce3c70d52bc83e0c9d89993f3f304af29ab426c4738f6d92.git",
+            "mirrorPresent": true,
+            "worktreePath": "<fixture-root>/cache/worktrees/997c5f732ca0e385ce3c70d52bc83e0c9d89993f3f304af29ab426c4738f6d92/pr-42/<sha>",
+            "worktreePresent": true
+          },
+          "recovery": {
+            "refresh": "POST /api/queue/<uuid>/refresh",
+            "cleanup": "POST /api/queue/<uuid>/cleanup",
+            "reAdd": "POST /api/queue with { remoteUrl: \"https://github.com/fixture/repository/pull/42\" }"
+          }
+        }
+      }
+    },
+    {
+      "name": "open_remote",
+      "request": {
+        "method": "POST",
+        "path": "/api/queue/<uuid>/open",
+        "body": {}
+      },
+      "response": {
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "body": {
+          "item": {
+            "id": "<uuid>",
+            "title": "Fixture remote PR",
+            "body": "",
+            "workspacePath": "<fixture-root>/cache/worktrees/997c5f732ca0e385ce3c70d52bc83e0c9d89993f3f304af29ab426c4738f6d92/pr-42/<sha>",
+            "kind": "remote",
+            "remoteUrl": "https://github.com/fixture/repository/pull/42",
+            "status": "in_review",
+            "position": 1,
+            "agentId": null,
+            "agentProvider": null,
+            "copilotSessionId": null,
+            "acpHost": null,
+            "acpPort": null,
+            "acpSessionId": null,
+            "agentKind": null,
+            "acpState": "unavailable",
+            "acpLastError": null,
+            "acpUpdatedAt": null,
+            "snapshotManifestPath": "<fixture-root>/data/artifacts/snapshots/<uuid>/manifest.json",
+            "snapshotManifest": {
+              "version": 1,
+              "id": "<uuid>",
+              "workspacePath": "<fixture-root>/cache/worktrees/997c5f732ca0e385ce3c70d52bc83e0c9d89993f3f304af29ab426c4738f6d92/pr-42/<sha>",
+              "provenance": {
+                "version": 1,
+                "workspacePath": "<fixture-root>/cache/worktrees/997c5f732ca0e385ce3c70d52bc83e0c9d89993f3f304af29ab426c4738f6d92/pr-42/<sha>",
+                "caller": {
+                  "cwd": "/Users/avestabarzegar/agentmax/cmux-localreview",
+                  "cmuxSurfaceId": null,
+                  "cmuxWorkspaceId": null
+                },
+                "cmux": {
+                  "available": false,
+                  "surfaces": [],
+                  "error": "connect ENOENT /Users/avestabarzegar/.local/state/cmux/cmux.sock"
+                }
+              },
+              "repos": [
+                {
+                  "workspaceRelativePath": ".",
+                  "sourcePath": "<fixture-root>/cache/worktrees/997c5f732ca0e385ce3c70d52bc83e0c9d89993f3f304af29ab426c4738f6d92/pr-42/<sha>",
+                  "baseSha": "<sha>",
+                  "snapshotSha": "<sha>",
+                  "bundle": "<bundle>",
+                  "bundleSha256": "<hash>"
+                }
+              ],
+              "remotePullRequest": {
+                "url": "https://github.com/fixture/repository/pull/42",
+                "number": 42,
+                "title": "Fixture remote PR",
+                "body": "",
+                "state": "OPEN",
+                "isDraft": false,
+                "repository": "fixture/repository",
+                "repositoryUrl": "<fixture-root>/remote.git",
+                "headRefName": "fixture",
+                "headSha": "<sha>",
+                "baseRefName": "main",
+                "baseSha": "<sha>"
+              },
+              "remoteWorkspace": {
+                "mirrorPath": "<fixture-root>/cache/mirrors/997c5f732ca0e385ce3c70d52bc83e0c9d89993f3f304af29ab426c4738f6d92.git",
+                "worktreePath": "<fixture-root>/cache/worktrees/997c5f732ca0e385ce3c70d52bc83e0c9d89993f3f304af29ab426c4738f6d92/pr-42/<sha>"
+              }
+            },
+            "feedbackTarget": null,
+            "baseRef": "<sha>",
+            "provenance": {
+              "version": 1,
+              "workspacePath": "<fixture-root>/cache/worktrees/997c5f732ca0e385ce3c70d52bc83e0c9d89993f3f304af29ab426c4738f6d92/pr-42/<sha>",
+              "caller": {
+                "cwd": "/Users/avestabarzegar/agentmax/cmux-localreview",
+                "cmuxSurfaceId": null,
+                "cmuxWorkspaceId": null
+              },
+              "cmux": {
+                "available": false,
+                "surfaces": [],
+                "error": "connect ENOENT /Users/avestabarzegar/.local/state/cmux/cmux.sock"
+              }
+            },
+            "sourceFingerprint": "<hash>",
+            "supersedesId": null,
+            "identityKey": "pr:github.com/fixture/repository/pull/42",
+            "reviewTopic": null,
+            "removedReason": null,
+            "decisionBody": null
+          },
+          "sourceWorkspacePath": "<fixture-root>/cache/worktrees/997c5f732ca0e385ce3c70d52bc83e0c9d89993f3f304af29ab426c4738f6d92/pr-42/<sha>",
+          "workspacePath": "<fixture-root>/cache/worktrees/997c5f732ca0e385ce3c70d52bc83e0c9d89993f3f304af29ab426c4738f6d92/pr-42/<sha>",
+          "repos": [
+            {
+              "id": "<short-id>",
+              "path": "."
+            }
+          ],
+          "reviewUrl": "/review?queueItem=<uuid>"
+        }
+      }
+    },
+    {
+      "name": "cleanup_remote",
+      "request": {
+        "method": "POST",
+        "path": "/api/queue/<uuid>/cleanup",
+        "body": {
+          "removeMirror": true
+        }
+      },
+      "response": {
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "body": {
+          "item": {
+            "id": "<uuid>",
+            "title": "Fixture remote PR",
+            "body": "",
+            "workspacePath": "<fixture-root>/cache/worktrees/997c5f732ca0e385ce3c70d52bc83e0c9d89993f3f304af29ab426c4738f6d92/pr-42/<sha>",
+            "kind": "remote",
+            "remoteUrl": "https://github.com/fixture/repository/pull/42",
+            "status": "in_review",
+            "position": 1,
+            "agentId": null,
+            "agentProvider": null,
+            "copilotSessionId": null,
+            "acpHost": null,
+            "acpPort": null,
+            "acpSessionId": null,
+            "agentKind": null,
+            "acpState": "unavailable",
+            "acpLastError": null,
+            "acpUpdatedAt": null,
+            "snapshotManifestPath": "<fixture-root>/data/artifacts/snapshots/<uuid>/manifest.json",
+            "snapshotManifest": {
+              "version": 1,
+              "id": "<uuid>",
+              "workspacePath": "<fixture-root>/cache/worktrees/997c5f732ca0e385ce3c70d52bc83e0c9d89993f3f304af29ab426c4738f6d92/pr-42/<sha>",
+              "provenance": {
+                "version": 1,
+                "workspacePath": "<fixture-root>/cache/worktrees/997c5f732ca0e385ce3c70d52bc83e0c9d89993f3f304af29ab426c4738f6d92/pr-42/<sha>",
+                "caller": {
+                  "cwd": "/Users/avestabarzegar/agentmax/cmux-localreview",
+                  "cmuxSurfaceId": null,
+                  "cmuxWorkspaceId": null
+                },
+                "cmux": {
+                  "available": false,
+                  "surfaces": [],
+                  "error": "connect ENOENT /Users/avestabarzegar/.local/state/cmux/cmux.sock"
+                }
+              },
+              "repos": [
+                {
+                  "workspaceRelativePath": ".",
+                  "sourcePath": "<fixture-root>/cache/worktrees/997c5f732ca0e385ce3c70d52bc83e0c9d89993f3f304af29ab426c4738f6d92/pr-42/<sha>",
+                  "baseSha": "<sha>",
+                  "snapshotSha": "<sha>",
+                  "bundle": "<bundle>",
+                  "bundleSha256": "<hash>"
+                }
+              ],
+              "remotePullRequest": {
+                "url": "https://github.com/fixture/repository/pull/42",
+                "number": 42,
+                "title": "Fixture remote PR",
+                "body": "",
+                "state": "OPEN",
+                "isDraft": false,
+                "repository": "fixture/repository",
+                "repositoryUrl": "<fixture-root>/remote.git",
+                "headRefName": "fixture",
+                "headSha": "<sha>",
+                "baseRefName": "main",
+                "baseSha": "<sha>"
+              },
+              "remoteWorkspace": {
+                "mirrorPath": "<fixture-root>/cache/mirrors/997c5f732ca0e385ce3c70d52bc83e0c9d89993f3f304af29ab426c4738f6d92.git",
+                "worktreePath": "<fixture-root>/cache/worktrees/997c5f732ca0e385ce3c70d52bc83e0c9d89993f3f304af29ab426c4738f6d92/pr-42/<sha>"
+              }
+            },
+            "feedbackTarget": null,
+            "baseRef": "<sha>",
+            "provenance": {
+              "version": 1,
+              "workspacePath": "<fixture-root>/cache/worktrees/997c5f732ca0e385ce3c70d52bc83e0c9d89993f3f304af29ab426c4738f6d92/pr-42/<sha>",
+              "caller": {
+                "cwd": "/Users/avestabarzegar/agentmax/cmux-localreview",
+                "cmuxSurfaceId": null,
+                "cmuxWorkspaceId": null
+              },
+              "cmux": {
+                "available": false,
+                "surfaces": [],
+                "error": "connect ENOENT /Users/avestabarzegar/.local/state/cmux/cmux.sock"
+              }
+            },
+            "sourceFingerprint": "<hash>",
+            "supersedesId": null,
+            "identityKey": "pr:github.com/fixture/repository/pull/42",
+            "reviewTopic": null,
+            "removedReason": null,
+            "decisionBody": null
+          },
+          "cleanup": {
+            "worktreeRemoved": true,
+            "mirrorRemoved": true
+          }
+        }
+      }
+    }
+  ]
+}
