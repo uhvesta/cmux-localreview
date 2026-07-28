@@ -84,6 +84,12 @@ func TestParseHunkPlanRejectsNonStructuredOrUnknownFields(t *testing.T) {
 	if _, err := parseHunkPlan("this is not JSON"); err == nil {
 		t.Fatal("non JSON output was accepted")
 	}
+	if _, err := parseHunkPlan(`{"entries":[],"questions":[]} {"entries":[],"questions":[]}`); err == nil {
+		t.Fatal("a second JSON document was accepted")
+	}
+	if _, err := parseHunkPlan("```json\n{\"entries\":[],\"questions\":[]}\n```"); err == nil {
+		t.Fatal("markdown-wrapped JSON was accepted despite the strict output contract")
+	}
 }
 
 func hunkPlanCalls(mu *sync.Mutex, calls *int) int { mu.Lock(); defer mu.Unlock(); return *calls }

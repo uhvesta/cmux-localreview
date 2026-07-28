@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -295,18 +296,17 @@ func hunkPlanPrompt(request hunkorder.Request) string {
 
 func parseHunkPlan(raw string) (hunkorder.Result, error) {
 	raw = strings.TrimSpace(raw)
-	if strings.HasPrefix(raw, "```") {
-		raw = strings.TrimSpace(strings.TrimPrefix(raw, "```json"))
-		raw = strings.TrimSpace(strings.TrimPrefix(raw, "```"))
-		raw = strings.TrimSpace(strings.TrimSuffix(raw, "```"))
-	}
 	decoder := json.NewDecoder(strings.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	var result hunkorder.Result
 	if err := decoder.Decode(&result); err != nil {
 		return hunkorder.Result{}, fmt.Errorf("Copilot did not return a valid structured review plan: %w", err)
 	}
-	if decoder.More() {
+	// Decoder.More only detects more values inside an array or object. A plan
+	// must be exactly one JSON object, so consume once more and require EOF to
+	// reject a second document or any non-whitespace trailing data.
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return hunkorder.Result{}, errors.New("Copilot returned trailing data after the structured review plan")
 	}
 	return result, nil
