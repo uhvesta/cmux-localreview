@@ -2,12 +2,14 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "daemon",
-    srcs = ["ask.go", "daemon.go"],
+    srcs = ["ask.go", "ask_runtime.go", "comment_imports.go", "daemon.go"],
     importpath = "github.com/uhvesta/cmux-localreview/internal/daemon",
     visibility = ["//visibility:public"],
     deps = [
         "//internal/agent",
         "//internal/ask",
+		"//internal/askruntime",
+		"//internal/copilot",
         "//internal/gitdiff",
         "//internal/githubauth",
         "//internal/queue",
@@ -19,6 +21,10 @@ go_library(
 
 go_test(
     name = "daemon_test",
-    srcs = ["ask_test.go", "daemon_test.go"],
+    srcs = ["ask_runtime_test.go", "ask_test.go", "daemon_test.go"],
     embed = [":daemon"],
+	deps = [
+		"//internal/askruntime",
+		"//internal/copilot",
+	],
 )

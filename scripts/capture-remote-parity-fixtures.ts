@@ -7,7 +7,14 @@ import { join } from "node:path";
 
 type Fixture = { name: string; request: { method: string; path: string; body?: unknown }; response: { status: number; contentType: string | null; body: unknown } };
 const root = mkdtempSync(join(tmpdir(), "cmux-localreview-remote-parity-"));
-const output = join(import.meta.dir, "..", "testdata", "parity", "ts-final", "remote-pr.json");
+function outputPath(defaultPath: string): string {
+  const index = process.argv.indexOf("--output");
+  if (index < 0) return defaultPath;
+  const value = process.argv[index + 1];
+  if (!value || process.argv[index + 2] === "--output") throw new Error("--output requires a file path");
+  return value;
+}
+const output = outputPath(join(import.meta.dir, "..", "testdata", "parity", "ts-final", "remote-pr.json"));
 const token = "remote-parity-capability";
 process.env.CMUX_LOCALREVIEW_DATA_DIR = join(root, "data");
 process.env.CMUX_LOCALREVIEW_CACHE_DIR = join(root, "cache");

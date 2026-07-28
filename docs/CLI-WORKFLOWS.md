@@ -46,6 +46,24 @@ loopback bearer capability. `localreview open` places it only in the URL
 fragment; the UI exchanges it for an HttpOnly, SameSite=Strict local cookie.
 Do not copy that URL or token into tickets, logs, or prompts.
 
+## Desktop shell (optional)
+
+The Electron shell has no API or credential logic: it starts the same Go
+daemon as a sidecar, passes its PID as a watchdog parent, waits for loopback
+health, and opens Queue Home. If Electron crashes, `localreviewd` exits within
+one polling interval; normal quit also sends it `SIGTERM`.
+
+```sh
+bazel build //cmd/localreviewd:localreviewd
+cd desktop
+npm install
+LOCALREVIEWD_PATH="$PWD/../bazel-bin/cmd/localreviewd/localreviewd" npm run dev
+```
+
+The packaged application bundles `localreviewd` as an Electron resource. The
+browser UI receives the daemon capability only in a URL fragment and trades it
+for the same local HttpOnly cookie described above.
+
 ## Install Copilot project skills
 
 Run this once per project, then again after upgrading localreview:

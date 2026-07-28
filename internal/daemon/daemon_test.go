@@ -627,6 +627,23 @@ func TestWorkspaceActivationDiscoversNestedRepositories(t *testing.T) {
 	}
 }
 
+func TestCommentImportValidationAndStableGeneratedID(t *testing.T) {
+	entry := commentImport{Type: "thread", FilePath: "pkg/example.go", Body: "looks risky", Author: "octo"}
+	entry.Position.Side = "new"
+	entry.Position.Line = json.RawMessage(`{"start":4,"end":6}`)
+	start, end, err := validateImport(entry)
+	if err != nil || start != 4 || end != 6 {
+		t.Fatalf("validated import start=%d end=%d err=%v", start, end, err)
+	}
+	if got, again := importID(entry, start, end), importID(entry, start, end); got == "" || got != again {
+		t.Fatalf("unstable generated import ID %q / %q", got, again)
+	}
+	entry.Position.Side = "invalid"
+	if _, _, err := validateImport(entry); err == nil {
+		t.Fatal("invalid side accepted")
+	}
+}
+
 func TestGeneratedStatusRecognizesPathAndContentSignals(t *testing.T) {
 	for _, test := range []struct {
 		name, path, contents, source string

@@ -1151,6 +1151,38 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 	// sibling routes (comments/blobs/revisions) are ported independently.
 	if strings.HasPrefix(path, "/repos/") {
 		parts := strings.Split(strings.Trim(path, "/"), "/")
+		if len(parts) == 4 && parts[0] == "repos" && parts[2] == "api" && parts[3] == "comment-imports" && r.Method == http.MethodPost {
+			review, repo, ok := d.reviewContext(parts[1])
+			if !ok {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "Unknown review repository"})
+				return
+			}
+			var raw json.RawMessage
+			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&raw); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid comment import data"})
+				return
+			}
+			var entries []commentImport
+			if len(raw) > 0 && raw[0] == '[' {
+				_ = json.Unmarshal(raw, &entries)
+			} else {
+				var entry commentImport
+				if json.Unmarshal(raw, &entry) == nil {
+					entries = []commentImport{entry}
+				}
+			}
+			if len(entries) == 0 {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid comment import data"})
+				return
+			}
+			changed, warnings, err := d.importComments(&review, repo, entries)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"success": true, "changed": changed > 0, "count": len(entries), "warnings": warnings})
+			return
+		}
 		if len(parts) == 4 && parts[0] == "repos" && parts[2] == "api" && parts[3] == "comments-output" && r.Method == http.MethodGet {
 			// difit's compatibility endpoint intentionally remains empty; formal
 			// feedback is exported only through the explicit workspace-level API.

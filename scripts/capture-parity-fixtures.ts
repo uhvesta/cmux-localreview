@@ -6,7 +6,7 @@
  * descriptions and compare stable response shape/status before a route is
  * considered ported.
  *
- * Run with: bun scripts/capture-parity-fixtures.ts
+ * Run with: bun scripts/capture-parity-fixtures.ts [--output /tmp/http.json]
  */
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -24,7 +24,17 @@ type Fixture = {
   response: { status: number; contentType: string | null; body: unknown };
 };
 
-const output = join(import.meta.dir, "..", "testdata", "parity", "ts-final", "http.json");
+function outputPath(defaultPath: string): string {
+  const index = process.argv.indexOf("--output");
+  if (index < 0) return defaultPath;
+  const value = process.argv[index + 1];
+  if (!value || process.argv[index + 2] === "--output") {
+    throw new Error("--output requires a file path");
+  }
+  return value;
+}
+
+const output = outputPath(join(import.meta.dir, "..", "testdata", "parity", "ts-final", "http.json"));
 const root = mkdtempSync(join(tmpdir(), "cmux-localreview-parity-"));
 const workspace = join(root, "workspace");
 const token = "parity-fixture-capability";
