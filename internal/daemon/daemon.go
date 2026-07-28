@@ -2154,6 +2154,32 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(parts) == 3 && parts[0] == "queue" && r.Method == http.MethodPost {
+		// Opening a queue item is the only transition that needs preparation
+		// outside the queue store. Materialize and activate its immutable source
+		// before changing the durable state so a missing/corrupt snapshot leaves
+		// the item queued and recoverable rather than marooning it in review.
+		var openedWorkspace, openedSource string
+		if parts[2] == "open" {
+			pending, getErr := queueStore.Get(d.db, parts[1])
+			if getErr != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": getErr.Error()})
+				return
+			}
+			if pending == nil {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "Unknown or unavailable queue item"})
+				return
+			}
+			workspace, sourceWorkspace, openErr := d.materializeQueueWorkspace(pending)
+			if openErr != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"error": openErr.Error(), "recovery": "The item remains queued. Restore the retained snapshot or requeue it from its source workspace, then try opening it again."})
+				return
+			}
+			if _, activateErr := d.activateWorkspace(workspace, pending.Title); activateErr != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"error": activateErr.Error(), "recovery": "Retry after fixing the workspace. The queue item remains queued."})
+				return
+			}
+			openedWorkspace, openedSource = workspace, sourceWorkspace
+		}
 		var item *queueStore.Item
 		var err error
 		switch parts[2] {
@@ -2176,15 +2202,6 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if parts[2] == "open" {
-			workspace, sourceWorkspace, openErr := d.materializeQueueWorkspace(item)
-			if openErr != nil {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": openErr.Error()})
-				return
-			}
-			if _, err := d.activateWorkspace(workspace, item.Title); err != nil {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-				return
-			}
 			d.mu.Lock()
 			review := d.review
 			d.mu.Unlock()
@@ -2194,7 +2211,7 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 					repos = append(repos, map[string]string{"id": repo.ID, "path": repo.WorkspaceRelativePath})
 				}
 			}
-			writeJSON(w, http.StatusOK, map[string]any{"item": item, "sourceWorkspacePath": sourceWorkspace, "workspacePath": workspace, "repos": repos, "reviewUrl": "/review?queueItem=" + item.ID})
+			writeJSON(w, http.StatusOK, map[string]any{"item": item, "sourceWorkspacePath": openedSource, "workspacePath": openedWorkspace, "repos": repos, "reviewUrl": "/review?queueItem=" + item.ID})
 			return
 		}
 		if parts[2] == "requeue" {

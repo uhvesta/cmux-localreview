@@ -468,6 +468,47 @@ func TestQueueControlPlaneHTTPContract(t *testing.T) {
 	}
 }
 
+func TestQueueOpenFailureKeepsItemQueuedAndRecoverable(t *testing.T) {
+	dir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d, err := Start(ctx, Options{DataDir: dir, UIDir: filepath.Join(dir, "missing-ui")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	item, created, err := queueStore.Enqueue(d.db, queueStore.EnqueueInput{
+		Title:                "broken retained snapshot",
+		WorkspacePath:        filepath.Join(dir, "unavailable-workspace"),
+		SnapshotManifestPath: filepath.Join(dir, "missing-manifest.json"),
+		SnapshotManifest:     json.RawMessage(`{"id":"missing-snapshot","repos":[]}`),
+	})
+	if err != nil || !created || item == nil {
+		t.Fatalf("enqueue item=%#v created=%v err=%v", item, created, err)
+	}
+	req, err := http.NewRequest(http.MethodPost, "http://127.0.0.1:"+strconv.Itoa(d.Port())+"/api/queue/"+item.ID+"/open", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+d.token)
+	response, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, readErr := io.ReadAll(response.Body)
+	response.Body.Close()
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if response.StatusCode != http.StatusBadRequest || !strings.Contains(string(body), "recovery") || !strings.Contains(string(body), "remains queued") {
+		t.Fatalf("open response=%d body=%s", response.StatusCode, body)
+	}
+	persisted, err := queueStore.Get(d.db, item.ID)
+	if err != nil || persisted == nil || persisted.Status != queueStore.Queued {
+		t.Fatalf("failed open changed durable queue state: item=%#v err=%v", persisted, err)
+	}
+}
+
 // An explicit GitHub App publication first verifies the immutable snapshot
 // head with read authority, then publishes exactly once with write authority,
 // and only then records the local transition.
