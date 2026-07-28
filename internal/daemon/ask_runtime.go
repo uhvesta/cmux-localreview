@@ -32,13 +32,13 @@ func (d *Daemon) askWorkspaceDefaults(ctx context.Context) (*ask.WorkspaceSettin
 }
 
 // GitHubCopilotTokenSource bridges only the dedicated Copilot capability into
-// /ask. Read/write GitHub App credentials are structurally unavailable here.
+// /ask. Read/write GitHub OAuth App credentials are structurally unavailable here.
 // It neither consults gh nor accepts an ambient Copilot CLI login.
 type GitHubCopilotTokenSource struct{ Auth *githubauth.ServiceClient }
 
 func (s GitHubCopilotTokenSource) CopilotToken(ctx context.Context) (string, error) {
 	if s.Auth == nil {
-		return "", errors.New("dedicated Copilot GitHub App is unavailable")
+		return "", errors.New("dedicated Copilot GitHub OAuth App is unavailable")
 	}
 	return s.Auth.Token(ctx, githubauth.Copilot)
 }
@@ -57,7 +57,7 @@ type AskRuntimeFactory struct {
 
 // NewProductionAskRuntimeFactory supplies the daemon's only production /ask
 // transport.  The SDK receives a token exclusively through the dedicated
-// Copilot GitHub App capability; ClientConfig explicitly disables the SDK's
+// Copilot GitHub OAuth App capability; ClientConfig explicitly disables the SDK's
 // logged-in-user discovery, so this never inherits gh or Copilot CLI state.
 //
 // Construction is intentionally inert.  The SDK child process is started

@@ -255,6 +255,14 @@ implementation uses a dedicated **GitHub OAuth App client registration** for
 each capability; it is not a GitHub App installation flow. The native browser
 flow uses PKCE, so setup needs only the public client ID:
 
+Create it under GitHub **Settings → Developer settings → OAuth apps**, not the
+GitHub Apps page. Register exactly `http://127.0.0.1:8787/oauth/callback`.
+GitHub displays a client secret, but localreview deliberately has no way to
+accept or use it: this is a public PKCE flow. Enable Device Flow only if this
+registration will be used on a headless/SSH host. See
+[GitHub OAuth setup](GITHUB-OAUTH-SETUP.md) for the operator checklist and
+recovery table.
+
 ```sh
 localreview auth login --capability copilot --client-id "$COPILOT_APP_CLIENT_ID" --no-wait
 

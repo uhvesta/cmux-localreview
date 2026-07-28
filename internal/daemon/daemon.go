@@ -850,11 +850,11 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 	if path == "/github/auth/configure" && r.Method == http.MethodPost {
 		var input githubauth.ConfigureRequest
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&input); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid GitHub App configuration"})
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid GitHub OAuth App configuration"})
 			return
 		}
 		if _, ok := githubCapability(string(input.Capability)); !ok {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Unknown GitHub App capability"})
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Unknown GitHub OAuth capability"})
 			return
 		}
 		if err := (githubauth.API{Service: d.github}).Configure(r.Context(), input); err != nil {
@@ -869,7 +869,7 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 		if len(parts) == 4 && parts[0] == "github" && parts[1] == "auth" {
 			capability, ok := githubCapability(parts[2])
 			if !ok {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Unknown GitHub App capability"})
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Unknown GitHub OAuth capability"})
 				return
 			}
 			switch {
@@ -917,7 +917,7 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 		if len(parts) == 3 && parts[0] == "github" && parts[1] == "auth" && r.Method == http.MethodDelete {
 			capability, ok := githubCapability(parts[2])
 			if !ok {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Unknown GitHub App capability"})
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Unknown GitHub OAuth capability"})
 				return
 			}
 			if err := (githubauth.API{Service: d.github}).Logout(r.Context(), capability); err != nil {

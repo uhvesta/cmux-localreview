@@ -1,6 +1,6 @@
 // Package githubreview publishes explicit formal reviews through GitHub's
 // Reviews API.  It is deliberately narrowly scoped: callers must provide the
-// separate daemon-owned read and write GitHub App capabilities, and it never
+// separate daemon-owned read and write GitHub OAuth App capabilities, and it never
 // shells out to gh or consults user Git credentials.
 package githubreview
 
@@ -148,7 +148,7 @@ func (c Client) current(ctx context.Context, pr remotepr.PullRequest, readToken 
 // authority for one Reviews API request.
 func (c Client) Publish(ctx context.Context, pr remotepr.PullRequest, decision Decision, summary string, feedback []Feedback, readToken, writeToken string) (Result, error) {
 	if strings.TrimSpace(readToken) == "" || strings.TrimSpace(writeToken) == "" {
-		return Result{}, errors.New("dedicated GitHub App read and write capabilities are required")
+		return Result{}, errors.New("dedicated GitHub OAuth App read and write capabilities are required")
 	}
 	apiEvent, err := event(decision)
 	if err != nil {

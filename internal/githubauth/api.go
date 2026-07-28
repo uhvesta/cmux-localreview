@@ -34,7 +34,7 @@ type StartResponse struct {
 
 func (api API) service() (*ServiceClient, error) {
 	if api.Service == nil {
-		return nil, errors.New("GitHub App authentication is unavailable")
+		return nil, errors.New("GitHub OAuth App authentication is unavailable")
 	}
 	return api.Service, nil
 }

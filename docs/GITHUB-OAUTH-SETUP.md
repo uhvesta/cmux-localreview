@@ -6,7 +6,37 @@ CLI session. The daemon owns every resulting access token in the platform
 secret store; the browser receives only a short-lived loopback capability and
 never receives a GitHub token.
 
-## What to create interactively
+## Create the right kind of registration
+
+Create an **OAuth App**, not a GitHub App. In GitHub, go to **Settings →
+Developer settings → OAuth apps → New OAuth App**. The historic
+`localreview github-app` command name is only a compatibility alias; it does
+not use GitHub App installations, private keys, installation IDs, or GitHub
+App permissions.
+
+For every registration, use a non-sensitive public homepage and set the one
+OAuth App callback URL to exactly:
+
+```text
+http://127.0.0.1:8787/oauth/callback
+```
+
+Use `127.0.0.1` exactly, not `localhost`, an HTTPS URL, a daemon port, or a
+remote host. GitHub OAuth Apps allow one callback URL; localreview deliberately
+uses this stable loopback callback on each desktop machine. The browser and
+daemon must run on the same machine for this flow.
+
+GitHub will show a client secret after registration. **Do not copy it into
+localreview or a shell.** localreview is a public PKCE client: it configures
+and transmits only the public client ID, and has no client-secret input,
+storage, environment-variable, or fallback path. Keep the displayed secret
+out of logs and handoffs; it is not part of localreview setup.
+
+If a registration will be used on a headless/SSH host, enable GitHub's
+**Device Flow** option. Leave it disabled when it will only use browser
+loopback OAuth; GitHub recommends device flow only for constrained clients.
+
+## Capability registrations
 
 For each capability you intend to use, create a dedicated OAuth App
 registration in GitHub. Use separate registrations for:
@@ -33,6 +63,47 @@ For an SSH/headless host, enable Device Flow on that OAuth App registration,
 select **Device code**, and complete the displayed code at GitHub. Device flow
 is a fallback for constrained hosts; use browser OAuth on a normal local
 machine.
+
+The capability split is a local routing and secure-store boundary, not a
+GitHub OAuth permission boundary. Register three different OAuth Apps to
+preserve that boundary. The CLI technically accepts the same public client ID
+more than once, but doing so defeats separate consent/revocation and is not a
+supported operator configuration.
+
+## Fast, token-free setup
+
+For a local `/ask` chat, only configure `copilot`:
+
+```sh
+# Starts the daemon when needed, saves only the public OAuth client ID, opens
+# GitHub consent, and waits for the local loopback callback.
+localreview auth login --capability copilot --client-id YOUR_COPILOT_CLIENT_ID
+
+# Shows configuration/connection state and safe recovery text; never a token.
+localreview auth status
+```
+
+Use `--no-open` to approve in a particular browser profile. The printed URL
+contains short-lived OAuth state (never an access token), so keep it out of
+chat and issue trackers:
+
+```sh
+localreview auth login --capability copilot \
+  --client-id YOUR_COPILOT_CLIENT_ID --no-open
+```
+
+On a remote/headless machine, use device flow instead. It prints a verification
+URL and short-lived user code; complete those in any browser while the command
+polls on the remote host:
+
+```sh
+localreview auth login --capability copilot \
+  --client-id YOUR_COPILOT_CLIENT_ID --device
+```
+
+If you used `--no-wait`, return to the same daemon and run `auth status` after
+approval. Do not start a second login merely because Queue Home was reopened:
+that replaces an in-progress loopback listener for that capability.
 
 ## What still requires your GitHub account
 
@@ -98,6 +169,20 @@ that capability rather than reusing it under a new registration.
 `auth status` reports configuration and connection state only. It never prints
 an access token, refresh token, browser capability, or OAuth callback URL with
 state.
+
+## Recovery and revocation
+
+| Symptom | Safe next action |
+| --- | --- |
+| “configure … OAuth App client ID” | Create or locate the OAuth App under GitHub **OAuth apps**, then rerun `auth login --client-id …`. |
+| `127.0.0.1:8787` is already in use | Stop the conflicting local listener, then retry loopback; or use `--device` on a constrained host. Do not change the callback in only one place. |
+| Consent completed but status is disconnected | Run `localreview auth status` against the same daemon/data directory; if needed, start one new explicit login. Never paste a token. |
+| Device code expired | Start one new `--device` flow and use the new code. Codes expire in roughly 15 minutes. |
+| Wrong account/app or suspected compromise | `localreview auth logout <capability>`, revoke the OAuth App in GitHub's **Authorized OAuth Apps** settings, then configure/connect again. |
+| `/ask` still cannot list models | Confirm only `copilot` is connected, check `copilot --version`, then use `/ask`'s actionable recovery. OAuth success is not proof of Copilot entitlement. |
+
+`logout` deletes only the local OS-secret-store entry. Revocation at GitHub is
+still an operator action, so use both steps when retiring a registration.
 
 ## Scope model and current limitation
 

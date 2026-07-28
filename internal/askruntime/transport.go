@@ -12,7 +12,7 @@ import (
 )
 
 // TokenSource is the daemon-only Copilot credential boundary. Implementations
-// may read the dedicated `copilot` GitHub App capability from the OS secret
+// may read the dedicated `copilot` GitHub OAuth App capability from the OS secret
 // store, but must never fall back to gh, environment tokens, or a logged-in
 // Copilot CLI session.
 type TokenSource interface {

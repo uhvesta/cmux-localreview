@@ -125,6 +125,13 @@ public client ID—no OAuth client secret is accepted, stored, or shipped. Use
 `--device` for a headless or SSH-only host after enabling Device Flow on the
 OAuth App registration.
 
+Create the registration under GitHub **Settings → Developer settings → OAuth
+apps**, not GitHub Apps. GitHub displays a client secret after registration;
+localreview uses PKCE and intentionally has no place to enter, store, or send
+it. Enable Device Flow only for a registration used from a headless/SSH host.
+See [GitHub OAuth setup](GITHUB-OAUTH-SETUP.md) for the exact callback,
+per-capability registrations, and recovery steps.
+
 ```sh
 localreview github-app guide
 localreview github-app configure --capability read --client-id YOUR_CLIENT_ID

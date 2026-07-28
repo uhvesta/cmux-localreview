@@ -9,7 +9,7 @@ import (
 	"sync"
 )
 
-// FileConfigStore persists only public GitHub App client IDs. It must never
+// FileConfigStore persists only public GitHub OAuth App client IDs. It must never
 // gain token fields: credentials belong exclusively in SecretStore.
 type FileConfigStore struct {
 	Path string
@@ -24,18 +24,18 @@ func NewFileConfigStore(path string) *FileConfigStore { return &FileConfigStore{
 
 func (s *FileConfigStore) readLocked() (fileConfig, error) {
 	if strings.TrimSpace(s.Path) == "" {
-		return fileConfig{}, fmt.Errorf("GitHub App configuration path is required")
+		return fileConfig{}, fmt.Errorf("GitHub OAuth App configuration path is required")
 	}
 	data, err := os.ReadFile(s.Path)
 	if os.IsNotExist(err) {
 		return fileConfig{ClientIDs: map[string]string{}}, nil
 	}
 	if err != nil {
-		return fileConfig{}, fmt.Errorf("read GitHub App configuration: %w", err)
+		return fileConfig{}, fmt.Errorf("read GitHub OAuth App configuration: %w", err)
 	}
 	var config fileConfig
 	if err := json.Unmarshal(data, &config); err != nil {
-		return fileConfig{}, fmt.Errorf("parse GitHub App configuration: %w", err)
+		return fileConfig{}, fmt.Errorf("parse GitHub OAuth App configuration: %w", err)
 	}
 	if config.ClientIDs == nil {
 		config.ClientIDs = map[string]string{}
@@ -72,7 +72,7 @@ func (s *FileConfigStore) SetClientID(capability Capability, id string) error {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(s.Path), 0o700); err != nil {
-		return fmt.Errorf("create GitHub App configuration directory: %w", err)
+		return fmt.Errorf("create GitHub OAuth App configuration directory: %w", err)
 	}
 	temporary, err := os.CreateTemp(filepath.Dir(s.Path), ".github-app-*.tmp")
 	if err != nil {
@@ -87,10 +87,10 @@ func (s *FileConfigStore) SetClientID(capability Capability, id string) error {
 		err = closeErr
 	}
 	if err != nil {
-		return fmt.Errorf("write GitHub App configuration: %w", err)
+		return fmt.Errorf("write GitHub OAuth App configuration: %w", err)
 	}
 	if err := os.Rename(temporaryPath, s.Path); err != nil {
-		return fmt.Errorf("replace GitHub App configuration: %w", err)
+		return fmt.Errorf("replace GitHub OAuth App configuration: %w", err)
 	}
 	return nil
 }

@@ -96,7 +96,7 @@ func TestProductionFactoryReportsMissingCopilotAuthBeforeStartingSDK(t *testing.
 		called = true
 		return askruntime.New(nil), nil, nil
 	}
-	if _, _, err := factory.Open(context.Background(), "/workspace"); err == nil || !strings.Contains(err.Error(), "copilot GitHub App is not connected") {
+	if _, _, err := factory.Open(context.Background(), "/workspace"); err == nil || !strings.Contains(err.Error(), "copilot GitHub OAuth App is not connected") {
 		t.Fatalf("Open error=%v, want explicit missing Copilot authentication", err)
 	}
 	if called {

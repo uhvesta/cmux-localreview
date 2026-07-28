@@ -413,8 +413,8 @@ func authCommand(args []string) error {
 		return printDaemonJSON(http.MethodDelete, "/github/auth/"+args[1], nil)
 	case "login":
 		flags := flag.NewFlagSet("auth login", flag.ContinueOnError)
-		capability := flags.String("capability", "copilot", "GitHub App capability: read, write, or copilot")
-		clientID := flags.String("client-id", "", "public GitHub App client ID to configure before login")
+		capability := flags.String("capability", "copilot", "GitHub OAuth capability: read, write, or copilot")
+		clientID := flags.String("client-id", "", "public GitHub OAuth App client ID to configure before login")
 		device := flags.Bool("device", false, "use device OAuth for a headless or SSH-only machine")
 		loopback := flags.Bool("loopback", false, "use the default browser OAuth callback http://127.0.0.1:8787/oauth/callback")
 		noOpen := flags.Bool("no-open", false, "do not launch the browser authorization URL automatically")
@@ -540,7 +540,7 @@ func githubAppCommand(args []string) error {
 		return authCommand([]string{"status"})
 	case "disconnect":
 		flags := flag.NewFlagSet("github-app disconnect", flag.ContinueOnError)
-		capability := flags.String("capability", "", "GitHub App capability: read, write, or copilot")
+		capability := flags.String("capability", "", "GitHub OAuth capability: read, write, or copilot")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -550,8 +550,8 @@ func githubAppCommand(args []string) error {
 		return authCommand([]string{"logout", *capability})
 	case "configure":
 		flags := flag.NewFlagSet("github-app configure", flag.ContinueOnError)
-		capability := flags.String("capability", "", "GitHub App capability: read, write, or copilot")
-		clientID := flags.String("client-id", "", "public GitHub OAuth client ID")
+		capability := flags.String("capability", "", "GitHub OAuth capability: read, write, or copilot")
+		clientID := flags.String("client-id", "", "public GitHub OAuth App client ID")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -561,11 +561,11 @@ func githubAppCommand(args []string) error {
 		if err := configureAuthCapability(*capability, *clientID); err != nil {
 			return err
 		}
-		fmt.Printf("Saved %s GitHub App client ID. Run `localreview github-app connect --capability %s`.\n", *capability, *capability)
+		fmt.Printf("Saved %s GitHub OAuth App client ID. Run `localreview github-app connect --capability %s`.\n", *capability, *capability)
 		return nil
 	case "connect":
 		flags := flag.NewFlagSet("github-app connect", flag.ContinueOnError)
-		capability := flags.String("capability", "", "GitHub App capability: read, write, or copilot")
+		capability := flags.String("capability", "", "GitHub OAuth capability: read, write, or copilot")
 		device := flags.Bool("device", false, "use device OAuth for a headless or SSH-only machine")
 		loopback := flags.Bool("loopback", false, "use the default registered browser OAuth callback http://127.0.0.1:8787/oauth/callback")
 		noOpen := flags.Bool("no-open", false, "print the browser authorization URL without launching it")

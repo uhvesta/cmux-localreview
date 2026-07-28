@@ -1,5 +1,5 @@
 // Package githubauth provides the daemon-only credential boundary for the
-// three deliberately separate cmux-localreview GitHub App capabilities.
+// three deliberately separate cmux-localreview GitHub OAuth App capabilities.
 // It never shells out to gh and never returns a token in a status response.
 package githubauth
 
@@ -157,7 +157,7 @@ func (s *ServiceClient) clientID(c Capability) (string, error) {
 	}
 	id = strings.TrimSpace(id)
 	if id == "" {
-		return "", fmt.Errorf("configure the %s GitHub App client ID before connecting it", c)
+		return "", fmt.Errorf("configure the %s GitHub OAuth App client ID before connecting it", c)
 	}
 	return id, nil
 }
@@ -170,7 +170,7 @@ func (s *ServiceClient) Configure(c Capability, id string) error {
 	}
 	id = strings.TrimSpace(id)
 	if len(id) < 8 {
-		return errors.New("GitHub App client ID looks invalid")
+		return errors.New("GitHub OAuth App client ID looks invalid")
 	}
 	old, _ := s.Config.ClientID(c)
 	if err := s.Config.SetClientID(c, id); err != nil {
@@ -244,7 +244,7 @@ func (s *ServiceClient) Start(ctx context.Context, c Capability) (StartResult, e
 	}
 	s.pending[c] = p
 	s.state[c] = "waiting"
-	s.message[c] = "Complete GitHub authorization in the browser, then return here."
+	s.message[c] = "Complete GitHub OAuth authorization in the browser, then return here."
 	if err := s.Open(uri); err != nil {
 		return StartResult{}, err
 	}
@@ -336,7 +336,7 @@ func (s *ServiceClient) read(c Capability) (Token, error) {
 		return Token{}, err
 	}
 	if raw == "" {
-		return Token{}, fmt.Errorf("the %s GitHub App is not connected", c)
+		return Token{}, fmt.Errorf("the %s GitHub OAuth App is not connected", c)
 	}
 	var t Token
 	if json.Unmarshal([]byte(raw), &t) != nil || t.AccessToken == "" {
@@ -362,13 +362,13 @@ func (s *ServiceClient) Token(ctx context.Context, c Capability) (string, error)
 	}
 	if t.ClientID != "" && t.ClientID != id {
 		_ = s.Secrets.Delete(Service, account(c))
-		return "", fmt.Errorf("the %s GitHub App registration changed; connect it again", c)
+		return "", fmt.Errorf("the %s GitHub OAuth App registration changed; connect it again", c)
 	}
 	if t.ExpiresAt == 0 || t.ExpiresAt > s.Now().Add(time.Minute).UnixMilli() {
 		return t.AccessToken, nil
 	}
 	if t.RefreshToken == "" {
-		return "", fmt.Errorf("the %s GitHub App token expired; connect it again", c)
+		return "", fmt.Errorf("the %s GitHub OAuth App token expired; connect it again", c)
 	}
 	body, code, err := s.request(ctx, s.tokenEndpoint(), url.Values{"client_id": {id}, "grant_type": {"refresh_token"}, "refresh_token": {t.RefreshToken}})
 	if err != nil {
@@ -376,7 +376,7 @@ func (s *ServiceClient) Token(ctx context.Context, c Capability) (string, error)
 	}
 	next := field(body, "access_token")
 	if code < 200 || code > 299 || next == "" {
-		return "", errors.New(message(body, "GitHub App token could not refresh"))
+		return "", errors.New(message(body, "GitHub OAuth App token could not refresh"))
 	}
 	t.AccessToken = next
 	t.RefreshToken = field(body, "refresh_token")
@@ -401,7 +401,7 @@ func (s *ServiceClient) Disconnect(c Capability) error {
 	}
 	delete(s.pending, c)
 	s.state[c] = "idle"
-	s.message[c] = "Disconnected locally. Revoke the App installation in GitHub settings too."
+	s.message[c] = "Disconnected locally. Revoke the OAuth App authorization in GitHub settings too."
 	return nil
 }
 func (s *ServiceClient) Status(ctx context.Context, c Capability) (Status, error) {
