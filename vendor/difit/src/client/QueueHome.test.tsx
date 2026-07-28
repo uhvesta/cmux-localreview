@@ -34,6 +34,35 @@ describe('Queue Home lifecycle recovery', () => {
     await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(4));
   });
 
+  it('preserves the daemon-provided immutable snapshot recovery when opening fails', async () => {
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.includes('/api/github/auth/status')) return Promise.resolve({ ok: true, status: 200, json: async () => ({ provider: 'github-oauth-pkce', capabilities: {
+        read: { configured: false, authenticated: false, loginState: 'idle' },
+        write: { configured: false, authenticated: false, loginState: 'idle' },
+        copilot: { configured: false, authenticated: false, loginState: 'idle' },
+      } }) });
+      if (path.includes('/api/queue/snapshot-1/open')) return Promise.resolve({ ok: false, status: 400, json: async () => ({
+        error: 'The retained snapshot is unavailable.',
+        recovery: 'Restore the retained snapshot or requeue it from its source workspace, then try opening it again.',
+      }) });
+      if (path.includes('/api/queue')) return Promise.resolve({ ok: true, status: 200, json: async () => ({ items: [{
+        id: 'snapshot-1', title: 'Retained snapshot', body: '', workspacePath: '/work/repo', kind: 'local', status: 'queued', position: 1,
+        agentProvider: null, acpState: 'unavailable', acpLastError: null,
+      }] }) });
+      if (path.includes('/api/workspaces')) return Promise.resolve({ ok: true, status: 200, json: async () => ({ activeWorkspace: null }) });
+      if (path.includes('/api/federation/')) return Promise.resolve({ ok: true, status: 200, json: async () => ({ nodes: [] }) });
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({}) });
+    }));
+    render(<QueueHome />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open workspace' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('The retained snapshot is unavailable.');
+    expect(alert.textContent).toContain('Restore the retained snapshot or requeue it from its source workspace');
+    expect(alert.textContent).toContain('The review is still queued');
+  });
+
   it('guides a configured OAuth client through the PKCE browser setup without asking for a secret', async () => {
     const auth = {
       provider: 'github-oauth-pkce',

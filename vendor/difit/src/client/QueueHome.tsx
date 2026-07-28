@@ -65,6 +65,14 @@ interface GitHubAuthStatus {
   capabilities: Record<GitHubCapability, GitHubCapabilityStatus>;
 }
 
+interface DaemonErrorBody {
+  error?: string;
+  // Some operations, notably opening an immutable snapshot, deliberately
+  // return a precise next action. Keep that instruction visible instead of
+  // replacing it with generic daemon diagnostics.
+  recovery?: string;
+}
+
 const capabilityLabels: Record<GitHubCapability, { title: string; description: string }> = {
   read: { title: 'PR read', description: 'Resolve and mirror pull requests for local review.' },
   write: { title: 'PR publish', description: 'Publish explicit approval, changes, or comments.' },
@@ -123,6 +131,7 @@ export function QueueHome() {
   const [federation, setFederation] = useState<FederationQueue[]>([]);
   const [activeWorkspace, setActiveWorkspace] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [errorRecovery, setErrorRecovery] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [opening, setOpening] = useState(false);
   const [remoteUrl, setRemoteUrl] = useState('');
@@ -153,7 +162,7 @@ export function QueueHome() {
 
   useEffect(() => { captureDaemonTokenFromLocation(); }, []);
   const refresh = useCallback(async () => {
-    setLoading(true); setError(null);
+    setLoading(true); setError(null); setErrorRecovery(null);
     try {
       const [queueResponse, workspacesResponse, federationResponse, nodesResponse] = await Promise.all([daemonFetch(`/api/queue${showHistory ? '?history=true' : ''}`), daemonFetch('/api/workspaces'), daemonFetch('/api/federation/queue'), daemonFetch('/api/federation/nodes')]);
       if (!queueResponse.ok || !workspacesResponse.ok) {
@@ -211,7 +220,7 @@ export function QueueHome() {
   const configureGitHubApp = useCallback(async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!githubClientId.trim()) return;
-    setGithubAction(githubCapability); setError(null);
+    setGithubAction(githubCapability); setError(null); setErrorRecovery(null);
     try {
       const response = await daemonFetch('/api/github/auth/configure', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ capability: githubCapability, clientId: githubClientId.trim() }) });
       const body = (await response.json().catch(() => null)) as { error?: string } | null;
@@ -223,7 +232,7 @@ export function QueueHome() {
   }, [githubCapability, githubClientId, refreshGitHubAuth]);
 
   const startGitHubAuth = useCallback(async (capability: GitHubCapability) => {
-    setGithubAction(capability); setError(null);
+    setGithubAction(capability); setError(null); setErrorRecovery(null);
     try {
       const response = await daemonFetch(`/api/github/auth/${capability}/start`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ flow: githubFlow }) });
       const body = (await response.json().catch(() => null)) as { flow?: 'loopback' | 'device'; authorizationUrl?: string; userCode?: string; verificationUri?: string; error?: string } | null;
@@ -251,16 +260,20 @@ export function QueueHome() {
   }, [refreshGitHubAuth]);
 
   const openWorkspace = useCallback(async (item: QueueItem) => {
-    setOpening(true); setError(null);
+    setOpening(true); setError(null); setErrorRecovery(null);
     try {
       const response = await daemonFetch(`/api/queue/${encodeURIComponent(item.id)}/open`, { method: 'POST' });
-      if (!response.ok) { const body = (await response.json().catch(() => null)) as { error?: string } | null; throw new Error(body?.error ?? 'Could not open this workspace.'); }
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as DaemonErrorBody | null;
+        if (body?.recovery) setErrorRecovery(body.recovery);
+        throw new Error(body?.error ?? 'Could not open this workspace.');
+      }
       const body = await response.json() as { reviewUrl?: string };
       window.location.assign(body.reviewUrl ?? `/review?queueItem=${encodeURIComponent(item.id)}`);
     } catch (err) { setError(err instanceof Error ? err.message : 'Could not open this workspace.'); setOpening(false); }
   }, []);
   const openNext = useCallback(async () => {
-    setOpening(true); setError(null);
+    setOpening(true); setError(null); setErrorRecovery(null);
     try { const response = await daemonFetch('/api/queue/open-next', { method: 'POST' }); if (!response.ok) throw new Error('There are no queued reviews to open.'); const body = await response.json() as { reviewUrl?: string }; window.location.assign(body.reviewUrl ?? '/review'); }
     catch (err) { setError(err instanceof Error ? err.message : 'Could not open the next review.'); setOpening(false); }
   }, []);
@@ -274,7 +287,7 @@ export function QueueHome() {
       if (!/^https?:$/.test(parsed.protocol) || !/\/pull\/\d+\/?$/.test(parsed.pathname)) {
         throw new Error('Enter a GitHub pull-request URL, for example https://github.com/owner/repo/pull/123.');
       }
-      setSubmittingRemote(true); setError(null);
+      setSubmittingRemote(true); setError(null); setErrorRecovery(null);
       const response = await daemonFetch('/api/queue', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ remoteUrl: value }),
       });
@@ -299,7 +312,7 @@ export function QueueHome() {
       if (!/^https?:$/.test(parsed.protocol) || !/\/pull\/\d+\/?$/.test(parsed.pathname)) {
         throw new Error('Enter a GitHub pull-request URL, for example https://github.com/owner/repo/pull/123.');
       }
-      setOpeningLocalPR(true); setError(null);
+      setOpeningLocalPR(true); setError(null); setErrorRecovery(null);
       const response = await daemonFetch('/api/local-review/pr', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ remoteUrl: value }),
       });
@@ -317,7 +330,7 @@ export function QueueHome() {
     event.preventDefault();
     const workspacePath = localPath.trim();
     if (!workspacePath) { setError('Enter the local workspace path to snapshot.'); return; }
-    setSubmittingLocal(true); setError(null);
+    setSubmittingLocal(true); setError(null); setErrorRecovery(null);
     try {
       // Local Queue Home submission is an immutable capture, not a bare
       // queue-row insert.  The generic /api/queue route remains available for
@@ -336,7 +349,7 @@ export function QueueHome() {
 
   const removeQueueItem = useCallback(async (item: QueueItem) => {
     if (!window.confirm(`Remove “${item.title}” from the active queue? Its snapshot and decision history stay available only in queue history; resubmitting this topic creates a new review round.`)) return;
-    setError(null);
+    setError(null); setErrorRecovery(null);
     try {
       const response = await daemonFetch(`/api/queue/${encodeURIComponent(item.id)}`, { method: 'DELETE' });
       const body = (await response.json().catch(() => null)) as { error?: string } | null;
@@ -345,7 +358,7 @@ export function QueueHome() {
     } catch (err) { setError(err instanceof Error ? err.message : 'Could not remove this queue item.'); }
   }, [refresh]);
   const requeueItem = useCallback(async (item: QueueItem) => {
-    setError(null);
+    setError(null); setErrorRecovery(null);
     try {
       const response = await daemonFetch(`/api/queue/${encodeURIComponent(item.id)}/requeue`, { method: 'POST' });
       const body = (await response.json().catch(() => null)) as { error?: string } | null;
@@ -361,7 +374,7 @@ export function QueueHome() {
       setError('Give the remote daemon a name, SSH target, port, and the daemon token from that machine.');
       return;
     }
-    setSavingNode(true); setError(null);
+    setSavingNode(true); setError(null); setErrorRecovery(null);
     try {
       const response = await daemonFetch('/api/federation/nodes', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -378,7 +391,7 @@ export function QueueHome() {
   const actOnNode = useCallback(async (node: FederationNode, action: 'connect' | 'disconnect' | 'delete') => {
     const label = node.label || node.sshTarget;
     if (action === 'delete' && !window.confirm(`Remove ${label}? This removes only this machine's saved SSH connection.`)) return;
-    setNodeAction(`${node.id}:${action}`); setError(null);
+    setNodeAction(`${node.id}:${action}`); setError(null); setErrorRecovery(null);
     try {
       const response = await daemonFetch(`/api/federation/nodes/${encodeURIComponent(node.id)}${action === 'delete' ? '' : `/${action}`}`, { method: action === 'delete' ? 'DELETE' : 'POST' });
       const body = (await response.json().catch(() => null)) as { error?: string } | null;
@@ -396,7 +409,7 @@ export function QueueHome() {
       <div><div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', opacity: 0.62 }}>CMUX LOCAL REVIEW</div><h1 style={{ margin: '5px 0 0', fontSize: 28 }}>Queue Home</h1><p style={{ margin: '7px 0 0', opacity: 0.72, fontSize: 13 }}>{activeWorkspace ? <>Active workspace: <code>{activeWorkspace}</code></> : 'No review workspace is open. Select a queue item to begin.'}</p></div>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>{activeWorkspace && <button onClick={() => window.location.assign('/review')} style={buttonStyle}>Current review</button>}<label style={{ fontSize: 12, display: 'flex', gap: 4, alignItems: 'center' }}><input type="checkbox" checked={showHistory} onChange={(event) => setShowHistory(event.target.checked)} /> Show review history</label><button onClick={() => void refresh()} disabled={loading || opening} style={buttonStyle}>{loading ? 'Loading…' : 'Refresh'}</button><button onClick={() => void openNext()} disabled={opening || queuedCount === 0} style={{ ...buttonStyle, borderColor: '#2ea043' }}>Open next ({queuedCount})</button></div>
     </header>
-    {error && <div role="alert" style={{ marginBottom: 16, padding: '10px 12px', borderRadius: 6, color: '#f85149', border: '1px solid rgba(248,81,73,0.5)' }}><div>{error}</div><div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 8 }}><button onClick={() => void refresh()} disabled={loading || opening} style={buttonStyle}>{loading ? 'Retrying…' : 'Retry Queue Home'}</button><span style={{ fontSize: 11, opacity: 0.82 }}>If it persists, run <code>localreview daemon status</code> and then <code>localreview daemon run --port 0</code>.</span></div></div>}
+    {error && <div role="alert" style={{ marginBottom: 16, padding: '10px 12px', borderRadius: 6, color: '#f85149', border: '1px solid rgba(248,81,73,0.5)' }}><div>{error}</div>{errorRecovery && <p style={{ margin: '7px 0 0', color: 'inherit', fontSize: 12 }}>{errorRecovery}</p>}<div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 8 }}><button onClick={() => void refresh()} disabled={loading || opening} style={buttonStyle}>{loading ? 'Retrying…' : 'Retry Queue Home'}</button>{errorRecovery ? <span style={{ fontSize: 11, opacity: 0.82 }}>The review is still queued; fix the retained source, then try opening it again.</span> : <span style={{ fontSize: 11, opacity: 0.82 }}>If it persists, run <code>localreview daemon status</code> and then <code>localreview daemon run --port 0</code>.</span>}</div></div>}
     {authRequired && <form onSubmit={(event) => { event.preventDefault(); if (saveDaemonToken(daemonToken)) { setDaemonToken(''); void refresh(); } }} style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '0 0 16px', padding: 12, border: '1px solid rgba(210,153,34,0.55)', borderRadius: 6 }} aria-label="Connect Queue Home to local daemon">
       <span style={{ fontSize: 12, opacity: 0.82 }}>Paste the daemon token from <code>localreview-open --home</code>:</span>
       <input value={daemonToken} onChange={(event) => setDaemonToken(event.target.value)} type="password" autoComplete="off" aria-label="Daemon bearer token" placeholder="Daemon token" style={{ flex: 1, minWidth: 180, padding: '7px 8px', borderRadius: 5, border: '1px solid rgba(127,127,127,0.45)', background: 'transparent', color: 'inherit' }} />
