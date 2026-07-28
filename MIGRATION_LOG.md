@@ -65,8 +65,35 @@ Decided:
 
 Next:
 
-- Expand the Phase 0 corpus to the remaining frozen routes (full-file/context,
-  comment imports, `/ask` conversation streaming/cancel, `/btw`, remote PR,
-  and authenticated GitHub flows) using hermetic fakes where external network
-  access would otherwise be required. Then add fixture-driven Go parity tests
-  before marking Phase 0 complete.
+- Port the frozen surfaces in focused, independently testable Go increments;
+  each increment must retain repeatable TypeScript fixture capture as a
+  regression check. The remaining high-risk surfaces are `/ask` streaming,
+  GitHub App auth, remote PR lifecycle, and the WebSocket/browser cutover.
+
+## 2026-07-28 — Phase 1: reviewer-file projection slice
+
+Done:
+
+- Ported the reviewer line-count and generated-file-status routes to the Go
+  daemon, including repository-path containment checks and working-tree/ref
+  semantics matching the frozen TypeScript contract.
+- Ported full-file gate projection, so a reviewer can reveal the opposite-side
+  changed lines while retaining the same `afterLine`, hidden line range, and
+  content structure as the frozen full-file response.
+- Matched Go JSON responses to the frozen TypeScript media type
+  (`application/json; charset=utf-8`).
+- Added native endpoint coverage through a real loopback daemon with a nested
+  Git repository plus focused generated-path/generated-header recognition
+  cases.
+
+Validated:
+
+- `go test ./...` passed.
+- `bazel test //...` passed.
+- `bash scripts/verify-parity-fixtures.sh` passed twice internally and
+  confirmed the frozen TypeScript corpus remains deterministic.
+
+Not yet claimed:
+
+- This is one reviewer-file surface, not reviewer E2E parity. Browser and
+  Electron validation remain deferred until the Go HTTP route set is complete.
