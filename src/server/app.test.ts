@@ -131,7 +131,7 @@ describe("buildWorkspaceApp", () => {
     expect(res.status).toBe(400);
   });
 
-  test("export prompt aggregates comments across repos with repo-relative path prefixes", async () => {
+  test("export prompt anchors workspace-relative paths at the review workspace", async () => {
     const workspace = makeTmpDir();
     gitInit(join(workspace, "repo-a"));
     gitInit(join(workspace, "nested", "repo-b"));
@@ -155,6 +155,8 @@ describe("buildWorkspaceApp", () => {
     const promptRes = await fetch(`${baseUrl}/api/export/prompt`);
     const prompt = await promptRes.text();
 
+    expect(prompt).toContain(`Workspace root: ${workspace}`);
+    expect(prompt).toContain("File paths below are relative to this workspace root");
     expect(prompt).toContain("repo-a/a.txt:L1");
     expect(prompt).toContain("nested/repo-b/a.txt:L1");
     expect(prompt).toContain("fix this in A");

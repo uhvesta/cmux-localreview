@@ -8,6 +8,15 @@ export interface RepoThreads {
   threads: DiffCommentThread[];
 }
 
+export interface ExportPromptOptions {
+  /**
+   * Absolute path of the review workspace. It is emitted once as the anchor
+   * for every file location in the prompt; individual locations deliberately
+   * stay portable and are relative to this path.
+   */
+  workspaceRoot: string;
+}
+
 function toLineNumber(line: DiffCommentThread["position"]["line"]): LineNumber {
   return typeof line === "number" ? line : [line.start, line.end];
 }
@@ -32,10 +41,15 @@ function firstLine(line: LineNumber): number {
 
 /**
  * SPEC.md §3: one prompt aggregating every comment across every repo in the
- * workspace, grouped by repo then file, each entry prefixed with
- * `<workspace-relative-repo>/<file>:<line-range>`.
+ * workspace, grouped by repo then file. Every location is relative to the
+ * review workspace rather than to an individual Git repository. The absolute
+ * workspace root is included once so a recipient can resolve root-repo files
+ * (for example `README.md`) just as unambiguously as nested-repo files.
  */
-export function buildExportPrompt(reposWithThreads: RepoThreads[]): string {
+export function buildExportPrompt(
+  reposWithThreads: RepoThreads[],
+  options: ExportPromptOptions,
+): string {
   const allThreads: CommentThread[] = [];
   for (const { repoWorkspaceRelativePath, threads } of reposWithThreads) {
     for (const thread of threads) {
@@ -50,5 +64,11 @@ export function buildExportPrompt(reposWithThreads: RepoThreads[]): string {
     return firstLine(a.line) - firstLine(b.line);
   });
 
-  return allThreads.map((thread) => formatCommentThreadPrompt(thread)).join("\n=====\n");
+  return [
+    "Review feedback",
+    `Workspace root: ${options.workspaceRoot}`,
+    "File paths below are relative to this workspace root (not a repository root).",
+    "",
+    allThreads.map((thread) => formatCommentThreadPrompt(thread)).join("\n=====\n"),
+  ].join("\n");
 }

@@ -150,6 +150,7 @@ export async function buildWorkspaceApp(options: WorkspaceServerOptions): Promis
         repoWorkspaceRelativePath: m.repo.workspaceRelativePath,
         threads: listThreads(db, forSession, m.repoDbId),
       })),
+      { workspaceRoot: options.workspaceRoot },
     );
     res.type("text/plain").send(prompt);
   });
@@ -167,6 +168,7 @@ export async function buildWorkspaceApp(options: WorkspaceServerOptions): Promis
         repoWorkspaceRelativePath: m.repo.workspaceRelativePath,
         threads: listThreads(db, forSession, m.repoDbId),
       })),
+      { workspaceRoot: options.workspaceRoot },
     );
 
     if (destination === "cmux") {
