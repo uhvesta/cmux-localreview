@@ -94,6 +94,14 @@ describe("global daemon authenticated queue lifecycle", () => {
       const opened = await authed("/api/queue/open-next", { method: "POST" });
       expect(opened.status).toBe(200);
       expect((await opened.json() as { item: { status: string } }).item.status).toBe("in_review");
+      // Opening/reopening the reviewer is never an ACP delivery path. The one
+      // prompt above came only from the explicit deliver-feedback request.
+      expect(acp.prompts).toHaveLength(1);
+      const reopened = await authed("/api/workspaces/open", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ workspacePath: workspace }),
+      });
+      expect(reopened.status).toBe(200);
+      expect(acp.prompts).toHaveLength(1);
 
       const requestedChanges = await authed(`/api/queue/${created.item.id}/decision`, {
         method: "POST",

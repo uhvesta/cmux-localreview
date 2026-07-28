@@ -153,6 +153,13 @@ describe("/ask HTTP integration with an injected Copilot boundary", () => {
         conversation: { id: conversation.id }, reused: true, shared: true,
       });
 
+      // Reopening an inline location or restoring its side-chat transcript is
+      // strictly a database read. It must never create a Copilot session or
+      // replay the prior question merely because a reviewer refreshed a page.
+      expect((await fetch(`${baseUrl}/api/ask/conversations/${conversation.id}`)).status).toBe(200);
+      expect((await fetch(`${baseUrl}/api/ask/conversations/${conversation.id}`)).status).toBe(200);
+      expect(sentPrompts).toEqual([]);
+
       const inlineReply = await fetch(`${baseUrl}/api/ask/conversations/${conversation.id}/messages`, {
         method: "POST",
         headers: { "content-type": "application/json" },

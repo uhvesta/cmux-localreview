@@ -488,6 +488,9 @@ export function createAskRouter(options: AskRouterOptions): { router: Router; as
     }
   });
 
+  // Transcript reads are deliberately side-effect-free. In particular, page
+  // reloads, reopening an inline thread, and polling the side panel must not
+  // create/resume a Copilot runtime or replay any prior prompt.
   router.get("/api/ask/conversations/:id", (req, res) => {
     const conversation = getAskConversation(options.db, req.params.id);
     if (!conversation) {
