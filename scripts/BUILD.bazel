@@ -5,4 +5,5 @@ exports_files([
     "stage-ui-assets.sh",
     "run-e2e-copilot-fixture.sh",
     "verify-e2e-copilot-fixture.sh",
+    "verify-release-archives.sh",
 ])

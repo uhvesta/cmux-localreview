@@ -509,3 +509,23 @@ Not yet claimed:
 - This is a browser fixture pass, not real GitHub consent or a real Copilot
   account. The first live account pass requires a user-visible GitHub consent
   page and cannot safely be fabricated by the fixture.
+
+## 2026-07-28 — Release archive structural gate
+
+Done:
+
+- Added `scripts/verify-release-archives.sh`, a native-only structural gate
+  for all four promised v1 archives: darwin/linux × arm64/amd64. It builds
+  `//release:archives` plus checksums, verifies both Go binaries are present
+  under each platform-specific archive root, and verifies every archive digest
+  against the four-line release manifest without executing a foreign binary.
+
+Validated:
+
+- `bash scripts/verify-release-archives.sh` passed locally.
+
+Not yet claimed:
+
+- This validates build payload structure, not platform execution. GitHub
+  Actions still has to install/smoke the matching archive on each OS, and the
+  tagged GitHub Release remains an exit-condition gate.
