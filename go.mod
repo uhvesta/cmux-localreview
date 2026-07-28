@@ -3,12 +3,12 @@ module github.com/uhvesta/cmux-localreview
 go 1.25.0
 
 require (
+	github.com/coder/websocket v1.8.15
 	github.com/github/copilot-sdk/go v1.0.8
 	modernc.org/sqlite v1.54.0
 )
 
 require (
-	github.com/coder/websocket v1.8.15 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/ebitengine/purego v0.10.1 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect

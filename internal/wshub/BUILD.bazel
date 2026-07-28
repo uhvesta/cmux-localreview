@@ -1,0 +1,16 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "wshub",
+    srcs = ["hub.go"],
+    importpath = "github.com/uhvesta/cmux-localreview/internal/wshub",
+    visibility = ["//visibility:public"],
+    deps = ["@com_github_coder_websocket//:websocket"],
+)
+
+go_test(
+    name = "wshub_test",
+    srcs = ["hub_test.go"],
+    embed = [":wshub"],
+    deps = ["@com_github_coder_websocket//:websocket"],
+)

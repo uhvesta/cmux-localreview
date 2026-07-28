@@ -32,6 +32,7 @@ import (
 	queueStore "github.com/uhvesta/cmux-localreview/internal/queue"
 	"github.com/uhvesta/cmux-localreview/internal/store"
 	"github.com/uhvesta/cmux-localreview/internal/webassets"
+	"github.com/uhvesta/cmux-localreview/internal/wshub"
 )
 
 const Version = "0.3.0-go-migration"
@@ -61,6 +62,7 @@ type Daemon struct {
 	db       *sql.DB
 	review   *workspaceReview
 	github   *githubauth.ServiceClient
+	ws       *wshub.Hub
 }
 
 func browserOpener(rawURL string) error {
@@ -1701,13 +1703,14 @@ func Start(ctx context.Context, options Options) (*Daemon, error) {
 		}
 		github = githubauth.New(secrets, githubauth.NewFileConfigStore(filepath.Join(dir, "github-apps.json")), http.DefaultClient, browserOpener)
 	}
-	d := &Daemon{listener: listener, dataDir: dir, token: token, sessions: make(map[string]time.Time), db: db, github: github}
+	d := &Daemon{listener: listener, dataDir: dir, token: token, sessions: make(map[string]time.Time), db: db, github: github, ws: wshub.New(wshub.Options{Path: "/ws"})}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "version": Version, "pid": os.Getpid(), "runtime": runtime.Version()})
 	})
 	mux.HandleFunc("/api/browser/session", d.sessionExchange)
+	mux.Handle("/ws", d.ws)
 	// The API router deliberately remains authenticated even while the static
 	// single-page app is public on loopback.
 	mux.Handle("/api/", d.authorized(http.HandlerFunc(d.apiHandler)))
@@ -1735,6 +1738,7 @@ func (d *Daemon) Close() error {
 	if d.server == nil {
 		return nil
 	}
+	d.ws.Close()
 	err := d.server.Shutdown(context.Background())
 	if d.db != nil {
 		if closeErr := d.db.Close(); err == nil {
