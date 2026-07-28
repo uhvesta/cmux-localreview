@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "githubauth",
+    srcs = ["githubauth.go"],
+    importpath = "github.com/uhvesta/cmux-localreview/internal/githubauth",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "githubauth_test",
+    srcs = ["githubauth_test.go"],
+    embed = [":githubauth"],
+)
