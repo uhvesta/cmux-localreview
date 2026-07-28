@@ -226,6 +226,32 @@ func TestLoopbackOAuthStateAndSecretStayDaemonOnly(t *testing.T) {
 	}
 }
 
+func TestAPIFacadeUsesExplicitFlowAndHidesCredentials(t *testing.T) {
+	secrets := memSecrets{}
+	cfg := memConfig{Read: "Iv1.readclient", Write: "Iv1.writeclient", Copilot: "Iv1.copilotclient"}
+	s := New(secrets, cfg, roundTrip(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == "/login/device/code" {
+			return response(200, `{"device_code":"d","user_code":"C","verification_uri":"https://example/device"}`), nil
+		}
+		return response(500, `{}`), nil
+	}), nil)
+	api := API{Service: s}
+	status, err := api.Status(context.Background())
+	if err != nil || status.Provider != "github-app-device-flow" || len(status.Capabilities) != 3 {
+		t.Fatalf("status=%#v err=%v", status, err)
+	}
+	result, flow, err := api.Start(context.Background(), StartRequest{Capability: Read, Flow: "device"})
+	if err != nil || flow != nil || result.UserCode != "C" || result.Flow != "device" {
+		t.Fatalf("result=%#v flow=%#v err=%v", result, flow, err)
+	}
+	if _, _, err := api.Start(context.Background(), StartRequest{Capability: Read, Flow: "bad"}); err == nil {
+		t.Fatal("accepted implicit unsupported OAuth flow")
+	}
+	if err := api.Logout(context.Background(), Read); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestFileConfigStorePersistsPublicClientIDsOnly(t *testing.T) {
 	path := t.TempDir() + "/github-app.json"
 	store := NewFileConfigStore(path)

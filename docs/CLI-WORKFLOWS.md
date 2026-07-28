@@ -109,10 +109,25 @@ prompt.
 
 The Go daemon accepts only its dedicated Copilot credential source. It does
 not fall back to `gh`, a PAT, environment variables, or an existing Copilot
-CLI login. GitHub OAuth configuration and the fully live SDK message route are
-still being completed during this migration; until Queue Home reports a live
-model catalogue, the model picker intentionally reports its unauthenticated
-or fallback state instead of pretending requests will work.
+CLI login. Register a distinct GitHub OAuth App for each capability, then
+store the client secret through stdin (never as a command-line argument):
+
+```sh
+printf '%s' "$COPILOT_APP_CLIENT_SECRET" | \
+  localreview auth login --capability copilot --client-id "$COPILOT_APP_CLIENT_ID" \
+  --client-secret-stdin --no-wait
+
+localreview auth status
+localreview auth logout copilot
+```
+
+The default flow is state-verified browser OAuth on an ephemeral `127.0.0.1`
+callback. `--device` explicitly selects the terminal/device fallback. Tokens
+and client secrets are stored only through the OS secret store and never
+returned to the browser or CLI output. The fully live SDK message route and
+model enumeration are still being completed; until Queue Home reports a live
+model catalogue, the picker intentionally reports its unauthenticated or
+fallback state instead of pretending requests will work.
 
 ## File-change reload workflow
 

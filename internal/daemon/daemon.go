@@ -712,33 +712,25 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if path == "/github/auth/status" && r.Method == http.MethodGet {
-		capabilities := map[string]githubauth.Status{}
-		for _, capability := range []githubauth.Capability{githubauth.Read, githubauth.Write, githubauth.Copilot} {
-			status, err := d.github.Status(r.Context(), capability)
-			if err != nil {
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "GitHub authentication status unavailable"})
-				return
-			}
-			capabilities[string(capability)] = status
+		status, err := (githubauth.API{Service: d.github}).Status(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "GitHub authentication status unavailable"})
+			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"provider": "github-app-device-flow", "capabilities": capabilities})
+		writeJSON(w, http.StatusOK, status)
 		return
 	}
 	if path == "/github/auth/configure" && r.Method == http.MethodPost {
-		var input struct {
-			Capability string `json:"capability"`
-			ClientID   string `json:"clientId"`
-		}
+		var input githubauth.ConfigureRequest
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&input); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid GitHub App configuration"})
 			return
 		}
-		capability, ok := githubCapability(input.Capability)
-		if !ok {
+		if _, ok := githubCapability(string(input.Capability)); !ok {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Unknown GitHub App capability"})
 			return
 		}
-		if err := d.github.Configure(capability, input.ClientID); err != nil {
+		if err := (githubauth.API{Service: d.github}).Configure(r.Context(), input); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
@@ -755,15 +747,22 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			switch {
 			case parts[3] == "start" && r.Method == http.MethodPost:
-				start, err := d.github.Start(r.Context(), capability)
+				var input struct {
+					Flow string `json:"flow"`
+				}
+				_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&input)
+				start, flow, err := (githubauth.API{Service: d.github}).Start(r.Context(), githubauth.StartRequest{Capability: capability, Flow: input.Flow})
 				if err != nil {
 					writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 					return
 				}
-				writeJSON(w, http.StatusAccepted, map[string]any{"userCode": start.UserCode, "verificationUri": start.VerificationURI})
+				if flow != nil {
+					go func() { _ = flow.Wait(context.Background()) }()
+				}
+				writeJSON(w, http.StatusAccepted, start)
 				return
 			case parts[3] == "poll" && r.Method == http.MethodPost:
-				status, err := d.github.Poll(r.Context(), capability)
+				status, err := (githubauth.API{Service: d.github}).Poll(r.Context(), capability)
 				if err != nil {
 					writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 					return
@@ -778,7 +777,7 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Unknown GitHub App capability"})
 				return
 			}
-			if err := d.github.Disconnect(capability); err != nil {
+			if err := (githubauth.API{Service: d.github}).Logout(r.Context(), capability); err != nil {
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "GitHub authentication disconnect failed"})
 				return
 			}
@@ -1256,7 +1255,7 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]any{"side": side, "path": filePath, "oldPath": selected.OldPath, "status": selected.Status, "lines": lines, "gates": fullFileGates(selected.Chunks, side)})
 			return
 		}
-		if len(parts) == 4 && parts[0] == "repos" && parts[2] == "api" && parts[3] == "comments-json" && r.Method == http.MethodGet {
+		if len(parts) == 4 && parts[0] == "repos" && parts[2] == "api" && (parts[3] == "comments-json" || parts[3] == "comments") && r.Method == http.MethodGet {
 			review, repo, ok := d.reviewContext(parts[1])
 			if !ok {
 				writeJSON(w, http.StatusNotFound, map[string]string{"error": "Unknown review repository"})

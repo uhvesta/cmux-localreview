@@ -58,7 +58,7 @@ func (d *Daemon) handleAsk(w http.ResponseWriter, r *http.Request, path string) 
 			writeJSON(w, http.StatusOK, map[string]any{"conversation": conversations[0], "reused": true, "shared": true})
 			return true
 		}
-		conversation, err := ask.CreateConversation(ctx, d.db, ask.CreateConversationInput{ReviewSessionID: session, Model: in.Model})
+		conversation, err := ask.CreateConversation(ctx, d.db, ask.CreateConversationInput{ReviewSessionID: session, Model: in.Model, Context: in.Context})
 		if err != nil {
 			askError(w, err)
 		} else {
@@ -185,6 +185,49 @@ func (d *Daemon) handleAsk(w http.ResponseWriter, r *http.Request, path string) 
 	}
 	if len(parts) == 4 && parts[0] == "ask" && parts[1] == "conversations" {
 		id, action := parts[2], parts[3]
+		if action == "messages" && r.Method == http.MethodPost {
+			var in struct {
+				Body     string        `json:"body"`
+				Location *ask.Location `json:"location"`
+			}
+			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil || strings.TrimSpace(in.Body) == "" {
+				askError(w, errors.New("an /ask message body is required"))
+				return true
+			}
+			if _, err := ask.GetConversation(ctx, d.db, id); err != nil {
+				askError(w, err)
+				return true
+			}
+			user, err := ask.InsertMessage(ctx, d.db, id, ask.RoleUser, in.Body, false, in.Location)
+			if err != nil {
+				askError(w, err)
+				return true
+			}
+			// Persist the pending assistant row before invoking any SDK transport.
+			// A daemon restart can therefore settle it visibly rather than losing
+			// the user's question or silently replaying it on reload.
+			assistant, err := ask.InsertMessage(ctx, d.db, id, ask.RoleAssistant, "", true, nil)
+			if err != nil {
+				askError(w, err)
+				return true
+			}
+			writeJSON(w, http.StatusAccepted, map[string]any{"user": user, "assistant": assistant, "delivery": "pending-runtime"})
+			return true
+		}
+		if action == "cancel" && r.Method == http.MethodPost {
+			if _, err := ask.GetConversation(ctx, d.db, id); err != nil {
+				askError(w, err)
+				return true
+			}
+			result, err := d.db.ExecContext(ctx, `UPDATE ask_messages SET pending=0,body=CASE WHEN body='' THEN 'Response cancelled before it completed.' ELSE body END WHERE conversation_id=? AND pending=1`, id)
+			if err != nil {
+				askError(w, err)
+				return true
+			}
+			changed, _ := result.RowsAffected()
+			writeJSON(w, http.StatusOK, map[string]any{"cancelled": changed > 0})
+			return true
+		}
 		if action == "resume" && r.Method == http.MethodPost {
 			item, err := ask.Resume(ctx, d.db, id)
 			if err != nil {

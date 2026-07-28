@@ -19,6 +19,6 @@ go_library(
 
 go_test(
     name = "daemon_test",
-    srcs = ["daemon_test.go"],
+    srcs = ["ask_test.go", "daemon_test.go"],
     embed = [":daemon"],
 )

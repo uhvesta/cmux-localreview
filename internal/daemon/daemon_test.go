@@ -143,7 +143,7 @@ func TestGitHubAuthHTTPContract(t *testing.T) {
 	if response.StatusCode != http.StatusNoContent || len(body) != 0 {
 		t.Fatalf("configure=%d %s", response.StatusCode, body)
 	}
-	response, body = request(http.MethodPost, "/api/github/auth/read/start", "{}")
+	response, body = request(http.MethodPost, "/api/github/auth/read/start", `{"flow":"device"}`)
 	if response.StatusCode != http.StatusAccepted || !strings.Contains(string(body), "ABCD-1234") {
 		t.Fatalf("start=%d %s", response.StatusCode, body)
 	}
@@ -574,6 +574,17 @@ func TestWorkspaceActivationDiscoversNestedRepositories(t *testing.T) {
 	response.Body.Close()
 	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "Please clarify") {
 		t.Fatalf("comment read status=%d body=%s", response.StatusCode, body)
+	}
+	req, _ = http.NewRequest(http.MethodGet, base+"/api/repos/"+childID+"/api/comments", nil)
+	req.Header.Set("Authorization", "Bearer "+discovered.Token)
+	response, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "Please clarify") {
+		t.Fatalf("comments API read status=%d body=%s", response.StatusCode, body)
 	}
 	req, _ = http.NewRequest(http.MethodDelete, base+"/api/repos/"+childID+"/api/comments/comment-1", nil)
 	req.Header.Set("Authorization", "Bearer "+discovered.Token)
