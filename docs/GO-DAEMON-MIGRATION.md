@@ -51,11 +51,10 @@ only in a URL fragment, which the browser immediately exchanges for an
 HttpOnly cookie. Use `--no-open` to print that URL for Firefox, Chrome, or a
 remote desktop session without launching a browser.
 
-For source-only development, use `GOFLAGS=-mod=mod go run ./cmd/localreview
-...`. This repository's pre-existing JavaScript `vendor/` directory makes
-plain `go run` choose Go vendor mode even though it does not contain Go
-dependencies. Release and user installation should use Bazel instead; it is
-unaffected by that Go toolchain behavior.
+For source-only development, `go run ./cmd/localreview ...` and `go test ./...`
+work with the checked-in Go vendor tree. Release and user installation should
+use Bazel instead, so the generated UI and the paired native binaries are built
+together.
 
 The Go daemon is the active local control plane. The remaining TypeScript
 server is frozen exclusively as a Phase-0 parity oracle and fixture harness;

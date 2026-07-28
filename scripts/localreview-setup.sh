@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
-# Cross-platform entry point. It makes no package-manager changes; Bun must
-# already be installed and the TypeScript setup command performs only additive
-# Copilot configuration writes.
+# Cross-platform native setup entry point. It makes no package-manager or
+# credential changes; the installed Go CLI performs only additive,
+# cmux-localreview-managed Copilot configuration writes.
 set -eu
 
 script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
