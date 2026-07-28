@@ -541,6 +541,55 @@ func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
+// activateWorkspace is the single stateful operation behind an explicit
+// workspace open. Queue opening calls it as well: changing queue lifecycle
+// alone is not enough for the reviewer UI to resolve /api/repos.
+func (d *Daemon) activateWorkspace(workspace, label string) ([]reviewRepo, error) {
+	workspace, err := safeWorkspacePath(workspace)
+	if err != nil {
+		return nil, err
+	}
+	repos, err := discoverReviewRepos(workspace)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UnixMilli()
+	tx, err := d.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec(`UPDATE workspace_registry SET active=0`); err != nil {
+		return nil, err
+	}
+	if _, err = tx.Exec(`INSERT INTO workspace_registry(root_path,label,last_opened_at,active) VALUES(?,?,?,1) ON CONFLICT(root_path) DO UPDATE SET label=COALESCE(excluded.label,label),last_opened_at=excluded.last_opened_at,active=1`, workspace, nullable(label), now); err != nil {
+		return nil, err
+	}
+	result, err := tx.Exec(`INSERT INTO sessions(label,started_at) VALUES(?,?)`, nullable(label), now)
+	if err != nil {
+		return nil, err
+	}
+	sessionID, err := result.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	for index := range repos {
+		if _, err = tx.Exec(`INSERT INTO repos(workspace_relative_path,git_dir,created_at) VALUES(?,?,?) ON CONFLICT(git_dir) DO UPDATE SET workspace_relative_path=excluded.workspace_relative_path`, repos[index].WorkspaceRelativePath, repos[index].AbsolutePath, now); err != nil {
+			return nil, err
+		}
+		if err = tx.QueryRow(`SELECT id FROM repos WHERE git_dir=?`, repos[index].AbsolutePath).Scan(&repos[index].DBID); err != nil {
+			return nil, err
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	d.mu.Lock()
+	d.review = &workspaceReview{Root: workspace, SessionID: sessionID, Repos: repos}
+	d.mu.Unlock()
+	return repos, nil
+}
+
 // apiHandler ports the queue control plane first. Unported routes fail
 // explicitly; they never fall back to a Node process behind the caller.
 func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
@@ -1390,8 +1439,15 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "No queued review items"})
 			return
 		}
-		// Opening only changes the durable lifecycle. It never opens a
-		// workspace or prompts an ACP agent as a side effect.
+		// Queue contracts also represent remote/unavailable workspaces. Keep the
+		// lifecycle transition durable in that case; a local existing path is
+		// activated for the reviewer UI below.
+		if _, err := os.Stat(item.WorkspacePath); err == nil {
+			if _, err := d.activateWorkspace(item.WorkspacePath, item.Title); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"item": item, "reviewUrl": "/review?queueItem=" + item.ID})
 		return
 	}
@@ -1543,6 +1599,16 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		if item == nil {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "Unknown or unavailable queue item"})
+			return
+		}
+		if parts[2] == "open" {
+			if _, err := os.Stat(item.WorkspacePath); err == nil {
+				if _, err := d.activateWorkspace(item.WorkspacePath, item.Title); err != nil {
+					writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+					return
+				}
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"item": item, "reviewUrl": "/review?queueItem=" + item.ID})
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"item": item})
