@@ -1614,15 +1614,11 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 		if hasSnapshot {
 			snapshot = map[string]any{"id": manifest.ID, "manifestPath": *item.SnapshotManifestPath, "repositories": len(manifest.Repos)}
 		}
-		var existingACP any
-		if item.ACPHost != nil && item.ACPPort != nil && item.ACPSessionID != nil {
-			existingACP = map[string]any{"host": *item.ACPHost, "port": *item.ACPPort, "sessionId": *item.ACPSessionID, "state": item.ACPState, "error": item.ACPLastError, "canAttemptResume": item.ACPState != "error"}
-		}
 		var commands any
 		if hasSnapshot {
-			commands = map[string]string{"reproduceSnapshot": "localreview reproduce " + shellQuote(*item.SnapshotManifestPath) + " <empty-destination>", "reproduceCopilot": "localreview reproduce-copilot " + item.ID + " <empty-destination>", "freshAcp": "cd <empty-destination> && copilot --acp --port 4123"}
+			commands = map[string]string{"reproduceSnapshot": "localreview reproduce " + shellQuote(*item.SnapshotManifestPath) + " <empty-destination>", "openReviewer": "localreview open <empty-destination>"}
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"itemId": item.ID, "workspacePath": item.WorkspacePath, "snapshot": snapshot, "existingAcp": existingACP, "copilotSessionId": item.CopilotSessionID, "commands": commands, "notes": []string{"Materialization requires an explicit empty destination; viewing this plan never overwrites a workspace.", "A saved ACP endpoint is a live-session hint only; resume works only while that endpoint and session remain live."}})
+		writeJSON(w, http.StatusOK, map[string]any{"itemId": item.ID, "workspacePath": item.WorkspacePath, "snapshot": snapshot, "copilotSessionId": item.CopilotSessionID, "commands": commands, "notes": []string{"Materialization requires an explicit empty destination; viewing this plan never overwrites a workspace.", "Opening the reproduced workspace starts a fresh SDK-native /ask conversation. Historic transcripts remain readable, but remote or ACP sessions are never resumed."}})
 		return
 	}
 	if len(parts) == 3 && parts[0] == "queue" && r.Method == http.MethodPost {
