@@ -90,12 +90,20 @@ async function main(): Promise<void> {
     const repos = await request("repos", "/api/repos", {}, false) as { repos: { id: string }[] };
     const repo = repos.repos[0]!;
     await request("repo_diff", `/api/repos/${repo.id}/api/diff`, {}, false);
+    await request("repo_diff_ignore_whitespace", `/api/repos/${repo.id}/api/diff?ignoreWhitespace=true`, {}, false);
     await request("repo_revisions", `/api/repos/${repo.id}/api/revisions`, {}, false);
+    await request("repo_line_count", `/api/repos/${repo.id}/api/line-count/root.ts?oldRef=HEAD&newRef=HEAD`, {}, false);
+    await request("repo_blob", `/api/repos/${repo.id}/api/blob/root.ts?ref=HEAD`, {}, false);
+    await request("repo_generated_status", `/api/repos/${repo.id}/api/generated-status/root.ts`, {}, false);
+    await request("repo_fullfile", `/api/repos/${repo.id}/api/fullfile/root.ts?side=current`, {}, false);
     await request("repo_comments_empty", `/api/repos/${repo.id}/api/comments`, {}, false);
     await request("create_comment", `/api/repos/${repo.id}/api/comments`, {
       method: "POST", body: JSON.stringify({ comments: [{ id: "fixture-comment", file: "root.ts", line: 1, body: "Fixture comment" }] }),
     }, false);
     await request("repo_comments_saved", `/api/repos/${repo.id}/api/comments`, {}, false);
+    await request("comment_import", `/api/repos/${repo.id}/api/comment-imports`, {
+      method: "POST", body: JSON.stringify([{ id: "fixture-import", file: "root.ts", line: 1, body: "Imported fixture comment" }]),
+    }, false);
     await request("sessions", "/api/sessions", {}, false);
     await request("review_history", "/api/review-history/comments", {}, false);
     await request("ui_state_empty", "/api/ui-state?key=fixture", {}, false);

@@ -16,6 +16,8 @@ Done:
 - Captured 53 deterministic contracts across bootstrap auth, workspace and
   reviewer routes, comments/session/UI state, `/ask` question-set storage,
   local queue lifecycle, agent routing, and federation lifecycle.
+- Extended the corpus to 59 contracts with diff query variants, line counts,
+  blobs, generated-file detection, full-file projection, and comment import.
 - Fixed the Go developer build contract by generating a real Go module vendor
   tree alongside the existing `vendor/difit` and `vendor/cmux-hub` UI sources;
   plain `go build ./...` and `go test ./...` now work without a hidden
