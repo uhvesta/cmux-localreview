@@ -125,7 +125,6 @@ export async function buildWorkspaceApp(options: WorkspaceServerOptions): Promis
         ? (threads) => {
           const prefix = `formal:${repoId}:`;
           const entries: FormalFeedbackInput[] = threads
-            .filter((thread) => !thread.messages.some((message) => message.body.trim().startsWith("/ask")))
             .map((thread) => {
               const line = typeof thread.position.line === "number" ? thread.position.line : thread.position.line.start;
               const endLine = typeof thread.position.line === "number" ? thread.position.line : thread.position.line.end;

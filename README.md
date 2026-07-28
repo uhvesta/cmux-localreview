@@ -9,6 +9,8 @@
 - [Setup](docs/SETUP.md) — macOS/Linux configuration, Copilot skills, remote nodes, and security boundaries.
 - [Demo and source install](docs/DEMO.md) — disposable browser demo plus a user-prefix CLI installation flow.
 - [Troubleshooting](docs/TROUBLESHOOTING.md) — actionable recovery for auth, diff, Copilot, GitHub, cmux, and SSH states.
+- [Go daemon migration](docs/GO-DAEMON-MIGRATION.md) — Bazel build, compatibility gates, and the Go control-plane cutover.
+- [Multiple Copilot ACP sessions](docs/COPILOT-ACP-SESSIONS.md) — safe local/remote session wiring and feedback delivery.
 
 ## Common workflow
 
@@ -144,6 +146,9 @@ supervisor for those actions.
 
 Run the standalone reviewer with `bun src/cli.ts [workspace]`; run the daemon
 explicitly with `bun src/global-daemon.ts`. Build the client with `bun run build`.
+The Bazel-built Go daemon is available as `bazel run //cmd/localreviewd`; it is
+currently gated behind the migration compatibility suite and is not yet the
+default production control plane.
 
 Snapshots use a temporary Git index, leaving the source repository's HEAD,
 index, and working tree untouched. Each retained manifest includes SHA-256

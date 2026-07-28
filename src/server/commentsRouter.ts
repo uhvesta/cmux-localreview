@@ -87,6 +87,13 @@ function normalizeThreadPayload(thread: unknown): DiffCommentThread | null {
         ? t.codeContent
         : undefined;
 
+  // Classify at the request boundary and persist it. Downstream review
+  // delivery intentionally never derives channel policy from comment text.
+  const requestedChannel = t.channel;
+  const channel = requestedChannel === "ask" || (requestedChannel !== "formal" && messages.some((message) => /^\/ask(?:\s|$)/i.test(message.body.trim())))
+    ? "ask" as const
+    : "formal" as const;
+
   return {
     id: threadId,
     filePath,
@@ -95,6 +102,7 @@ function normalizeThreadPayload(thread: unknown): DiffCommentThread | null {
     position: { side, line },
     codeSnapshot: content !== undefined ? { content } : undefined,
     messages,
+    channel,
   };
 }
 
@@ -118,7 +126,7 @@ export interface CommentsRouterDeps {
     endLine: number,
   ) => Promise<string | undefined> | string | undefined;
   onChange?: () => void;
-  /** Mirrors only formal (non-/ask) threads into the active queue item. */
+  /** Mirrors only structurally formal threads into the active queue item. */
   syncFormalFeedback?: (threads: DiffCommentThread[]) => Promise<void> | void;
 }
 
@@ -143,7 +151,7 @@ export function createCommentsRouter(deps: CommentsRouterDeps): Router {
   }
 
   async function persistFormalFeedback(threads: DiffCommentThread[]): Promise<void> {
-    await deps.syncFormalFeedback?.(threads);
+    await deps.syncFormalFeedback?.(threads.filter((thread) => thread.channel !== "ask"));
   }
 
   router.get("/api/comments-json", async (_req, res) => {

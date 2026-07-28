@@ -1,0 +1,18 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "localreview_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/uhvesta/cmux-localreview/cmd/localreview",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//internal/daemon",
+        "//internal/snapshot",
+    ],
+)
+
+go_binary(
+    name = "localreview",
+    embed = [":localreview_lib"],
+    visibility = ["//visibility:public"],
+)

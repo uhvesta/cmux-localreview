@@ -1,0 +1,3 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+go_library(name="snapshot", srcs=["snapshot.go"], importpath="github.com/uhvesta/cmux-localreview/internal/snapshot", visibility=["//visibility:public"])
+go_test(name="snapshot_test", srcs=["snapshot_test.go"], embed=[":snapshot"])

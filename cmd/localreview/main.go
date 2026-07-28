@@ -1,0 +1,168 @@
+// localreview is the Go control-plane CLI. It intentionally talks to the
+// loopback daemon capability instead of opening SQLite itself, so every CLI
+// mutation follows the same authentication and audit boundary as Queue Home.
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strings"
+	"syscall"
+
+	"github.com/uhvesta/cmux-localreview/internal/daemon"
+	"github.com/uhvesta/cmux-localreview/internal/snapshot"
+)
+
+type discovery struct {
+	Port  int    `json:"port"`
+	Token string `json:"token"`
+}
+
+func dataDir() (string, error) {
+	if value := strings.TrimSpace(os.Getenv("CMUX_LOCALREVIEW_DATA_DIR")); value != "" {
+		return filepath.Abs(value)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".local", "share", "cmux-localreview"), nil
+}
+func runDaemon(args []string) error {
+	flags := flag.NewFlagSet("daemon", flag.ContinueOnError)
+	port := flags.Int("port", 0, "loopback port")
+	data := flags.String("data-dir", "", "data directory")
+	ui := flags.String("ui-dir", "", "built web application directory")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	d, err := daemon.Start(ctx, daemon.Options{Port: *port, DataDir: *data, UIDir: *ui})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("cmux-localreview Go daemon listening on 127.0.0.1:%d\n", d.Port())
+	<-ctx.Done()
+	return d.Close()
+}
+func discovered() (discovery, error) {
+	dir, err := dataDir()
+	if err != nil {
+		return discovery{}, err
+	}
+	contents, err := os.ReadFile(filepath.Join(dir, "daemon.json"))
+	if err != nil {
+		return discovery{}, errors.New("localreviewd is not running; start `localreview daemon`")
+	}
+	var value discovery
+	if err := json.Unmarshal(contents, &value); err != nil || value.Port == 0 || value.Token == "" {
+		return discovery{}, errors.New("invalid localreviewd discovery record")
+	}
+	return value, nil
+}
+func submit(args []string) error {
+	flags := flag.NewFlagSet("queue-submit", flag.ContinueOnError)
+	title := flags.String("title", "", "queue title")
+	topic := flags.String("topic", "", "stable review topic")
+	kind := flags.String("kind", "local", "local or remote")
+	remoteURL := flags.String("remote-url", "", "remote pull request URL")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 1 {
+		return errors.New("usage: localreview queue-submit [--title TITLE] [--topic TOPIC] <workspace-path>")
+	}
+	workspace, err := filepath.Abs(flags.Arg(0))
+	if err != nil {
+		return err
+	}
+	if *title == "" {
+		*title = "Review " + workspace
+	}
+	dir, err := dataDir()
+	if err != nil {
+		return err
+	}
+	_, manifestPath, err := snapshot.Capture(workspace, filepath.Join(dir, "artifacts"), "")
+	if err != nil {
+		return err
+	}
+	d, err := discovered()
+	if err != nil {
+		return err
+	}
+	payload, _ := json.Marshal(map[string]string{"title": *title, "workspacePath": workspace, "reviewTopic": *topic, "kind": *kind, "remoteUrl": *remoteURL, "snapshotManifestPath": manifestPath})
+	request, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/api/queue", d.Port), bytes.NewReader(payload))
+	request.Header.Set("Authorization", "Bearer "+d.Token)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusCreated && response.StatusCode != http.StatusOK {
+		return fmt.Errorf("queue submission failed: %s", response.Status)
+	}
+	var result map[string]any
+	_ = json.NewDecoder(response.Body).Decode(&result)
+	encoded, _ := json.MarshalIndent(result, "", "  ")
+	fmt.Println(string(encoded))
+	return nil
+}
+func reproduce(args []string) error {
+	flags := flag.NewFlagSet("reproduce", flag.ContinueOnError)
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 2 {
+		return errors.New("usage: localreview reproduce <manifest.json> <empty-destination>")
+	}
+	destination, err := filepath.Abs(flags.Arg(1))
+	if err != nil {
+		return err
+	}
+	if entries, err := os.ReadDir(destination); err == nil && len(entries) > 0 {
+		return errors.New("destination must be empty")
+	}
+	manifest, err := snapshot.Materialize(flags.Arg(0), destination)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Reproduced snapshot %s\ncwd: %s\n", manifest.ID, destination)
+	return nil
+}
+func main() {
+	if len(os.Args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: localreview <daemon|queue-submit|reproduce> [options]")
+		os.Exit(2)
+	}
+	switch os.Args[1] {
+	case "daemon":
+		if err := runDaemon(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "localreview:", err)
+			os.Exit(1)
+		}
+	case "queue-submit":
+		if err := submit(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "localreview:", err)
+			os.Exit(1)
+		}
+	case "reproduce":
+		if err := reproduce(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "localreview:", err)
+			os.Exit(1)
+		}
+	default:
+		fmt.Fprintln(os.Stderr, "usage: localreview <daemon|queue-submit|reproduce> [options]")
+		os.Exit(2)
+	}
+}

@@ -47,9 +47,11 @@ Yes:
 bun src/queue-submit.ts https://github.com/OWNER/REPOSITORY/pull/123
 ```
 
-`gh` must already be authenticated. The daemon resolves the base/head commits,
-then creates a managed cache mirror/worktree. Refresh when the PR head changes
-before reviewing or publishing a decision.
+Connect the dedicated **PR read** GitHub App capability in Queue Home first.
+The daemon resolves the base/head commits, then creates a managed cache
+mirror/worktree. Refresh when the PR head changes before reviewing or
+publishing a decision. No `gh`, personal access token, environment token, or
+Copilot CLI login is used for this flow.
 
 ### Why does a remote PR show no diff or an old diff?
 
@@ -74,10 +76,11 @@ Do not treat requeue as a way to update an item’s source state.
 
 ### Will approve or request changes write to GitHub?
 
-For a remote PR, these are intentional GitHub Review actions through `gh`.
-Inline anchors are used when GitHub accepts them; otherwise the system uses a
-summary-review fallback. Confirm the PR URL and current head SHA before using
-either action.
+For a remote PR, these are local lifecycle actions unless you explicitly choose
+**Publish to GitHub** and have connected the separate **PR publish** GitHub App
+capability. Inline anchors are used when GitHub accepts them; otherwise the
+system uses a summary-review fallback. Confirm the PR URL and current head SHA
+before publishing.
 
 ## Copilot, ACP, and `/ask`
 

@@ -9,3 +9,7 @@ vendor/difit/dist/
 *.db-shm
 *.db-wal
 .DS_Store
+bazel-bin
+bazel-cmux-localreview
+bazel-out
+bazel-testlogs

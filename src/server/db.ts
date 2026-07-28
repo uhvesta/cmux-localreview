@@ -406,6 +406,15 @@ const MIGRATIONS: Migration[] = [
       db.run(`CREATE UNIQUE INDEX idx_queue_feedback_source_key ON queue_feedback(queue_item_id, source_key) WHERE source_key IS NOT NULL`);
     },
   },
+  {
+    // This is a durable policy boundary, not presentation. `/ask` threads
+    // must never become formal review feedback based on mutable body text.
+    version: 19,
+    up: (db) => {
+      db.run(`ALTER TABLE comments ADD COLUMN channel TEXT NOT NULL DEFAULT 'formal' CHECK(channel IN ('formal','ask'))`);
+      db.run(`CREATE INDEX idx_comments_session_repo_channel ON comments(session_id, repo_id, channel)`);
+    },
+  },
 ];
 
 export function runMigrations(db: Database): void {

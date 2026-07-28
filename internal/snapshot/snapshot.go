@@ -1,0 +1,217 @@
+// Package snapshot creates immutable Git snapshots without modifying a
+// developer's checkout, HEAD, or real index.
+package snapshot
+
+import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+type Repo struct {
+	WorkspaceRelativePath string  `json:"workspaceRelativePath"`
+	SourcePath            string  `json:"sourcePath"`
+	BaseSHA               *string `json:"baseSha"`
+	SnapshotSHA           string  `json:"snapshotSha"`
+	Bundle                string  `json:"bundle"`
+	BundleSHA256          string  `json:"bundleSha256"`
+}
+type Manifest struct {
+	Version       int    `json:"version"`
+	ID            string `json:"id"`
+	WorkspacePath string `json:"workspacePath"`
+	CreatedAt     string `json:"createdAt"`
+	Repos         []Repo `json:"repos"`
+}
+
+func run(dir string, env []string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), env...)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+func id() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+func digest(path string) (string, error) {
+	b, e := os.ReadFile(path)
+	if e != nil {
+		return "", e
+	}
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:]), nil
+}
+func Capture(workspace, artifacts, base string) (Manifest, string, error) {
+	workspace, err := filepath.Abs(workspace)
+	if err != nil {
+		return Manifest{}, "", err
+	}
+	if resolved, resolveErr := filepath.EvalSymlinks(workspace); resolveErr == nil {
+		workspace = resolved
+	}
+	repos, err := discover(workspace)
+	if err != nil {
+		return Manifest{}, "", err
+	}
+	snapshotID, err := id()
+	if err != nil {
+		return Manifest{}, "", err
+	}
+	dir := filepath.Join(artifacts, "snapshots", snapshotID)
+	if err = os.MkdirAll(dir, 0700); err != nil {
+		return Manifest{}, "", err
+	}
+	captured := make([]Repo, 0, len(repos))
+	for _, root := range repos {
+		rel, _ := filepath.Rel(workspace, root)
+		if rel == "." {
+			rel = "."
+		}
+		slug := strings.NewReplacer("/", "_", "\\", "_").Replace(rel)
+		if slug == "." {
+			slug = "root"
+		}
+		index := filepath.Join(dir, "index-"+slug)
+		env := []string{"GIT_INDEX_FILE=" + index}
+		baseSHA, e := run(root, nil, "rev-parse", first(base, "HEAD"))
+		var basePtr *string
+		if e == nil {
+			basePtr = &baseSHA
+			_, e = run(root, env, "read-tree", baseSHA)
+		} else {
+			_, e = run(root, env, "read-tree", "--empty")
+		}
+		if e != nil {
+			return Manifest{}, "", e
+		}
+		if _, e = run(root, env, "add", "-A"); e != nil {
+			return Manifest{}, "", e
+		}
+		tree, e := run(root, env, "write-tree")
+		if e != nil {
+			return Manifest{}, "", e
+		}
+		args := []string{"commit-tree", tree, "-m", "cmux-localreview snapshot " + snapshotID}
+		if basePtr != nil {
+			args = append(args, "-p", *basePtr)
+		}
+		sha, e := run(root, env, args...)
+		os.Remove(index)
+		if e != nil {
+			return Manifest{}, "", e
+		}
+		ref := "refs/cmux-localreview/snapshots/" + snapshotID + "/" + slug
+		if _, e = run(root, nil, "update-ref", ref, sha); e != nil {
+			return Manifest{}, "", e
+		}
+		name := slug + ".bundle"
+		bundle := filepath.Join(dir, name)
+		if _, e = run(root, nil, "bundle", "create", bundle, ref); e != nil {
+			return Manifest{}, "", e
+		}
+		sum, e := digest(bundle)
+		if e != nil {
+			return Manifest{}, "", e
+		}
+		captured = append(captured, Repo{WorkspaceRelativePath: rel, SourcePath: root, BaseSHA: basePtr, SnapshotSHA: sha, Bundle: name, BundleSHA256: sum})
+	}
+	m := Manifest{Version: 1, ID: snapshotID, WorkspacePath: workspace, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Repos: captured}
+	path := filepath.Join(dir, "manifest.json")
+	encoded, _ := json.MarshalIndent(m, "", "  ")
+	if err = os.WriteFile(path, append(encoded, '\n'), 0600); err != nil {
+		return Manifest{}, "", err
+	}
+	return m, path, nil
+}
+func discover(workspace string) ([]string, error) {
+	found := []string{}
+	seen := map[string]bool{}
+	err := filepath.WalkDir(workspace, func(path string, d os.DirEntry, e error) error {
+		if e != nil {
+			return e
+		}
+		if !d.IsDir() {
+			return nil
+		}
+		if d.Name() == ".git" {
+			return filepath.SkipDir
+		}
+		root, err := run(path, nil, "rev-parse", "--show-toplevel")
+		if err == nil && !seen[root] {
+			seen[root] = true
+			found = append(found, root)
+			return filepath.SkipDir
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(found) == 0 {
+		return nil, errors.New("no Git repositories found below workspace")
+	}
+	return found, nil
+}
+func first(v, f string) string {
+	if strings.TrimSpace(v) != "" {
+		return v
+	}
+	return f
+}
+
+// Materialize verifies retained bundle digests and reconstructs every
+// workspace-relative repository into an empty review destination.
+func Materialize(manifestPath, destination string) (Manifest, error) {
+	contents, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return Manifest{}, err
+	}
+	var manifest Manifest
+	if err = json.Unmarshal(contents, &manifest); err != nil || manifest.Version != 1 {
+		return Manifest{}, errors.New("invalid snapshot manifest")
+	}
+	if err = os.MkdirAll(destination, 0700); err != nil {
+		return Manifest{}, err
+	}
+	parent := filepath.Dir(manifestPath)
+	for _, repo := range manifest.Repos {
+		bundle := filepath.Join(parent, repo.Bundle)
+		sum, e := digest(bundle)
+		if e != nil || sum != repo.BundleSHA256 {
+			return Manifest{}, fmt.Errorf("snapshot bundle hash mismatch: %s", repo.Bundle)
+		}
+		target := destination
+		if repo.WorkspaceRelativePath != "." {
+			target = filepath.Join(destination, repo.WorkspaceRelativePath)
+		}
+		if e = os.MkdirAll(target, 0700); e != nil {
+			return Manifest{}, e
+		}
+		if _, e = run(target, nil, "init"); e != nil {
+			return Manifest{}, e
+		}
+		if _, e = run(target, nil, "fetch", bundle, repo.SnapshotSHA); e != nil {
+			return Manifest{}, e
+		}
+		if _, e = run(target, nil, "checkout", "-B", "localreview/review-"+manifest.ID[:8], repo.SnapshotSHA); e != nil {
+			return Manifest{}, e
+		}
+	}
+	return manifest, nil
+}

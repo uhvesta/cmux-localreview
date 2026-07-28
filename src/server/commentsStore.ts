@@ -25,6 +25,8 @@ export interface DiffCommentThread {
   };
   codeSnapshot?: { content: string };
   messages: CommentMessage[];
+  /** Only formal threads may enter export/delivery/GitHub review paths. */
+  channel?: "formal" | "ask";
   orphaned?: boolean;
 }
 
@@ -127,6 +129,7 @@ interface CommentRow {
   orphaned: number;
   created_at: number;
   updated_at: number;
+  channel?: "formal" | "ask";
 }
 
 function rowToThread(row: CommentRow): DiffCommentThread {
@@ -144,6 +147,7 @@ function rowToThread(row: CommentRow): DiffCommentThread {
     },
     codeSnapshot: row.anchor_content != null ? { content: row.anchor_content } : undefined,
     messages,
+    channel: row.channel === "ask" ? "ask" : "formal",
     orphaned: !!row.orphaned,
   };
 }
@@ -151,7 +155,7 @@ function rowToThread(row: CommentRow): DiffCommentThread {
 export function listThreads(db: Database, sessionId: number, repoDbId: number): DiffCommentThread[] {
   const rows = db
     .query(
-      `SELECT thread_id, file_path, side, start_line, end_line, messages_json, anchor_content, orphaned, created_at, updated_at
+      `SELECT thread_id, file_path, side, start_line, end_line, messages_json, anchor_content, orphaned, created_at, updated_at, channel
        FROM comments WHERE session_id = ? AND repo_id = ? ORDER BY created_at ASC`,
     )
     .all(sessionId, repoDbId) as CommentRow[];
@@ -173,7 +177,7 @@ export function listHistoricalReviewThreads(db: Database, activeSessionId: numbe
   const rows = db.query(
     `SELECT c.thread_id, c.file_path, c.side, c.start_line, c.end_line,
             c.messages_json, c.anchor_content, c.orphaned, c.created_at,
-            c.updated_at, c.session_id, s.label AS session_label,
+            c.updated_at, c.channel, c.session_id, s.label AS session_label,
             r.workspace_relative_path
        FROM comments c
        JOIN sessions s ON s.id = c.session_id
@@ -203,8 +207,8 @@ export function upsertThread(
   db.query(
     `INSERT INTO comments (
        session_id, repo_id, file_path, side, start_line, end_line, body,
-       anchor_content_hash, anchor_content, orphaned, thread_id, messages_json, created_at, updated_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+       anchor_content_hash, anchor_content, orphaned, thread_id, messages_json, created_at, updated_at, channel
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
      ON CONFLICT(session_id, repo_id, thread_id) DO UPDATE SET
        file_path = excluded.file_path,
        side = excluded.side,
@@ -214,7 +218,8 @@ export function upsertThread(
        anchor_content_hash = excluded.anchor_content_hash,
        anchor_content = excluded.anchor_content,
        messages_json = excluded.messages_json,
-       updated_at = excluded.updated_at`,
+       updated_at = excluded.updated_at,
+       channel = excluded.channel`,
   ).run(
     sessionId,
     repoDbId,
@@ -229,6 +234,7 @@ export function upsertThread(
     JSON.stringify(thread.messages),
     thread.createdAt ? Date.parse(thread.createdAt) || now : now,
     now,
+    thread.channel === "ask" ? "ask" : "formal",
   );
 }
 

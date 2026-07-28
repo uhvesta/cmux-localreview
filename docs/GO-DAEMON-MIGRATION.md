@@ -1,0 +1,135 @@
+# Go daemon migration
+
+`localreviewd` is the replacement control plane for cmux-localreview. The
+target runtime architecture is deliberately split:
+
+- **Go** owns the loopback daemon, CLI, SQLite state, Git snapshots and
+  worktrees, GitHub App device flow, system secrets, ACP, SSH federation, and
+  static asset serving.
+- **The web app remains TypeScript/React/Vite.** It is a normal independently
+  buildable frontend; production does not need Node or Bun to serve it.
+
+The migration must preserve existing on-disk state and browser/API behavior.
+It is not a schema reset and it must not run the legacy and Go daemons against
+the same SQLite database at the same time.
+
+## Current compatibility spike
+
+The repository now contains a Bazel-built `//cmd/localreviewd` Go binary. It
+already proves the non-negotiable runtime boundary:
+
+1. bind to `127.0.0.1` only;
+2. write the same owner-only `daemon.json` discovery shape;
+3. exchange a daemon bearer capability for an `HttpOnly; SameSite=Strict`
+   browser cookie; and
+4. serve the built React app as static files without a Node/Bun web server;
+   and
+5. own the SQLite v19 database plus the authenticated Queue Home lifecycle
+   routes (`GET`/`POST /api/queue`, open, requeue, complete, and remove).
+
+Build it with:
+
+```sh
+bazel build //cmd/localreviewd:localreviewd
+bazel test //...
+```
+
+The companion CLI is `//cmd/localreview:localreview`. Its migrated commands
+are deliberately small but real:
+
+```sh
+bazel run //cmd/localreview -- daemon --port 57992
+bazel run //cmd/localreview -- queue-submit --title "Parser" --topic parser /path/to/workspace
+```
+
+`queue-submit` uses the owner-only discovery capability and the daemon HTTP
+API; it does not open SQLite directly. Snapshot capture and ACP metadata are
+not silently omitted by the production command—they remain on the migration
+route until the corresponding Go capture modules land.
+
+During the transition, the TypeScript daemon remains the production default.
+The Go binary intentionally returns `501` for unported API routes; it must not
+be selected as the default until every compatibility gate below is green. The
+ported queue routes never proxy into Node/Bun: they use the same on-disk schema
+directly and are covered by Go HTTP tests.
+
+## Copilot SDK parity
+
+Fresh `/ask` is a hard requirement, not a reason to keep a Node daemon. The
+official [GitHub Copilot Go SDK](https://github.com/github/copilot-sdk/tree/main/go)
+supports explicit `GitHubToken`, `UseLoggedInUser=false`, model discovery,
+reasoning effort, context tier, streaming, session resume, and permission
+handlers. The Go implementation must use those controls with the same
+dedicated Copilot GitHub App token boundary as the current implementation.
+
+It must not silently fall back to `gh`, an existing Copilot CLI login, or
+environment tokens. It must reject write/shell/network permission requests for
+fresh `/ask` sessions.
+
+## Required cutover gates
+
+Before a route is switched, test the legacy and Go daemons independently using
+copied fixture databases and repositories. Normalize generated IDs, paths, and
+timestamps, then compare:
+
+- HTTP status, headers, JSON bodies, and error bodies for every `/api` route;
+- SSE event order for `/ask` and `/btw` (`started`, `delta`, `done`, `error`);
+- websocket invalidation events;
+- SQLite v18 schema/data, WAL behavior, upgrade backup, and rollback
+  readability;
+- browser capability/CSRF behavior;
+- immutable multi-repository snapshot materialization and diffs;
+- ACP queue/interrupt/no-duplicate delivery and permission rejection;
+- stale GitHub PR protection, explicit publication, and remote mirrors;
+- lazy SSH federation connection/cache/disconnect;
+- Queue Home → exact queue item → browser diff, including reopen with zero
+  Copilot prompt replay.
+
+The release matrix also includes macOS arm64/amd64 and Linux amd64/arm64
+Bazel builds, install smoke tests, and a browser test against the production
+static artifact.
+
+## Data and rollback
+
+The Go daemon uses the same data directory:
+
+```text
+${CMUX_LOCALREVIEW_DATA_DIR:-~/.local/share/cmux-localreview}
+```
+
+It must retain the existing `daemon.db`, artifacts, snapshots, and discovery
+file. Before any Go-owned migration beyond schema v18, the CLI will create an
+owner-only backup and use an append-only, transactional SQLite migration. A
+rollback must be able to reopen the backup with the prior daemon.
+
+Federation node credentials are included in this security migration: move them
+from SQLite into the OS secret provider, keyed by node ID, before the Go
+daemon becomes the default.
+
+## Web development and release packaging
+
+Frontend development remains normal:
+
+```sh
+bun run build
+```
+
+Release/CI builds use Bazel to build the Go binary and a pinned frontend bundle
+as an input asset. Generated `dist` files are not committed. The release
+binary either embeds the bundle or receives it as a verified runfile; it never
+starts Node/Bun to serve the UI.
+
+## Open product requirements carried into Go
+
+The migration includes—not merely documents—the following user-facing work:
+
+- bootstrap and register multiple local Copilot ACP sessions without manually
+  copying host/port/session IDs;
+- explicit feedback target selection or confirmed multi-target broadcast, with
+  per-target delivery/deduplication history;
+- remote node actions (open, feedback, delivery, requeue, decision) rather
+  than read-only queue aggregation;
+- structural `/ask` versus formal-review channel separation, enforced in
+  storage/export/delivery/GitHub paths rather than a `/ask` text-prefix
+  heuristic; and
+- clear active/history filters so completed items cannot look actionable.

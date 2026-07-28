@@ -83,6 +83,17 @@ describe("upsertThread / listThreads / deleteThread", () => {
     expect(threads[0]!.position.line).toBe(3);
   });
 
+  test("persists an explicit ask channel independently of comment text", () => {
+    const db = makeDb();
+    const repoId = upsertRepoRow(db, fakeRepo);
+    const sessionId = getActiveSessionId(db);
+    upsertThread(db, sessionId, repoId, makeThread({ channel: "ask" }));
+
+    const [thread] = listThreads(db, sessionId, repoId);
+    expect(thread?.channel).toBe("ask");
+    expect(db.query("SELECT channel FROM comments").get()).toEqual({ channel: "ask" });
+  });
+
   test("upsert with same thread id updates in place instead of duplicating", () => {
     const db = makeDb();
     const repoId = upsertRepoRow(db, fakeRepo);

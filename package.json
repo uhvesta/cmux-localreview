@@ -21,7 +21,7 @@
     "vendor-difit-build": "cd vendor/difit && tsc --project tsconfig.cli.json && vite build",
     "vendor-difit-server": "bun vendor/difit/dist/cli/index.js",
     "build": "bun run vendor-difit-build",
-    "test": "bun test --path-ignore-patterns='vendor/**'",
+    "test": "bun test --path-ignore-patterns='**/vendor/**'",
     "typecheck": "tsc --project tsconfig.json && tsc --project vendor/difit/tsconfig.cli.json --noEmit && tsc --project vendor/difit/tsconfig.json --noEmit"
   },
   "dependencies": {
