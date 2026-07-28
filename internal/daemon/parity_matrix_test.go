@@ -119,14 +119,17 @@ var parityMatrix = map[string]parityDisposition{
 	"ask_question_set_for_send":              {Reason: "Native question-set routes are covered by ask route tests; sequential SSE replay needs deterministic stream framing."},
 	"ask_question_set_combined_sse":          {Reason: "Native stream events use an EventSource endpoint after accepted submission, intentionally replacing TS POST-SSE framing."},
 	"ask_question_set_sequential_sse":        {Reason: "Native stream events use an EventSource endpoint after accepted submission, intentionally replacing TS POST-SSE framing."},
-	"ask_conversation_fresh":                 {Reason: "Native conversation lifecycle is covered by ask store/route tests; fixture replay is pending deterministic SDK stream coverage."},
-	"ask_conversation_history":               {Reason: "Native conversation lifecycle is covered by ask store/route tests; fixture replay is pending deterministic SDK stream coverage."},
-	"queue_create_local":                     {Execute: true},
-	"queue_list_with_item":                   {Execute: true},
-	"queue_detail":                           {Execute: true},
-	"queue_reorder":                          {Execute: true},
-	"queue_add_feedback":                     {Execute: true},
-	"queue_feedback_prompt":                  {Execute: true},
+	// Fresh/history are metadata-only lifecycle routes. They archive or read
+	// persisted conversations; neither opens an SDK session nor replays a
+	// prompt, so the frozen lifecycle can be replayed deterministically.
+	"ask_conversation_fresh":   {Execute: true, ForceDaemonCapability: true},
+	"ask_conversation_history": {Execute: true, ForceDaemonCapability: true},
+	"queue_create_local":       {Execute: true},
+	"queue_list_with_item":     {Execute: true},
+	"queue_detail":             {Execute: true},
+	"queue_reorder":            {Execute: true},
+	"queue_add_feedback":       {Execute: true},
+	"queue_feedback_prompt":    {Execute: true},
 	// ACP is a deliberate non-goal of the Go migration. The native reproduce
 	// plan exposes a fresh SDK-native /ask session instead of advertising a
 	// resumable terminal protocol that no longer exists; see
@@ -181,7 +184,7 @@ func TestFrozenTypeScriptParityMatrix(t *testing.T) {
 		"local_pr_requires_read_auth", "workspaces_empty", "queue_empty", "federation_nodes_empty", "open_workspace", "repos",
 		"repo_diff", "repo_diff_ignore_whitespace", "repo_revisions", "repo_line_count", "repo_blob", "repo_generated_status", "repo_fullfile", "create_comment", "comment_import",
 		"sessions", "review_history", "ui_state_empty", "ui_state_put", "export_prompt", "new_session", "comments_json", "comments_output",
-		"ask_conversations_empty", "ask_question_set_create", "ask_question_sets", "ask_question_set_get", "ask_question_set_update", "ask_question_set_delete", "ask_conversation_create", "ask_conversation_get", "ask_inline_conversation_reuses_context",
+		"ask_conversations_empty", "ask_question_set_create", "ask_question_sets", "ask_question_set_get", "ask_question_set_update", "ask_question_set_delete", "ask_conversation_create", "ask_conversation_get", "ask_inline_conversation_reuses_context", "ask_conversation_fresh", "ask_conversation_history",
 		"queue_create_local", "queue_list_with_item", "queue_detail", "queue_reorder", "queue_add_feedback", "queue_feedback_prompt", "queue_export", "queue_open", "queue_complete", "queue_requeue", "queue_delete", "queue_history",
 		"agent_register", "agent_list", "agent_heartbeat", "agent_reconnect",
 	} {

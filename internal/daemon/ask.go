@@ -117,7 +117,12 @@ func (d *Daemon) handleAsk(w http.ResponseWriter, r *http.Request, path string) 
 		return true
 	}
 	if path == "/ask/conversations" && r.Method == http.MethodGet {
-		items, err := ask.ListConversations(ctx, d.db, d.askSessionID(), r.URL.Query().Get("includeArchived") == "true")
+		// `history=true` is retained as a read-only compatibility spelling for
+		// the frozen reviewer UI. Native callers use `includeArchived=true`;
+		// both simply reveal durable, archived review rounds and never resume,
+		// re-open, or re-send any Copilot work.
+		includeArchived := r.URL.Query().Get("includeArchived") == "true" || r.URL.Query().Get("history") == "true"
+		items, err := ask.ListConversations(ctx, d.db, d.askSessionID(), includeArchived)
 		if err != nil {
 			askError(w, err)
 			return true

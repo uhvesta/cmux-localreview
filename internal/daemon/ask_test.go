@@ -142,7 +142,7 @@ func askRequest(t *testing.T, daemon *Daemon, method, path, body string) *httpte
 	t.Helper()
 	req := httptest.NewRequest(method, "http://local.test"+path, bytes.NewBufferString(body))
 	result := httptest.NewRecorder()
-	if !daemon.handleAsk(result, req, path) {
+	if !daemon.handleAsk(result, req, req.URL.Path) {
 		t.Fatalf("route %s was not handled", path)
 	}
 	return result
@@ -231,6 +231,61 @@ func TestInlineConversationPersistsInitialAnchor(t *testing.T) {
 	}
 	if payload.Conversation.Context == nil || payload.Conversation.Context.WorkspacePath != "nested/lib/check.go" || payload.Conversation.Context.SelectedCode != "return valid" {
 		t.Fatalf("conversation=%#v", payload.Conversation)
+	}
+}
+
+func TestAskFreshArchivesPriorRoundAndHistoryReadNeverResumesIt(t *testing.T) {
+	d := askRouteDaemon(t)
+	if _, err := d.db.Exec(`INSERT INTO sessions(id,label,started_at) VALUES(17,'review round',17)`); err != nil {
+		t.Fatal(err)
+	}
+	d.review = &workspaceReview{Root: "/workspace", SessionID: 17}
+	created := askRequest(t, d, http.MethodPost, "/ask/conversations", `{"model":"gpt-5","reasoningEffort":"high","contextTier":"long_context"}`)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create=%d %s", created.Code, created.Body.String())
+	}
+	var first struct {
+		Conversation ask.Conversation `json:"conversation"`
+	}
+	if err := json.Unmarshal(created.Body.Bytes(), &first); err != nil {
+		t.Fatal(err)
+	}
+	fresh := askRequest(t, d, http.MethodPost, "/ask/conversations/fresh", `{"model":"gpt-5","reasoningEffort":"low","contextTier":"default"}`)
+	if fresh.Code != http.StatusCreated {
+		t.Fatalf("fresh=%d %s", fresh.Code, fresh.Body.String())
+	}
+	var second struct {
+		Conversation ask.Conversation `json:"conversation"`
+	}
+	if err := json.Unmarshal(fresh.Body.Bytes(), &second); err != nil {
+		t.Fatal(err)
+	}
+	if second.Conversation.ID == first.Conversation.ID || second.Conversation.ArchivedAt != nil {
+		t.Fatalf("fresh conversation=%#v first=%#v", second.Conversation, first.Conversation)
+	}
+	archived, err := ask.GetConversation(context.Background(), d.db, first.Conversation.ID)
+	if err != nil || archived.ArchivedAt == nil {
+		t.Fatalf("prior conversation should be archived: %#v err=%v", archived, err)
+	}
+
+	// The legacy spelling must only expose history. In particular it must not
+	// resume the archived conversation or create an SDK session on page reload.
+	history := askRequest(t, d, http.MethodGet, "/ask/conversations?history=true", "")
+	if history.Code != http.StatusOK {
+		t.Fatalf("history=%d %s", history.Code, history.Body.String())
+	}
+	var payload struct {
+		Conversations []ask.Conversation `json:"conversations"`
+	}
+	if err := json.Unmarshal(history.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Conversations) != 2 {
+		t.Fatalf("history conversations=%#v", payload.Conversations)
+	}
+	archivedAgain, err := ask.GetConversation(context.Background(), d.db, first.Conversation.ID)
+	if err != nil || archivedAgain.ArchivedAt == nil {
+		t.Fatalf("history read resumed archived conversation: %#v err=%v", archivedAgain, err)
 	}
 }
 

@@ -3,6 +3,20 @@
 This is the durable state record required by `AGENT_LOOP.md`. Entries are
 deliberately factual: a green unit test does not imply end-to-end parity.
 
+## 2026-07-28 — Native `/ask` review-round history parity
+
+- Made the frozen `ask_conversation_fresh` and
+  `ask_conversation_history` lifecycle rows executable in the native parity
+  matrix. Starting a fresh review-round conversation archives the prior
+  durable conversation; `?history=true` is a compatibility alias for the
+  native `?includeArchived=true` read.
+- The compatibility read is side-effect free: it neither resumes a historical
+  conversation nor creates/replays a Copilot SDK turn. This is covered by
+  `TestAskFreshArchivesPriorRoundAndHistoryReadNeverResumesIt` and the frozen
+  matrix replay.
+- This reduces explicit matrix debt only. It is not a Phase-4 completion
+  claim; other exceptions and both required computer-use passes remain open.
+
 ## 2026-07-28 — Phase 0 started: frozen HTTP fixture corpus
 
 Done:

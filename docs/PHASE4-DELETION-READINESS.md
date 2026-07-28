@@ -77,7 +77,10 @@ dependencies. They may continue to mention TypeScript after Phase 4.
 
 ## Current stop line
 
-The native corpus gate is ready. Deletion is **not** ready: the matrix still
-contains explicit compatibility exceptions and the required two complete
-Phase-3 browser/Electron passes have not been recorded. Do not remove `src/`
-or package dependencies based only on this preparation work.
+The native corpus gate is ready. The durable `/ask` fresh/history rows now
+replay through the matrix: `history=true` is a read-only compatibility alias
+for `includeArchived=true`, and a fresh round archives prior conversations
+without opening or replaying a Copilot session. Deletion is **not** ready: the
+matrix still contains other explicit compatibility exceptions and the required
+two complete Phase-3 browser/Electron passes have not been recorded. Do not
+remove `src/` or package dependencies based only on this preparation work.
