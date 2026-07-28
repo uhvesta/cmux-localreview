@@ -99,15 +99,28 @@ that capability rather than reusing it under a new registration.
 an access token, refresh token, browser capability, or OAuth callback URL with
 state.
 
-## Important current limitation
+## Scope model and current limitation
 
 The capability names (`read`, `write`, and `copilot`) are separate local
-storage and routing boundaries; they are **not** GitHub OAuth scopes. The
-current native authorization request deliberately does not add a `scope`
-parameter, and this repository has not validated a real GitHub API call or a
-real Copilot completion against a self-hosted registration. Do not treat a
-successful browser callback or an `authenticated` status as proof that private
-repository access, GitHub publishing, or Copilot inference will succeed.
+storage and routing boundaries; they are not magically fine-grained GitHub
+permissions. The daemon now requests the narrowest OAuth scope GitHub offers
+for each supported operation:
+
+| Capability | Requested OAuth scope | Constraint and safeguard |
+| --- | --- | --- |
+| `read` | `repo` | GitHub OAuth has no read-only scope for private source code; `repo` also has write authority. The daemon structurally never routes this credential to publishing APIs, and Queue Home shows this warning. |
+| `write` | `repo` | Required for explicit repository review publication. It is kept in a separate OS-secret-store account from `read`. |
+| `copilot` | none | GitHub documents no OAuth scope that grants Copilot entitlement. The daemon requests no unrelated GitHub data scope and verifies Copilot separately through the SDK. |
+
+Queue Home shows both requested and GitHub-reported granted scopes. A token
+created before scope tracking is marked as unknown; disconnect and reconnect
+that capability before relying on private repository access. This is an OAuth
+platform limitation, not a reason to paste a broader credential into the app.
+
+This repository has not validated a real GitHub API call or a real Copilot
+completion against a self-hosted registration. Do not treat a successful
+browser callback or an `authenticated` status as proof that private repository
+access, GitHub publishing, or Copilot inference will succeed.
 
 After connecting, test only the action you intend to use and inspect the
 token-free error state: open a read-only PR locally, load `/ask` models, or

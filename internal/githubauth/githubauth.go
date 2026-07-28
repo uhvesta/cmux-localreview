@@ -28,6 +28,45 @@ const (
 
 func valid(c Capability) bool { return c == Read || c == Write || c == Copilot }
 
+// requestedScopes is intentionally conservative. GitHub OAuth Apps cannot
+// request read-only access to private repository contents: `repo` is the
+// narrowest scope that permits private PR mirroring, but it also has write
+// authority. Localreview keeps read/write tokens in separate secure-store
+// accounts and never routes a read token to a publishing API, but an OAuth
+// scope alone cannot enforce that distinction. Copilot has no documented
+// GitHub OAuth scope which grants Copilot entitlement, so request no unrelated
+// GitHub data scope for the SDK-only capability.
+func requestedScopes(c Capability) []string {
+	switch c {
+	case Read, Write:
+		return []string{"repo"}
+	case Copilot:
+		return nil
+	default:
+		return nil
+	}
+}
+
+func requestedScopeValue(c Capability) string { return strings.Join(requestedScopes(c), " ") }
+
+func scopeWarning(c Capability) string {
+	if c == Read {
+		return "GitHub OAuth cannot grant private repository code read-only: the requested repo scope also has write authority. Localreview structurally limits this credential to read routes."
+	}
+	if c == Copilot {
+		return "No GitHub OAuth scope grants Copilot entitlement. This capability requests no unrelated GitHub data scope; Copilot availability is verified separately by the SDK."
+	}
+	return "GitHub OAuth repo scope is required for publishing repository review feedback."
+}
+
+func parseScopes(value string) []string {
+	fields := strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' || r == '\n' })
+	if len(fields) == 0 {
+		return nil
+	}
+	return fields
+}
+
 // SecretStore must be implemented by an OS credential provider. Implementations
 // must not persist credentials in the daemon database or browser storage.
 type SecretStore interface {
@@ -49,11 +88,12 @@ type HTTPDoer interface {
 }
 
 type Token struct {
-	AccessToken  string `json:"accessToken"`
-	RefreshToken string `json:"refreshToken,omitempty"`
-	ExpiresAt    int64  `json:"expiresAt,omitempty"`
-	Login        string `json:"login,omitempty"`
-	ClientID     string `json:"clientId,omitempty"`
+	AccessToken  string   `json:"accessToken"`
+	RefreshToken string   `json:"refreshToken,omitempty"`
+	ExpiresAt    int64    `json:"expiresAt,omitempty"`
+	Login        string   `json:"login,omitempty"`
+	ClientID     string   `json:"clientId,omitempty"`
+	Scopes       []string `json:"scopes,omitempty"`
 }
 
 type Pending struct {
@@ -70,14 +110,17 @@ type StartResult struct {
 	ExpiresAt                 int64
 }
 type Status struct {
-	Configured        bool   `json:"configured"`
-	ClientID          string `json:"clientId,omitempty"`
-	BrowserOAuthReady bool   `json:"browserOAuthReady"`
-	Authenticated     bool   `json:"authenticated"`
-	Login             string `json:"login,omitempty"`
-	State             string `json:"loginState"`
-	Message           string `json:"message,omitempty"`
-	Error             string `json:"error,omitempty"`
+	Configured        bool     `json:"configured"`
+	ClientID          string   `json:"clientId,omitempty"`
+	BrowserOAuthReady bool     `json:"browserOAuthReady"`
+	Authenticated     bool     `json:"authenticated"`
+	Login             string   `json:"login,omitempty"`
+	State             string   `json:"loginState"`
+	Message           string   `json:"message,omitempty"`
+	Error             string   `json:"error,omitempty"`
+	RequestedScopes   []string `json:"requestedScopes,omitempty"`
+	GrantedScopes     []string `json:"grantedScopes,omitempty"`
+	ScopeWarning      string   `json:"scopeWarning,omitempty"`
 }
 
 type ServiceClient struct {
@@ -182,7 +225,11 @@ func (s *ServiceClient) Start(ctx context.Context, c Capability) (StartResult, e
 	if err != nil {
 		return StartResult{}, err
 	}
-	body, code, err := s.request(ctx, "https://github.com/login/device/code", url.Values{"client_id": {id}})
+	values := url.Values{"client_id": {id}}
+	if scopes := requestedScopeValue(c); scopes != "" {
+		values.Set("scope", scopes)
+	}
+	body, code, err := s.request(ctx, "https://github.com/login/device/code", values)
 	if err != nil {
 		return StartResult{}, err
 	}
@@ -241,7 +288,7 @@ func (s *ServiceClient) Poll(ctx context.Context, c Capability) (Status, error) 
 		s.message[c] = message(body, "GitHub authorization failed.")
 		return s.Status(ctx, c)
 	}
-	t := Token{AccessToken: access, RefreshToken: field(body, "refresh_token"), ClientID: p.ClientID}
+	t := Token{AccessToken: access, RefreshToken: field(body, "refresh_token"), ClientID: p.ClientID, Scopes: parseScopes(field(body, "scope"))}
 	if secs := number(body["expires_in"], 0); secs > 0 {
 		t.ExpiresAt = s.Now().Add(time.Duration(secs) * time.Second).UnixMilli()
 	}
@@ -333,6 +380,9 @@ func (s *ServiceClient) Token(ctx context.Context, c Capability) (string, error)
 	}
 	t.AccessToken = next
 	t.RefreshToken = field(body, "refresh_token")
+	if scopes := parseScopes(field(body, "scope")); len(scopes) > 0 {
+		t.Scopes = scopes
+	}
 	if secs := number(body["expires_in"], 0); secs > 0 {
 		t.ExpiresAt = s.Now().Add(time.Duration(secs) * time.Second).UnixMilli()
 	}
@@ -362,7 +412,7 @@ func (s *ServiceClient) Status(ctx context.Context, c Capability) (Status, error
 	if err != nil {
 		return Status{}, err
 	}
-	out := Status{Configured: strings.TrimSpace(id) != "", ClientID: strings.TrimSpace(id), State: s.state[c], Message: s.message[c]}
+	out := Status{Configured: strings.TrimSpace(id) != "", ClientID: strings.TrimSpace(id), State: s.state[c], Message: s.message[c], RequestedScopes: requestedScopes(c), ScopeWarning: scopeWarning(c)}
 	if out.State == "" {
 		out.State = "idle"
 	}
@@ -376,6 +426,10 @@ func (s *ServiceClient) Status(ctx context.Context, c Capability) (Status, error
 	t, e := s.read(c)
 	if e != nil {
 		return out, nil
+	}
+	out.GrantedScopes = append([]string(nil), t.Scopes...)
+	if len(out.RequestedScopes) > 0 && len(out.GrantedScopes) == 0 {
+		out.ScopeWarning += " This credential predates scope tracking or GitHub did not report its granted scope; disconnect and reconnect before relying on repository access."
 	}
 	login, e := s.viewer(ctx, t.AccessToken)
 	if e != nil {

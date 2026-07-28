@@ -70,6 +70,9 @@ func (s *ServiceClient) StartLoopback(ctx context.Context, c Capability) (*Loopb
 	redirect := "http://127.0.0.1:8787/oauth/callback"
 	challenge := sha256.Sum256([]byte(verifier))
 	q := url.Values{"client_id": {id}, "redirect_uri": {redirect}, "state": {state}, "code_challenge": {base64.RawURLEncoding.EncodeToString(challenge[:])}, "code_challenge_method": {"S256"}}
+	if scopes := requestedScopeValue(c); scopes != "" {
+		q.Set("scope", scopes)
+	}
 	f := &LoopbackFlow{AuthorizationURL: s.authorizeEndpoint() + "?" + q.Encode(), RedirectURI: redirect, service: s, capability: c, state: state, verifier: verifier, listener: ln, result: make(chan error, 1)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/oauth/callback", f.callback)
@@ -128,7 +131,7 @@ func (f *LoopbackFlow) exchange(ctx context.Context, code string) error {
 	if status < 200 || status > 299 || access == "" {
 		return errors.New(message(body, "GitHub OAuth token exchange failed"))
 	}
-	t := Token{AccessToken: access, RefreshToken: field(body, "refresh_token"), ClientID: id}
+	t := Token{AccessToken: access, RefreshToken: field(body, "refresh_token"), ClientID: id, Scopes: parseScopes(field(body, "scope"))}
 	if secs := number(body["expires_in"], 0); secs > 0 {
 		t.ExpiresAt = f.service.Now().Add(time.Duration(secs) * time.Second).UnixMilli()
 	}

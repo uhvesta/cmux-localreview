@@ -37,13 +37,17 @@ func TestDeviceFlowSeparatesCapabilitiesAndStoresOnlySecret(t *testing.T) {
 	client := roundTrip(func(r *http.Request) (*http.Response, error) {
 		switch r.URL.Path {
 		case "/login/device/code":
+			_ = r.ParseForm()
+			if got := r.Form.Get("scope"); got != "repo" {
+				t.Fatalf("read device flow scope=%q want repo", got)
+			}
 			return response(200, `{"device_code":"device","user_code":"ABCD","verification_uri":"https://github.com/login/device","expires_in":900}`), nil
 		case "/login/oauth/access_token":
 			stage++
 			if stage == 1 {
 				return response(200, `{"error":"authorization_pending"}`), nil
 			}
-			return response(200, `{"access_token":"secret-token","refresh_token":"refresh","expires_in":3600}`), nil
+			return response(200, `{"access_token":"secret-token","refresh_token":"refresh","expires_in":3600,"scope":"repo"}`), nil
 		case "/user":
 			if r.Header.Get("Authorization") != "Bearer secret-token" {
 				t.Fatal("missing bearer")
@@ -72,6 +76,9 @@ func TestDeviceFlowSeparatesCapabilitiesAndStoresOnlySecret(t *testing.T) {
 	}
 	if len(secrets) != 1 || strings.Contains(strings.Join(mapValues(secrets), ""), "readclient") == false {
 		t.Fatal("expected one app-owned secret record")
+	}
+	if len(done.RequestedScopes) != 1 || done.RequestedScopes[0] != "repo" || len(done.GrantedScopes) != 1 || done.GrantedScopes[0] != "repo" || done.ScopeWarning == "" {
+		t.Fatalf("scope status=%#v", done)
 	}
 	if _, err := s.Token(context.Background(), Write); err == nil {
 		t.Fatal("write must not inherit read token")
@@ -194,7 +201,7 @@ func TestLoopbackOAuthStateAndPKCEVerifierStayDaemonOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if u.Query().Get("state") == "" || u.Query().Get("code_challenge_method") != "S256" || u.Query().Get("code_challenge") == "" {
+	if u.Query().Get("state") == "" || u.Query().Get("code_challenge_method") != "S256" || u.Query().Get("code_challenge") == "" || u.Query().Get("scope") != "repo" {
 		t.Fatal("authorization URL must contain only the PKCE challenge, never the verifier")
 	}
 	bad, err := http.Get(f.RedirectURI + "?code=code&state=wrong")
@@ -221,6 +228,21 @@ func TestLoopbackOAuthStateAndPKCEVerifierStayDaemonOnly(t *testing.T) {
 	}
 	if _, err := s.Token(context.Background(), Read); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRequestedScopesAreExplicitAndDoNotInventCopilotAuthority(t *testing.T) {
+	if got := requestedScopes(Read); len(got) != 1 || got[0] != "repo" {
+		t.Fatalf("read scopes=%q", got)
+	}
+	if got := requestedScopes(Write); len(got) != 1 || got[0] != "repo" {
+		t.Fatalf("write scopes=%q", got)
+	}
+	if got := requestedScopes(Copilot); len(got) != 0 || requestedScopeValue(Copilot) != "" {
+		t.Fatalf("copilot must not request unrelated GitHub data scope: %q", got)
+	}
+	if !strings.Contains(scopeWarning(Read), "cannot grant private repository code read-only") || !strings.Contains(scopeWarning(Copilot), "No GitHub OAuth scope") {
+		t.Fatalf("scope safeguards missing: read=%q copilot=%q", scopeWarning(Read), scopeWarning(Copilot))
 	}
 }
 

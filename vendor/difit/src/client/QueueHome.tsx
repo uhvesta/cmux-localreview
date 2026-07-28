@@ -53,6 +53,9 @@ interface GitHubCapabilityStatus {
   error?: string;
   loginState: 'idle' | 'waiting' | 'succeeded' | 'failed';
   message?: string;
+  requestedScopes?: string[];
+  grantedScopes?: string[];
+  scopeWarning?: string;
 }
 interface GitHubAuthStatus {
   // Browser OAuth is the default through a stable registered callback; device
@@ -403,7 +406,8 @@ export function QueueHome() {
           const waiting = status.loginState === 'waiting';
           return <article key={capability} style={{ border: '1px solid rgba(127,127,127,0.3)', padding: 10, borderRadius: 6 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 7 }}><strong style={{ fontSize: 13 }}>{capabilityLabels[capability].title}</strong><span style={{ fontSize: 11, color: status.authenticated ? '#2ea043' : status.configured ? '#d29922' : '#8b949e' }}>{status.authenticated ? `Connected${status.login ? ` @${status.login}` : ''}` : status.configured ? (waiting ? 'Waiting…' : 'Not connected') : 'Not configured'}</span></div>
-            <p style={{ margin: '5px 0 9px', fontSize: 11, opacity: 0.7 }}>{status.message ?? status.error ?? capabilityLabels[capability].description}{status.configured && status.clientId ? <> OAuth client: <code>{status.clientId}</code>.</> : null}</p>
+            <p style={{ margin: '5px 0 5px', fontSize: 11, opacity: 0.7 }}>{status.message ?? status.error ?? capabilityLabels[capability].description}{status.configured && status.clientId ? <> OAuth client: <code>{status.clientId}</code>.</> : null}</p>
+            {status.requestedScopes !== undefined && <p style={{ margin: '0 0 9px', fontSize: 10, opacity: 0.64 }}>Requested OAuth scopes: <code>{status.requestedScopes.length ? status.requestedScopes.join(' ') : 'none'}</code>{status.grantedScopes && status.grantedScopes.length > 0 ? <> · Granted: <code>{status.grantedScopes.join(' ')}</code></> : ''}{status.scopeWarning ? <><br />{status.scopeWarning}</> : null}</p>}
             <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
               {status.configured && !status.authenticated && <button onClick={() => void startGitHubAuth(capability)} disabled={githubAction !== null} style={{ ...buttonStyle, borderColor: '#2ea043' }}>{githubAction === capability ? 'Opening…' : waiting ? `Restart ${githubFlow === 'loopback' ? 'browser login' : 'device flow'}` : 'Connect'}</button>}
               {status.authenticated && <button onClick={() => void disconnectGitHubApp(capability)} disabled={githubAction !== null} style={buttonStyle}>{githubAction === capability ? 'Disconnecting…' : 'Disconnect'}</button>}
