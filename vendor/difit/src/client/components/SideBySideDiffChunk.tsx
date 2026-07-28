@@ -15,9 +15,11 @@ import {
   type WordLevelDiffResult,
 } from '../utils/wordLevelDiff';
 import { useFileLevelTokensLookup } from '../contexts/FileLevelTokensContext';
+import { getApiBase } from '../apiBase';
 
 import { CommentButton } from './CommentButton';
 import { CommentForm } from './CommentForm';
+import { InlineAskForm } from './InlineAskForm';
 import { CommentThreadCard } from './CommentThreadCard';
 import { EnhancedPrismSyntaxHighlighter } from './EnhancedPrismSyntaxHighlighter';
 import { OpenInEditorButton } from './OpenInEditorButton';
@@ -170,6 +172,7 @@ export function SideBySideDiffChunk({
   } | null>(null);
   const [selectionAnchor, setSelectionAnchor] = useState<LineSelection | null>(null);
   const [hoveredLine, setHoveredLine] = useState<LineSelection | null>(null);
+  const [askingSelection, setAskingSelection] = useState(false);
 
   // Handle comment trigger from keyboard navigation
   useEffect(() => {
@@ -187,6 +190,7 @@ export function SideBySideDiffChunk({
 
   const handleAddComment = useCallback(
     (side: DiffSide, lineNumber: LineNumber) => {
+      setAskingSelection(false);
       if (commentingLine?.side === side && commentingLine?.lineNumber === lineNumber) {
         setCommentingLine(null);
       } else {
@@ -294,6 +298,7 @@ export function SideBySideDiffChunk({
 
   const handleCancelComment = useCallback(() => {
     setCommentingLine(null);
+    setAskingSelection(false);
   }, []);
 
   // Get the code content for the selected lines (for suggestion feature)
@@ -856,6 +861,25 @@ export function SideBySideDiffChunk({
                               filename={filename}
                               draftKey={`cmux-localreview.comment-draft:${filename}:${commentingLine.side}:${String(commentingLine.lineNumber)}`}
                             />
+                            <div className="mx-3 mb-2 flex justify-end">
+                              <button type="button" className="text-xs underline text-blue-300" onClick={() => setAskingSelection(true)}>Ask privately with /ask instead</button>
+                            </div>
+                            {askingSelection && commentingLine && (
+                              <InlineAskForm
+                                location={{
+                                  repoId: getApiBase().split('/').pop(),
+                                  filePath: filename ?? '',
+                                  side: commentingLine.side === 'old' ? 'base' : 'current',
+                                  startLine: Array.isArray(commentingLine.lineNumber) ? commentingLine.lineNumber[0] : commentingLine.lineNumber,
+                                  endLine: Array.isArray(commentingLine.lineNumber) ? commentingLine.lineNumber[1] : commentingLine.lineNumber,
+                                  selectedCode: getSelectedCodeContent(),
+                                }}
+                                onClose={() => setAskingSelection(false)}
+                                onConvertToReviewComment={async (body) => {
+                                  await onAddComment(commentingLine.lineNumber, body, getSelectedCodeContent(), commentingLine.side);
+                                }}
+                              />
+                            )}
                           </div>
                         </div>
                       </td>

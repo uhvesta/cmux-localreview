@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, chmodSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 
 export interface DaemonDiscovery {
   port: number;
@@ -12,6 +12,11 @@ export interface DaemonDiscovery {
 }
 
 export function localreviewDataDir(): string {
+  // Test fixtures and isolated installations can redirect all daemon state
+  // without ever writing snapshots or discovery credentials into a user's
+  // home directory. Production retains the documented default.
+  const override = process.env.CMUX_LOCALREVIEW_DATA_DIR?.trim();
+  if (override) return isAbsolute(override) ? override : resolve(override);
   return join(homedir(), ".local", "share", "cmux-localreview");
 }
 

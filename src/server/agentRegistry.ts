@@ -36,6 +36,10 @@ type AgentRow = {
   review_session_id: string | null;
   status: string;
   metadata_json: string | null;
+  surface_id: string | null;
+  last_seen_at: number | null;
+  last_error: string | null;
+  reconnect_attempts: number | null;
   updated_at: number;
 };
 
@@ -52,6 +56,11 @@ function metadataFromJson(input: string | null): AgentConnectionMetadata {
 }
 
 function fromRow(row: AgentRow): RegisteredAgent {
+  const metadata = metadataFromJson(row.metadata_json);
+  if (row.surface_id) metadata.surfaceId = row.surface_id;
+  if (row.last_seen_at) metadata.lastSeenAt = row.last_seen_at;
+  if (row.last_error) metadata.lastError = row.last_error;
+  if (row.reconnect_attempts != null) metadata.reconnectAttempts = row.reconnect_attempts;
   return {
     id: row.id,
     provider: row.provider,
@@ -59,7 +68,7 @@ function fromRow(row: AgentRow): RegisteredAgent {
     workspacePath: row.workspace_path,
     reviewSessionId: row.review_session_id,
     status: row.status,
-    metadata: metadataFromJson(row.metadata_json),
+    metadata,
     updatedAt: row.updated_at,
   };
 }
@@ -75,12 +84,12 @@ export class AgentRoutingError extends Error {
 }
 
 export function listRegisteredAgents(db: Database): RegisteredAgent[] {
-  return (db.query(`SELECT id,provider,command,workspace_path,review_session_id,status,metadata_json,updated_at FROM agent_registry ORDER BY updated_at DESC`).all() as AgentRow[])
+  return (db.query(`SELECT id,provider,command,workspace_path,review_session_id,status,metadata_json,surface_id,last_seen_at,last_error,reconnect_attempts,updated_at FROM agent_registry ORDER BY updated_at DESC`).all() as AgentRow[])
     .map(fromRow);
 }
 
 export function getRegisteredAgent(db: Database, id: string): RegisteredAgent | undefined {
-  const row = db.query(`SELECT id,provider,command,workspace_path,review_session_id,status,metadata_json,updated_at FROM agent_registry WHERE id = ?`).get(id) as AgentRow | null;
+  const row = db.query(`SELECT id,provider,command,workspace_path,review_session_id,status,metadata_json,surface_id,last_seen_at,last_error,reconnect_attempts,updated_at FROM agent_registry WHERE id = ?`).get(id) as AgentRow | null;
   return row ? fromRow(row) : undefined;
 }
 
@@ -105,12 +114,14 @@ export function registerAgent(
   metadata.lastSeenAt = Date.now();
   if ((input.status ?? "connected") === "connected") delete metadata.lastError;
   const now = Date.now();
-  db.query(`INSERT INTO agent_registry(id,provider,command,workspace_path,review_session_id,status,metadata_json,updated_at)
-    VALUES(?,?,?,?,?,?,?,?)
+  db.query(`INSERT INTO agent_registry(id,provider,command,workspace_path,review_session_id,status,metadata_json,surface_id,last_seen_at,last_error,reconnect_attempts,updated_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(id) DO UPDATE SET
       provider=excluded.provider, command=excluded.command,
       workspace_path=excluded.workspace_path, review_session_id=excluded.review_session_id,
-      status=excluded.status, metadata_json=excluded.metadata_json, updated_at=excluded.updated_at`).run(
+      status=excluded.status, metadata_json=excluded.metadata_json, surface_id=excluded.surface_id,
+      last_seen_at=excluded.last_seen_at, last_error=excluded.last_error,
+      reconnect_attempts=excluded.reconnect_attempts, updated_at=excluded.updated_at`).run(
     input.id,
     input.provider,
     input.command ?? existing?.command ?? null,
@@ -118,14 +129,18 @@ export function registerAgent(
     input.reviewSessionId ?? existing?.reviewSessionId ?? null,
     input.status ?? "connected",
     JSON.stringify(metadata),
+    metadata.surfaceId ?? null,
+    metadata.lastSeenAt ?? now,
+    metadata.lastError ?? null,
+    metadata.reconnectAttempts ?? 0,
     now,
   );
   return getRegisteredAgent(db, input.id)!;
 }
 
 function updateConnection(db: Database, agent: RegisteredAgent, status: AgentStatus, metadata: AgentConnectionMetadata): RegisteredAgent {
-  db.query(`UPDATE agent_registry SET status = ?, metadata_json = ?, updated_at = ? WHERE id = ?`)
-    .run(status, JSON.stringify(metadata), Date.now(), agent.id);
+  db.query(`UPDATE agent_registry SET status = ?, metadata_json = ?, surface_id = ?, last_seen_at = ?, last_error = ?, reconnect_attempts = ?, updated_at = ? WHERE id = ?`)
+    .run(status, JSON.stringify(metadata), metadata.surfaceId ?? null, metadata.lastSeenAt ?? null, metadata.lastError ?? null, metadata.reconnectAttempts ?? 0, Date.now(), agent.id);
   return getRegisteredAgent(db, agent.id)!;
 }
 

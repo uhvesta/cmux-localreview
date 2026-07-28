@@ -47,13 +47,18 @@ interface RepoSummary {
   files: string[];
 }
 
-async function fetchRepos(): Promise<RepoSummary[]> {
+interface WorkspaceSummary {
+  workspaceRoot: string;
+  repos: RepoSummary[];
+}
+
+async function fetchRepos(): Promise<WorkspaceSummary> {
   const response = await fetch('/api/repos');
   if (!response.ok) {
     throw new Error(`Failed to fetch workspace repos: ${response.status}`);
   }
-  const data = (await response.json()) as { repos: RepoSummary[] };
-  return data.repos;
+  const data = (await response.json()) as WorkspaceSummary;
+  return { workspaceRoot: data.workspaceRoot, repos: data.repos };
 }
 
 /**
@@ -68,6 +73,7 @@ export function WorkspaceShell() {
   const uiStateRevisionRef = useRef(0);
   const [uiStateReady, setUiStateReady] = useState(false);
   const [repos, setRepos] = useState<RepoSummary[] | null>(null);
+  const [workspaceRoot, setWorkspaceRoot] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [selectedRepoId, setSelectedRepoId] = useState<string | null>(initialUiState.selectedRepoId ?? null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(initialUiState.sidebarCollapsed ?? false);
@@ -75,11 +81,12 @@ export function WorkspaceShell() {
 
   useEffect(() => {
     fetchRepos()
-      .then((list) => {
-        setRepos(list);
-        if (list.length > 0) {
+      .then((workspace) => {
+        setRepos(workspace.repos);
+        setWorkspaceRoot(workspace.workspaceRoot);
+        if (workspace.repos.length > 0) {
           setSelectedRepoId((current) =>
-            current && list.some((repo) => repo.id === current) ? current : list[0]!.id,
+            current && workspace.repos.some((repo) => repo.id === current) ? current : workspace.repos[0]!.id,
           );
         }
       })
@@ -333,9 +340,7 @@ export function WorkspaceShell() {
                           whiteSpace: 'nowrap',
                         }}
                       >
-                        {repo.workspaceRelativePath === '.'
-                          ? '(workspace root)'
-                          : repo.workspaceRelativePath}
+                        {repo.workspaceRelativePath === '.' ? workspaceRoot : `${workspaceRoot}/${repo.workspaceRelativePath}`}
                       </span>
                       {repo.changeCount > 0 && (
                         <span
@@ -368,7 +373,7 @@ export function WorkspaceShell() {
                         top: 0,
                       }}
                     >
-                      {repo.workspaceRelativePath === '.' ? '(workspace root)' : repo.workspaceRelativePath}
+                      {repo.workspaceRelativePath === '.' ? workspaceRoot : `${workspaceRoot}/${repo.workspaceRelativePath}`}
                     </div>
                     <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
                       {repo.files.map((file) => (
@@ -410,6 +415,20 @@ export function WorkspaceShell() {
                 gap: 6,
               }}
             >
+              <button
+                onClick={() => window.location.assign('/')}
+                style={{
+                  fontSize: 12,
+                  padding: '6px 8px',
+                  cursor: 'pointer',
+                  border: '1px solid rgba(46,160,67,0.7)',
+                  borderRadius: 4,
+                  background: 'rgba(46,160,67,0.1)',
+                  color: 'inherit',
+                }}
+              >
+                Queue Home
+              </button>
               <button
                 onClick={() => void startNewReview()}
                 disabled={newReviewStatus === 'starting'}

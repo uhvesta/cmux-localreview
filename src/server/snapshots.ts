@@ -5,6 +5,7 @@ import { basename, dirname, join } from "node:path";
 import { discoverRepos, type RepoInfo } from "./workspace.ts";
 import { artifactsDir, ensureDaemonDirectories } from "./daemonPaths.ts";
 import { ensureDir, git, safeArtifactName, tempIndexPath } from "./gitExec.ts";
+import type { SubmissionProvenance } from "./submissionContext.ts";
 
 export interface SnapshotRepo {
   workspaceRelativePath: string;
@@ -20,6 +21,8 @@ export interface SnapshotManifest {
   id: string;
   workspacePath: string;
   createdAt: string;
+  /** Capture of the queue origin, never terminal transcript or credentials. */
+  provenance?: SubmissionProvenance;
   repos: SnapshotRepo[];
 }
 
@@ -66,14 +69,19 @@ async function snapshotRepo(repo: RepoInfo, id: string, destination: string, bas
  * Captures all tracked and untracked files through a temporary Git index.
  * Neither HEAD nor the caller's actual index/working tree is changed.
  */
-export async function createWorkspaceSnapshot(workspacePath: string, snapshotId = randomUUID(), baseRef?: string): Promise<{ manifest: SnapshotManifest; manifestPath: string }> {
+export async function createWorkspaceSnapshot(
+  workspacePath: string,
+  snapshotId = randomUUID(),
+  baseRef?: string,
+  provenance?: SubmissionProvenance,
+): Promise<{ manifest: SnapshotManifest; manifestPath: string }> {
   ensureDaemonDirectories();
   const destination = join(artifactsDir(), "snapshots", snapshotId);
   ensureDir(destination);
   const repos = await discoverRepos(workspacePath);
   if (repos.length === 0) throw new Error(`No Git repositories found below ${workspacePath}`);
   const snapshotRepos = await Promise.all(repos.map((repo) => snapshotRepo(repo, snapshotId, destination, baseRef)));
-  const manifest: SnapshotManifest = { version: 1, id: snapshotId, workspacePath, createdAt: new Date().toISOString(), repos: snapshotRepos };
+  const manifest: SnapshotManifest = { version: 1, id: snapshotId, workspacePath, createdAt: new Date().toISOString(), ...(provenance ? { provenance } : {}), repos: snapshotRepos };
   const manifestPath = join(destination, "manifest.json");
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   return { manifest, manifestPath };

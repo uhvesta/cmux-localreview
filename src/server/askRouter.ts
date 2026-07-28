@@ -1,9 +1,7 @@
-import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
-import { homedir } from "node:os";
-import { join, relative, resolve } from "node:path";
+import { relative, resolve } from "node:path";
 import type { Database } from "bun:sqlite";
-import { CopilotClient, type CopilotSession, type ModelInfo, type PermissionRequest } from "@github/copilot-sdk";
+import { CopilotClient, RuntimeConnection, type CopilotSession, type ModelInfo, type PermissionRequest } from "@github/copilot-sdk";
 import express, { type Response, type Router } from "express";
 
 import {
@@ -15,6 +13,14 @@ import {
   updateAskConversation,
   updateAskMessage,
 } from "./askStore.ts";
+import {
+  createQuestionSet,
+  deleteQuestionSet,
+  getQuestionSet,
+  listQuestionSets,
+  updateQuestionSet,
+} from "./askQuestionSetStore.ts";
+import type { AskLocation } from "./askStore.ts";
 
 type ActiveAsk = { session: CopilotSession; model: string | null; sending: boolean };
 
@@ -38,10 +44,20 @@ export class AskService {
   constructor(private readonly db: Database, workspaceRoot: string) {
     this.workspaceRoot = resolve(workspaceRoot);
     this.realWorkspaceRoot = realpathSync(this.workspaceRoot);
-    const key = createHash("sha256").update(this.realWorkspaceRoot).digest("hex").slice(0, 16);
     this.client = new CopilotClient({
       workingDirectory: this.realWorkspaceRoot,
-      baseDirectory: join(homedir(), ".local", "share", "cmux-localreview", "copilot", key),
+      // Use the user's installed Copilot CLI rather than the SDK's bundled
+      // runtime. The installed CLI is the process that owns the user's normal
+      // keychain-backed login, which makes fresh SDK /ask sessions behave the
+      // same way as `copilot -p` and avoids a second, unauthenticated runtime.
+      connection: RuntimeConnection.forStdio({ path: process.env.COPILOT_CLI_PATH ?? "copilot" }),
+      // Do not give the SDK a private COPILOT_HOME.  Copilot CLI credentials
+      // live in the user's normal ~/.copilot directory; a private base
+      // directory looks like a clean installation and makes an otherwise
+      // authenticated CLI report "Not authenticated" from /ask.  Conversation
+      // identity is persisted in our own database, so sharing that runtime
+      // home does not merge localreview conversations.
+      useLoggedInUser: true,
       logLevel: "warning",
     });
   }
@@ -117,6 +133,7 @@ export class AskService {
     conversationId: string,
     prompt: string,
     onDelta: (delta: string) => void,
+    location?: AskLocation,
   ): Promise<{ messageId: number; content: string; aborted: boolean }> {
     const active = await this.sessionFor(conversationId);
     if (active.sending) throw new Error("This /ask conversation is already responding");
@@ -125,6 +142,7 @@ export class AskService {
       role: "assistant",
       body: "",
       pending: true,
+      location,
     });
     active.sending = true;
     let content = "";
@@ -171,6 +189,39 @@ function bodyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
+const MAX_QUESTION_SET_QUESTIONS = 100;
+const MAX_QUESTION_BODY_LENGTH = 12_000;
+
+/** Converts an ordered checklist into one deliberate, review-friendly turn. */
+export function combinedQuestionPrompt(questions: string[]): string {
+  return [
+    "Please answer these review questions in order. Label each answer with its question number.",
+    "",
+    ...questions.map((question, index) => `${index + 1}. ${question}`),
+  ].join("\n");
+}
+
+function questionBodies(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || value.length > MAX_QUESTION_SET_QUESTIONS) return undefined;
+  const questions = value.map((question) => (typeof question === "string" ? question.trim() : ""));
+  if (questions.some((question) => !question || question.length > MAX_QUESTION_BODY_LENGTH)) return undefined;
+  return questions;
+}
+
+function askLocation(value: unknown): AskLocation | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const source = value as Record<string, unknown>;
+  const text = (key: string, max = 20_000) => typeof source[key] === "string" && source[key].length <= max ? source[key] : undefined;
+  const line = (key: string) => Number.isInteger(source[key]) && (source[key] as number) > 0 ? source[key] as number : undefined;
+  const side = source.side === "base" || source.side === "current" ? source.side : undefined;
+  const location: AskLocation = {
+    repoId: text("repoId", 512), filePath: text("filePath", 4_096), side,
+    startLine: line("startLine"), endLine: line("endLine"), selectedCode: text("selectedCode"),
+  };
+  if (location.endLine && (!location.startLine || location.endLine < location.startLine)) return undefined;
+  return Object.values(location).some((part) => part !== undefined) ? location : undefined;
+}
+
 function writeSse(res: Response, event: string, data: unknown): void {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
@@ -193,9 +244,67 @@ export function createAskRouter(options: AskRouterOptions): { router: Router; as
     res.json({ conversations: listAskConversations(options.db, queueItemId) });
   });
 
+  router.get("/api/ask/question-sets", (_req, res) => {
+    res.json({ questionSets: listQuestionSets(options.db) });
+  });
+
+  router.post("/api/ask/question-sets", (req, res) => {
+    const name = bodyString(req.body?.name);
+    const hasQuestions = Object.hasOwn(req.body ?? {}, "questions");
+    const questions = hasQuestions ? questionBodies(req.body?.questions) : [];
+    if (!name) {
+      res.status(400).json({ error: "name is required" });
+      return;
+    }
+    if (!questions) {
+      res.status(400).json({ error: `questions must be an ordered array of 1–${MAX_QUESTION_SET_QUESTIONS} non-empty strings` });
+      return;
+    }
+    res.status(201).json({ questionSet: createQuestionSet(options.db, { name, questions }) });
+  });
+
+  router.get("/api/ask/question-sets/:id", (req, res) => {
+    const questionSet = getQuestionSet(options.db, req.params.id);
+    if (!questionSet) {
+      res.status(404).json({ error: "Unknown question set" });
+      return;
+    }
+    res.json({ questionSet });
+  });
+
+  router.put("/api/ask/question-sets/:id", (req, res) => {
+    const hasName = Object.hasOwn(req.body ?? {}, "name");
+    const hasQuestions = Object.hasOwn(req.body ?? {}, "questions");
+    const name = hasName ? bodyString(req.body?.name) : undefined;
+    const questions = hasQuestions ? questionBodies(req.body?.questions) : undefined;
+    if ((hasName && !name) || (hasQuestions && !questions)) {
+      res.status(400).json({ error: "name and questions, when supplied, must be valid" });
+      return;
+    }
+    if (!hasName && !hasQuestions) {
+      res.status(400).json({ error: "name or questions is required" });
+      return;
+    }
+    const questionSet = updateQuestionSet(options.db, req.params.id, { name, questions });
+    if (!questionSet) {
+      res.status(404).json({ error: "Unknown question set" });
+      return;
+    }
+    res.json({ questionSet });
+  });
+
+  router.delete("/api/ask/question-sets/:id", (req, res) => {
+    if (!deleteQuestionSet(options.db, req.params.id)) {
+      res.status(404).json({ error: "Unknown question set" });
+      return;
+    }
+    res.status(204).end();
+  });
+
   router.post("/api/ask/conversations", async (req, res) => {
     const model = bodyString(req.body?.model);
     const queueItemId = bodyString(req.body?.queueItemId);
+    const context = askLocation(req.body?.context);
     try {
       if (model) {
         const available = await askService.listModels();
@@ -204,7 +313,41 @@ export function createAskRouter(options: AskRouterOptions): { router: Router; as
           return;
         }
       }
-      res.status(201).json({ conversation: createAskConversation(options.db, { model, queueItemId }) });
+      res.status(201).json({ conversation: createAskConversation(options.db, { model, queueItemId, context }) });
+    } catch (error) {
+      res.status(503).json({ error: `Unable to initialize Copilot: ${String(error)}` });
+    }
+  });
+
+  // Inline questions reuse one durable /ask conversation per exact code
+  // location. This route is deliberately not connected to queue feedback.
+  router.post("/api/ask/inline-conversations", async (req, res) => {
+    const context = askLocation(req.body?.context);
+    const model = bodyString(req.body?.model);
+    if (!context?.filePath || !context.startLine) {
+      res.status(400).json({ error: "An inline /ask conversation needs filePath and startLine" });
+      return;
+    }
+    const sameLocation = (candidate: AskLocation | null): boolean => Boolean(candidate
+      && candidate.repoId === context.repoId
+      && candidate.filePath === context.filePath
+      && candidate.side === context.side
+      && candidate.startLine === context.startLine
+      && candidate.endLine === context.endLine);
+    const existing = listAskConversations(options.db).find((conversation) => sameLocation(conversation.context));
+    if (existing) {
+      res.json({ conversation: existing, reused: true });
+      return;
+    }
+    try {
+      if (model) {
+        const available = await askService.listModels();
+        if (!available.some((candidate) => candidate.id === model)) {
+          res.status(400).json({ error: `Unknown Copilot model: ${model}` });
+          return;
+        }
+      }
+      res.status(201).json({ conversation: createAskConversation(options.db, { model, context }), reused: false });
     } catch (error) {
       res.status(503).json({ error: `Unable to initialize Copilot: ${String(error)}` });
     }
@@ -249,6 +392,7 @@ export function createAskRouter(options: AskRouterOptions): { router: Router; as
   router.post("/api/ask/conversations/:id/messages", async (req, res) => {
     const conversation = getAskConversation(options.db, req.params.id);
     const prompt = bodyString(req.body?.prompt);
+    const location = askLocation(req.body?.location);
     if (!conversation) {
       res.status(404).json({ error: "Unknown /ask conversation" });
       return;
@@ -258,7 +402,7 @@ export function createAskRouter(options: AskRouterOptions): { router: Router; as
       return;
     }
 
-    insertAskMessage(options.db, { conversationId: conversation.id, role: "user", body: prompt });
+    insertAskMessage(options.db, { conversationId: conversation.id, role: "user", body: prompt, location });
     res.status(200);
     res.set({
       "Cache-Control": "no-cache, no-transform",
@@ -269,10 +413,63 @@ export function createAskRouter(options: AskRouterOptions): { router: Router; as
     res.flushHeaders();
     writeSse(res, "started", { conversationId: conversation.id });
     try {
-      const result = await askService.send(conversation.id, prompt, (delta) => {
-        writeSse(res, "delta", { delta });
-      });
+      const result = await askService.send(
+        conversation.id,
+        prompt,
+        (delta) => { writeSse(res, "delta", { delta }); },
+        location,
+      );
       writeSse(res, "done", result);
+    } catch (error) {
+      writeSse(res, "error", { error: String(error) });
+    } finally {
+      res.end();
+    }
+  });
+
+  router.post("/api/ask/question-sets/:id/send", async (req, res) => {
+    const conversationId = bodyString(req.body?.conversationId);
+    const mode = req.body?.mode === "sequential" ? "sequential" : req.body?.mode === "combined" ? "combined" : undefined;
+    const questionSet = getQuestionSet(options.db, req.params.id);
+    const conversation = conversationId ? getAskConversation(options.db, conversationId) : undefined;
+    if (!conversationId || !mode) {
+      res.status(400).json({ error: "conversationId and mode ('combined' or 'sequential') are required" });
+      return;
+    }
+    if (!questionSet) {
+      res.status(404).json({ error: "Unknown question set" });
+      return;
+    }
+    if (!conversation) {
+      res.status(404).json({ error: "Unknown /ask conversation" });
+      return;
+    }
+    const questions = questionSet.questions.map((question) => question.body);
+    if (questions.length === 0) {
+      res.status(400).json({ error: "Question sets need at least one question before sending" });
+      return;
+    }
+
+    const prompts = mode === "combined" ? [combinedQuestionPrompt(questions)] : questions;
+    res.status(200);
+    res.set({
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "Content-Type": "text/event-stream",
+      "X-Accel-Buffering": "no",
+    });
+    res.flushHeaders();
+    writeSse(res, "started", { conversationId: conversation.id, questionSetId: questionSet.id, mode, count: prompts.length });
+    try {
+      for (const [index, prompt] of prompts.entries()) {
+        insertAskMessage(options.db, { conversationId: conversation.id, role: "user", body: prompt });
+        writeSse(res, "question_started", { index, prompt });
+        const result = await askService.send(conversation.id, prompt, (delta) => {
+          writeSse(res, "delta", { index, delta });
+        });
+        writeSse(res, "question_done", { index, ...result });
+      }
+      writeSse(res, "done", { conversationId: conversation.id, count: prompts.length });
     } catch (error) {
       writeSse(res, "error", { error: String(error) });
     } finally {

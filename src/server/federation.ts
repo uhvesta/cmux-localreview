@@ -46,6 +46,12 @@ export function removeFederationNode(db: Database, id: string): boolean {
   return db.query(`DELETE FROM federation_nodes WHERE id=?`).run(id).changes > 0;
 }
 
+/** Persisted disconnect: disabled nodes are never lazily re-opened by queue aggregation. */
+export function setFederationNodeEnabled(db: Database, id: string, enabled: boolean): FederationNode | undefined {
+  const result = db.query(`UPDATE federation_nodes SET enabled=?,updated_at=? WHERE id=?`).run(enabled ? 1 : 0, Date.now(), id);
+  return result.changes > 0 ? getFederationNode(db, id) : undefined;
+}
+
 function reservePort(): Promise<number> {
   return new Promise((resolvePromise, reject) => {
     const socket = createServer();
@@ -58,7 +64,16 @@ function reservePort(): Promise<number> {
   });
 }
 
-interface LiveTunnel { port: number; process: ReturnType<typeof Bun.spawn>; ready: Promise<void>; }
+interface LiveTunnel { port: number; process: ReturnType<typeof Bun.spawn>; ready: Promise<void>; connected: boolean; }
+
+export interface FederationNodeRuntimeStatus {
+  id: string;
+  state: "disconnected" | "connecting" | "connected" | "error" | "disabled";
+  localPort: number | null;
+  cachedResponses: number;
+  lastConnectedAt: number | null;
+  lastError: string | null;
+}
 
 /**
  * A node is not contacted until an aggregate/proxy request needs it.  The SSH
@@ -69,7 +84,28 @@ export class FederationTunnelManager {
   private readonly tunnels = new Map<string, LiveTunnel>();
   private readonly responseCache = new Map<string, { expiresAt: number; value: unknown }>();
 
-  constructor(private readonly db: Database) {}
+  constructor(
+    private readonly db: Database,
+    // Injectable for the loopback integration fixture. Production always uses
+    // the system `ssh` binary and never accepts this value over HTTP.
+    private readonly sshCommand = "ssh",
+  ) {}
+
+  /** Runtime-only health; credentials are intentionally never exposed. */
+  status(id: string): FederationNodeRuntimeStatus {
+    const node = getFederationNode(this.db, id);
+    if (!node) throw new Error(`Unknown federation node: ${id}`);
+    if (!node.enabled) return { id, state: "disabled", localPort: null, cachedResponses: 0, lastConnectedAt: node.lastConnectedAt, lastError: node.lastError };
+    const live = this.tunnels.get(id);
+    const cachedResponses = [...this.responseCache.keys()].filter((key) => key.startsWith(`${id}:`)).length;
+    if (!live) {
+      return { id, state: node.lastError ? "error" : "disconnected", localPort: null, cachedResponses, lastConnectedAt: node.lastConnectedAt, lastError: node.lastError };
+    }
+    if (live.process.exitCode !== null) {
+      return { id, state: "error", localPort: null, cachedResponses, lastConnectedAt: node.lastConnectedAt, lastError: node.lastError ?? `SSH tunnel exited with code ${live.process.exitCode}` };
+    }
+    return { id, state: live.connected ? "connected" : "connecting", localPort: live.port, cachedResponses, lastConnectedAt: node.lastConnectedAt, lastError: node.lastError };
+  }
 
   async connect(id: string): Promise<{ port: number }> {
     const existing = this.tunnels.get(id);
@@ -79,14 +115,17 @@ export class FederationTunnelManager {
     if (!node) throw new Error(`Unknown federation node: ${id}`);
     if (!node.enabled) throw new Error(`Federation node ${node.label} is disabled`);
     const port = await reservePort();
-    const child = Bun.spawn({ cmd: ["ssh", "-N", "-o", "ExitOnForwardFailure=yes", "-o", "BatchMode=yes", "-L", `127.0.0.1:${port}:127.0.0.1:${node.remotePort}`, node.sshTarget], stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const child = Bun.spawn({ cmd: [this.sshCommand, "-N", "-o", "ExitOnForwardFailure=yes", "-o", "BatchMode=yes", "-L", `127.0.0.1:${port}:127.0.0.1:${node.remotePort}`, node.sshTarget], stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const live: LiveTunnel = { port, process: child, connected: false, ready: Promise.resolve() };
     const ready = this.waitForHealth(id, port, node.token).then(() => {
       this.db.query(`UPDATE federation_nodes SET last_connected_at=?,last_error=NULL,updated_at=? WHERE id=?`).run(Date.now(), Date.now(), id);
+      live.connected = true;
     }).catch(async (error) => {
       this.db.query(`UPDATE federation_nodes SET last_error=?,updated_at=? WHERE id=?`).run(String(error), Date.now(), id);
       child.kill(); this.tunnels.delete(id); throw error;
     });
-    this.tunnels.set(id, { port, process: child, ready });
+    live.ready = ready;
+    this.tunnels.set(id, live);
     await ready;
     return { port };
   }

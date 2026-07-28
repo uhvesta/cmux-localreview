@@ -5,6 +5,7 @@ import { listThreads } from "./btwStore.ts";
 import { getActiveSessionId } from "./commentsStore.ts";
 import { BtwManager } from "./btwManager.ts";
 import { TerminalBtw } from "./terminalBtw.ts";
+import { AgentRoutingError, type RegisteredAgent } from "./agentRegistry.ts";
 import type { WsHub } from "./wsHub.ts";
 import type { MountedRepo } from "./app.ts";
 
@@ -15,6 +16,11 @@ export interface BtwRouterOptions {
   workspaceRoot: string;
   dryRun: boolean;
   repos: MountedRepo[];
+  /** Global daemon provides this. Standalone mode cannot route terminal asks silently. */
+  resolveTerminalAgent?: (agentId: string | undefined, workspacePath: string) => RegisteredAgent;
+  defaultTerminalAgentId?: string;
+  onTerminalDeliverySuccess?: (agentId: string) => void;
+  onTerminalDeliveryFailure?: (agentId: string, error: unknown) => void;
 }
 
 interface AskBody {
@@ -25,7 +31,8 @@ interface AskBody {
   endLine?: number;
   codeContent?: string;
   question?: string;
-  surfaceId?: string;
+  /** Durable agent-registry id; selected in the panel or inherited from queue provenance. */
+  agentId?: string;
 }
 
 /**
@@ -66,18 +73,31 @@ export function createBtwRouter(
     try {
       const sessionId = getActiveSessionId(options.db);
       if (body.transport === "terminal") {
-        const result = await terminalBtw.ask({
-          sessionId,
-          repoId: mounted?.repoDbId,
-          repoWorkspaceRelativePath: mounted?.repo.workspaceRelativePath,
-          filePath: body.filePath,
-          startLine: body.startLine,
-          endLine: body.endLine,
-          codeContent: body.codeContent,
-          questionBody: body.question,
-          surfaceId: body.surfaceId,
-        });
-        res.json(result);
+        if (!options.resolveTerminalAgent) {
+          res.status(409).json({ error: "Terminal /btw routing is unavailable in standalone mode. Open this review through the global daemon and select a registered agent." });
+          return;
+        }
+        const targetAgentId = body.agentId ?? options.defaultTerminalAgentId;
+        const target = options.resolveTerminalAgent(targetAgentId, options.workspaceRoot);
+        try {
+          const result = await terminalBtw.ask({
+            sessionId,
+            repoId: mounted?.repoDbId,
+            repoWorkspaceRelativePath: mounted?.repo.workspaceRelativePath,
+            filePath: body.filePath,
+            startLine: body.startLine,
+            endLine: body.endLine,
+            codeContent: body.codeContent,
+            questionBody: body.question,
+            targetAgentId: target.id,
+            surfaceId: target.metadata.surfaceId!,
+          });
+          options.onTerminalDeliverySuccess?.(target.id);
+          res.json(result);
+        } catch (error) {
+          options.onTerminalDeliveryFailure?.(target.id, error);
+          throw error;
+        }
         return;
       }
 
@@ -99,6 +119,10 @@ export function createBtwRouter(
       });
       res.json(result);
     } catch (error) {
+      if (error instanceof AgentRoutingError) {
+        res.status(error.statusCode).json({ error: error.message });
+        return;
+      }
       console.error("Error handling /btw ask:", error);
       res.status(500).json({ error: "Failed to ask /btw question" });
     }

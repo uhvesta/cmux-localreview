@@ -4,9 +4,9 @@ import type { QueueItem } from "./queueStore.ts";
 import { materializeSnapshot, readSnapshotManifest, verifySnapshotManifest } from "./snapshots.ts";
 
 export interface ReviewPackageManifest {
-  version: 1;
+  version: 2;
   exportedAt: string;
-  queueItem: Pick<QueueItem, "id" | "title" | "body" | "kind" | "remoteUrl" | "agentId" | "agentProvider" | "copilotSessionId" | "status" | "decisionBody">;
+  queueItem: Pick<QueueItem, "id" | "title" | "body" | "kind" | "remoteUrl" | "agentId" | "agentProvider" | "copilotSessionId" | "acpHost" | "acpPort" | "acpSessionId" | "agentKind" | "status" | "decisionBody" | "provenance" | "sourceFingerprint" | "supersedesId">;
   snapshot: ReturnType<typeof readSnapshotManifest>;
   feedback: unknown[];
 }
@@ -28,11 +28,13 @@ export function exportReviewPackage(item: QueueItem, feedback: unknown[], destin
     const portableSnapshot = { ...snapshot, workspacePath: "." };
     writeFileSync(join(temp, "snapshot-manifest.json"), `${JSON.stringify(portableSnapshot, null, 2)}\n`, { mode: 0o600 });
     const manifest: ReviewPackageManifest = {
-      version: 1,
+      version: 2,
       exportedAt: new Date().toISOString(),
       // Deliberately select fields; no environment, authorization, or remote
-      // credentials are copied into a review package.
-      queueItem: { id: item.id, title: item.title, body: item.body, kind: item.kind, remoteUrl: item.remoteUrl, agentId: item.agentId, agentProvider: item.agentProvider, copilotSessionId: item.copilotSessionId, status: item.status, decisionBody: item.decisionBody },
+      // credentials are copied into a review package. ACP coordinates are
+      // retained because they are required to reconnect feedback to the live
+      // session; they are loopback-only and do not contain a bearer token.
+      queueItem: { id: item.id, title: item.title, body: item.body, kind: item.kind, remoteUrl: item.remoteUrl, agentId: item.agentId, agentProvider: item.agentProvider, copilotSessionId: item.copilotSessionId, acpHost: item.acpHost, acpPort: item.acpPort, acpSessionId: item.acpSessionId, agentKind: item.agentKind, status: item.status, decisionBody: item.decisionBody, provenance: item.provenance, sourceFingerprint: item.sourceFingerprint, supersedesId: item.supersedesId },
       snapshot: portableSnapshot,
       feedback,
     };

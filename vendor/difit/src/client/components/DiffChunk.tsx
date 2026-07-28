@@ -10,6 +10,7 @@ import {
   type LineSelection,
 } from '../../types/diff';
 import { DEFAULT_DIFF_VIEW_MODE } from '../../utils/diffMode';
+import { getApiBase } from '../apiBase';
 import { type CursorPosition } from '../hooks/keyboardNavigation';
 import {
   computeWordLevelDiff,
@@ -18,6 +19,7 @@ import {
 } from '../utils/wordLevelDiff';
 
 import { CommentForm } from './CommentForm';
+import { InlineAskForm } from './InlineAskForm';
 import { CommentThreadCard } from './CommentThreadCard';
 import { DiffLineRow } from './DiffLineRow';
 import type { AppearanceSettings } from './SettingsModal';
@@ -93,6 +95,7 @@ export const DiffChunk = memo(function DiffChunk({
     lineNumber: number;
   } | null>(null);
   const [hoveredLine, setHoveredLine] = useState<number | null>(null);
+  const [askingSelection, setAskingSelection] = useState(false);
 
   // Handle comment trigger from keyboard navigation
   useEffect(() => {
@@ -111,6 +114,7 @@ export const DiffChunk = memo(function DiffChunk({
 
   const handleAddComment = useCallback(
     (side: DiffSide, lineNumber: LineNumber) => {
+      setAskingSelection(false);
       if (commentingLine?.side === side && commentingLine?.lineNumber === lineNumber) {
         setCommentingLine(null);
       } else {
@@ -221,6 +225,7 @@ export const DiffChunk = memo(function DiffChunk({
 
   const handleCancelComment = useCallback(() => {
     setCommentingLine(null);
+    setAskingSelection(false);
   }, []);
 
   // Get the code content for the selected lines (for suggestion feature)
@@ -563,6 +568,25 @@ export const DiffChunk = memo(function DiffChunk({
                               filename={filename}
                               draftKey={`cmux-localreview.comment-draft:${filename}:${commentingLine.side}:${String(commentingLine.lineNumber)}`}
                             />
+                            <div className="mx-3 mb-2 flex justify-end">
+                              <button type="button" className="text-xs underline text-blue-300" onClick={() => setAskingSelection(true)}>Ask privately with /ask instead</button>
+                            </div>
+                            {askingSelection && commentingLine && (
+                              <InlineAskForm
+                                location={{
+                                  repoId: getApiBase().split('/').pop(),
+                                  filePath: filename ?? '',
+                                  side: commentingLine.side === 'old' ? 'base' : 'current',
+                                  startLine: Array.isArray(commentingLine.lineNumber) ? commentingLine.lineNumber[0] : commentingLine.lineNumber,
+                                  endLine: Array.isArray(commentingLine.lineNumber) ? commentingLine.lineNumber[1] : commentingLine.lineNumber,
+                                  selectedCode: getSelectedCodeContent(),
+                                }}
+                                onClose={() => setAskingSelection(false)}
+                                onConvertToReviewComment={async (body) => {
+                                  await onAddComment(commentingLine.lineNumber, body, getSelectedCodeContent(), commentingLine.side);
+                                }}
+                              />
+                            )}
                           </div>
                         </div>
                       </td>

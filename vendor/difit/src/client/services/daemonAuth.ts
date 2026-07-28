@@ -29,6 +29,18 @@ export function captureDaemonTokenFromLocation(): void {
   }
 }
 
+/** Save a loopback daemon token after an explicit local-user recovery action. */
+export function saveDaemonToken(token: string): boolean {
+  const normalized = token.trim();
+  if (!normalized || typeof window === 'undefined') return false;
+  try {
+    window.sessionStorage.setItem(DAEMON_TOKEN_STORAGE_KEY, normalized);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function daemonAuthHeaders(headers?: HeadersInit): Headers {
   const merged = new Headers(headers);
   if (typeof window === 'undefined') return merged;

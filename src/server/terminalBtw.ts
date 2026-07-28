@@ -41,7 +41,9 @@ export interface TerminalAskOptions {
   endLine?: number;
   codeContent?: string;
   questionBody: string;
-  surfaceId?: string;
+  /** These are resolved by the durable agent registry before delivery. */
+  targetAgentId: string;
+  surfaceId: string;
 }
 
 /**
@@ -66,6 +68,9 @@ export class TerminalBtw {
   }
 
   async ask(options: TerminalAskOptions): Promise<{ threadId: number; questionId: number }> {
+    if (!options.targetAgentId || !options.surfaceId) {
+      throw new Error("Terminal /btw requires an explicit registered agent and cmux surface; refusing to fall back to the focused terminal.");
+    }
     const threadId = store.createThread(this.db, {
       sessionId: options.sessionId,
       transport: "terminal",
@@ -73,6 +78,7 @@ export class TerminalBtw {
       filePath: options.filePath,
       startLine: options.startLine,
       endLine: options.endLine,
+      targetAgentId: options.targetAgentId,
     });
     const questionId = store.addQuestion(this.db, threadId, options.questionBody);
     store.createPendingAnswer(this.db, questionId);
@@ -81,7 +87,14 @@ export class TerminalBtw {
     const text = this.formatTerminalMessage(options, answerPath);
 
     const cmux = createCmuxService(this.dryRun ? createDryRunConnector() : createSocketConnector());
-    await cmux.sendText(text, options.surfaceId);
+    try {
+      await cmux.sendText(text, options.surfaceId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      store.failAnswer(this.db, questionId, message);
+      this.hub.broadcast({ type: "btw-update", threadId });
+      throw error;
+    }
 
     return { threadId, questionId };
   }

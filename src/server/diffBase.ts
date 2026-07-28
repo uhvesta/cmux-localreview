@@ -17,15 +17,22 @@ function isSpecialBase(value: string): value is SpecialBase {
  */
 export function resolveDiffBase(target: string): { selection: DiffSelection; diffMode: DiffMode } {
   let baseCommitish: string;
+  let targetCommitish = target;
   if (target === "working") {
     baseCommitish = "staged";
   } else if (isSpecialBase(target)) {
     baseCommitish = "HEAD";
   } else {
-    baseCommitish = `${target}^`;
+    // localreview's --base value is a comparison base, not the revision to
+    // review.  Keep the current worktree (a detached remote PR HEAD for
+    // cached GitHub reviews) as the target.  The previous `base^..base`
+    // interpretation both hid the PR and let the revision picker request
+    // origin/main against itself.
+    baseCommitish = target;
+    targetCommitish = ".";
   }
 
-  const selection = createDiffSelection(baseCommitish, target);
+  const selection = createDiffSelection(baseCommitish, targetCommitish);
 
   let diffMode: DiffMode;
   if (target === "working") {
@@ -35,7 +42,7 @@ export function resolveDiffBase(target: string): { selection: DiffSelection; dif
   } else if (target === ".") {
     diffMode = DiffMode.DOT;
   } else {
-    diffMode = DiffMode.DEFAULT;
+    diffMode = DiffMode.DOT;
   }
 
   return { selection, diffMode };

@@ -6,6 +6,7 @@ import { daemonFetch } from '../services/daemonAuth';
 
 const BTW_DRAFT_STORAGE_KEY = 'cmux-localreview.btw-draft-v1';
 const BTW_TRANSPORT_STORAGE_KEY = 'cmux-localreview.btw-transport-v1';
+const BTW_AGENT_STORAGE_KEY = 'cmux-localreview.btw-agent-v1';
 
 function readStoredString(key: string): string {
   try {
@@ -38,8 +39,17 @@ interface BtwThreadDTO {
   filePath: string | null;
   startLine: number | null;
   endLine: number | null;
+  targetAgentId: string | null;
   createdAt: number;
   questions: BtwQuestionDTO[];
+}
+
+interface AgentDTO {
+  id: string;
+  provider: string;
+  status: string;
+  workspacePath: string | null;
+  metadata: { surfaceId?: string; lastError?: string };
 }
 
 interface BtwPanelProps {
@@ -58,12 +68,21 @@ async function fetchThreads(): Promise<BtwThreadDTO[]> {
   return data.threads;
 }
 
+async function fetchAgents(): Promise<AgentDTO[]> {
+  const res = await daemonFetch('/api/agents');
+  if (!res.ok) return [];
+  const data = (await res.json()) as { agents?: AgentDTO[] };
+  return Array.isArray(data.agents) ? data.agents : [];
+}
+
 export function BtwPanel({ selectedRepoId, refreshNonce, collapsed, onToggleCollapsed }: BtwPanelProps) {
   const [threads, setThreads] = useState<BtwThreadDTO[]>([]);
   const [question, setQuestion] = useState(() => readStoredString(BTW_DRAFT_STORAGE_KEY));
   const [transport, setTransport] = useState<'acp' | 'terminal'>(() =>
     readStoredString(BTW_TRANSPORT_STORAGE_KEY) === 'terminal' ? 'terminal' : 'acp',
   );
+  const [agents, setAgents] = useState<AgentDTO[]>([]);
+  const [agentId, setAgentId] = useState(() => readStoredString(BTW_AGENT_STORAGE_KEY));
   const [asking, setAsking] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -76,6 +95,20 @@ export function BtwPanel({ selectedRepoId, refreshNonce, collapsed, onToggleColl
   useEffect(() => {
     refresh();
   }, [refresh, refreshNonce]);
+
+  useEffect(() => {
+    void fetchAgents().then((available) => {
+      setAgents(available);
+      setAgentId((current) => {
+        if (current && available.some((agent) => agent.id === current)) return current;
+        // Do not choose an arbitrary terminal: an originating/registered
+        // target must be explicit. A single connected agent is the one safe
+        // ergonomic exception.
+        const connected = available.filter((agent) => agent.status === 'connected' && agent.metadata?.surfaceId);
+        return connected.length === 1 ? connected[0]!.id : '';
+      });
+    });
+  }, [refreshNonce]);
 
   useEffect(() => {
     try {
@@ -93,9 +126,21 @@ export function BtwPanel({ selectedRepoId, refreshNonce, collapsed, onToggleColl
     }
   }, [transport]);
 
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(BTW_AGENT_STORAGE_KEY, agentId);
+    } catch {
+      // Target selection is best-effort browser state; the server remains authoritative.
+    }
+  }, [agentId]);
+
   const ask = useCallback(async () => {
     const body = question.trim();
     if (!body) return;
+    if (transport === 'terminal' && !agentId) {
+      setError('Choose the originating registered agent before sending a terminal /btw question.');
+      return;
+    }
     setAsking(true);
     setError(null);
     try {
@@ -105,6 +150,7 @@ export function BtwPanel({ selectedRepoId, refreshNonce, collapsed, onToggleColl
         body: JSON.stringify({
           transport,
           repoId: selectedRepoId ?? undefined,
+          agentId: transport === 'terminal' ? agentId : undefined,
           question: body,
         }),
       });
@@ -117,7 +163,7 @@ export function BtwPanel({ selectedRepoId, refreshNonce, collapsed, onToggleColl
     } finally {
       setAsking(false);
     }
-  }, [question, transport, selectedRepoId, refresh]);
+  }, [question, transport, selectedRepoId, agentId, refresh]);
 
   if (collapsed) {
     return (
@@ -213,7 +259,7 @@ export function BtwPanel({ selectedRepoId, refreshNonce, collapsed, onToggleColl
               </div>
             ))}
             <div style={{ fontSize: 10, opacity: 0.5 }}>
-              via {thread.transport === 'acp' ? thread.acpProvider ?? 'acp' : 'terminal'}
+              via {thread.transport === 'acp' ? thread.acpProvider ?? 'acp' : thread.targetAgentId ? `terminal · ${thread.targetAgentId}` : 'terminal'}
             </div>
           </div>
         ))}
@@ -254,9 +300,24 @@ export function BtwPanel({ selectedRepoId, refreshNonce, collapsed, onToggleColl
               <option value="terminal">Terminal agent</option>
             </select>
           </label>
+          {transport === 'terminal' && (
+            <select
+              value={agentId}
+              onChange={(e) => setAgentId(e.target.value)}
+              aria-label="Target terminal agent"
+              style={{ minWidth: 0, maxWidth: 160, fontSize: 11, background: 'transparent', color: 'inherit' }}
+            >
+              <option value="">Select target agent…</option>
+              {agents.map((agent) => (
+                <option key={agent.id} value={agent.id} disabled={agent.status !== 'connected' || !agent.metadata?.surfaceId}>
+                  {agent.provider} · {agent.id.slice(0, 8)} ({agent.status})
+                </option>
+              ))}
+            </select>
+          )}
           <button
             onClick={() => void ask()}
-            disabled={asking || !question.trim()}
+            disabled={asking || !question.trim() || (transport === 'terminal' && !agentId)}
             style={{
               fontSize: 12,
               padding: '4px 10px',
@@ -265,7 +326,7 @@ export function BtwPanel({ selectedRepoId, refreshNonce, collapsed, onToggleColl
               background: 'transparent',
               color: 'inherit',
               cursor: asking ? 'default' : 'pointer',
-              opacity: asking || !question.trim() ? 0.6 : 1,
+              opacity: asking || !question.trim() || (transport === 'terminal' && !agentId) ? 0.6 : 1,
             }}
           >
             {asking ? 'Asking…' : 'Ask'}

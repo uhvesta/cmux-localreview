@@ -5,6 +5,7 @@ import type { CommentThread, DiffFile, DiffSide, LineNumber } from '../../types/
 import { getApiBase, resolveApiUrl } from '../apiBase';
 import { daemonFetch } from '../services/daemonAuth';
 import { CommentBodyRenderer } from './CommentBodyRenderer';
+import { InlineAskForm } from './InlineAskForm';
 
 interface FullFileGate {
   afterLine: number;
@@ -165,6 +166,8 @@ export function FullFileView({ file, threads, onAddComment }: FullFileViewProps)
   const [askingBtwLine, setAskingBtwLine] = useState<number | null>(null);
   const [btwDraft, setBtwDraft] = useState('');
   const [btwStatus, setBtwStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
+  const [askTarget, setAskTarget] = useState<LineNumber | null>(null);
+  const [askAnchor, setAskAnchor] = useState<number | null>(null);
 
   const submitBtw = async (lineNumber: number) => {
     const question = btwDraft.trim();
@@ -196,6 +199,19 @@ export function FullFileView({ file, threads, onAddComment }: FullFileViewProps)
       setTimeout(() => setBtwStatus('idle'), 2000);
     }
   };
+
+  const askRange = askTarget === null ? null : (Array.isArray(askTarget) ? askTarget : [askTarget, askTarget] as const);
+  const askTargetLine = askRange?.[1] ?? null;
+  const openAsk = (lineNumber: number, extend: boolean) => {
+    const range: LineNumber = extend && askAnchor !== null
+      ? [Math.min(askAnchor, lineNumber), Math.max(askAnchor, lineNumber)]
+      : lineNumber;
+    setAskTarget((current) => current === range ? null : range);
+    setAskAnchor(lineNumber);
+  };
+  const askSelectedCode = askRange
+    ? (data?.lines ?? []).slice(askRange[0] - 1, askRange[1]).join('\n')
+    : '';
 
   if (file.status === 'deleted' && side === 'current') {
     return (
@@ -337,6 +353,13 @@ export function FullFileView({ file, threads, onAddComment }: FullFileViewProps)
                         >
                           /btw
                         </button>
+                        <button
+                          className="opacity-0 group-hover:opacity-100 text-[10px] text-github-text-muted hover:text-github-text-primary"
+                          onClick={(event) => openAsk(row.lineNumber, event.shiftKey)}
+                          title="Ask Copilot privately. Shift-click a second line to ask about a range."
+                        >
+                          /ask
+                        </button>
                       </div>
                       {threadsByLine.get(threadKey(diffSide, row.lineNumber))?.map((thread) => (
                         <div
@@ -382,6 +405,15 @@ export function FullFileView({ file, threads, onAddComment }: FullFileViewProps)
                           >
                             {btwStatus === 'sending' ? 'Asking…' : 'Ask'}
                           </button>
+                        </div>
+                      )}
+                      {askRange && askTargetLine === row.lineNumber && (
+                        <div className="ml-12 my-1">
+                          <InlineAskForm
+                            location={{ repoId: getApiBase().split('/').pop(), filePath: file.path, side, startLine: askRange[0], endLine: askRange[1], selectedCode: askSelectedCode }}
+                            onClose={() => setAskTarget(null)}
+                            onConvertToReviewComment={(body) => onAddComment(file.path, askTarget!, body, askSelectedCode, diffSide)}
+                          />
                         </div>
                       )}
                     </div>

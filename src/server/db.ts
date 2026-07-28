@@ -251,6 +251,99 @@ const MIGRATIONS: Migration[] = [
       )`);
     },
   },
+  {
+    // A target agent's terminal binding and delivery health are durable. The
+    // terminal /btw thread also records the exact agent it was routed to.
+    version: 8,
+    up: (db) => {
+      db.run(`ALTER TABLE agent_registry ADD COLUMN surface_id TEXT`);
+      db.run(`ALTER TABLE agent_registry ADD COLUMN last_seen_at INTEGER`);
+      db.run(`ALTER TABLE agent_registry ADD COLUMN last_error TEXT`);
+      db.run(`ALTER TABLE agent_registry ADD COLUMN reconnect_attempts INTEGER NOT NULL DEFAULT 0`);
+      db.run(`ALTER TABLE btw_threads ADD COLUMN target_agent_id TEXT`);
+      db.run(`CREATE INDEX idx_agent_registry_workspace_status ON agent_registry(workspace_path, status)`);
+      db.run(`CREATE INDEX idx_btw_threads_target_agent ON btw_threads(target_agent_id)`);
+    },
+  },
+  {
+    // ACP endpoints are always loopback addresses. Remote machines are
+    // represented by an SSH local forward, so this daemon never becomes an
+    // arbitrary TCP proxy just because a queue item was submitted.
+    version: 9,
+    up: (db) => {
+      db.run(`ALTER TABLE queue_items ADD COLUMN acp_host TEXT`);
+      db.run(`ALTER TABLE queue_items ADD COLUMN acp_port INTEGER`);
+      db.run(`ALTER TABLE queue_items ADD COLUMN acp_session_id TEXT`);
+      db.run(`ALTER TABLE queue_items ADD COLUMN agent_kind TEXT`);
+      db.run(`ALTER TABLE queue_items ADD COLUMN acp_state TEXT NOT NULL DEFAULT 'unavailable' CHECK(acp_state IN ('unavailable','connecting','idle','busy','error'))`);
+      db.run(`ALTER TABLE queue_items ADD COLUMN acp_last_error TEXT`);
+      db.run(`ALTER TABLE queue_items ADD COLUMN acp_updated_at INTEGER`);
+      db.run(`ALTER TABLE queue_feedback ADD COLUMN delivered_at INTEGER`);
+    },
+  },
+  {
+    // Named question sets let reviewers keep a reusable, ordered review
+    // checklist and submit it into a persisted /ask conversation later.
+    version: 10,
+    up: (db) => {
+      db.run(`CREATE TABLE question_sets (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`);
+      db.run(`CREATE TABLE questions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        question_set_id TEXT NOT NULL REFERENCES question_sets(id) ON DELETE CASCADE,
+        body TEXT NOT NULL,
+        position INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE(question_set_id, position)
+      )`);
+      db.run(`CREATE INDEX idx_questions_set_position ON questions(question_set_id, position)`);
+    },
+  },
+  {
+    // An auto-queue revision represents the same submitting agent. Preserve
+    // its ACP endpoint so feedback on the newer snapshot still reaches the
+    // original live session rather than silently becoming copy/paste-only.
+    version: 11,
+    up: (db) => {
+      db.run(`ALTER TABLE queue_watchers ADD COLUMN acp_host TEXT`);
+      db.run(`ALTER TABLE queue_watchers ADD COLUMN acp_port INTEGER`);
+      db.run(`ALTER TABLE queue_watchers ADD COLUMN acp_session_id TEXT`);
+      db.run(`ALTER TABLE queue_watchers ADD COLUMN agent_kind TEXT`);
+      db.run(`ALTER TABLE queue_watchers ADD COLUMN copilot_session_id TEXT`);
+    },
+  },
+  {
+    // /ask is deliberately a separate research channel from review feedback.
+    // Keep its code-location context with the conversation/messages so an
+    // inline question can be resumed without being exported as a comment.
+    version: 12,
+    up: (db) => {
+      db.run(`ALTER TABLE ask_conversations ADD COLUMN context_json TEXT`);
+      db.run(`ALTER TABLE ask_messages ADD COLUMN location_json TEXT`);
+      db.run(`CREATE INDEX idx_ask_messages_conversation ON ask_messages(conversation_id, id)`);
+    },
+  },
+  {
+    // A queue item's current status is useful for scheduling, but reviewers
+    // also need an auditable lifecycle when deciding whether it is safe to
+    // re-open, reproduce, or publish a remote review.
+    version: 13,
+    up: (db) => {
+      db.run(`CREATE TABLE queue_decisions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        queue_item_id TEXT NOT NULL REFERENCES queue_items(id) ON DELETE CASCADE,
+        status TEXT NOT NULL CHECK(status IN ('approved','changes_requested','completed','requeued')),
+        body TEXT,
+        created_at INTEGER NOT NULL
+      )`);
+      db.run(`CREATE INDEX idx_queue_decisions_item_created ON queue_decisions(queue_item_id, created_at, id)`);
+    },
+  },
 ];
 
 export function runMigrations(db: Database): void {

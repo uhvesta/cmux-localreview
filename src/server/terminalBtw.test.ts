@@ -37,6 +37,21 @@ afterEach(() => {
 });
 
 describe("TerminalBtw", () => {
+  test("refuses to send without a registered target instead of using the focused surface", async () => {
+    const db = makeDb();
+    const { hub } = makeFakeHub();
+    const terminalBtw = new TerminalBtw(db, hub, true);
+    instances.push(terminalBtw);
+
+    await expect(terminalBtw.ask({
+      sessionId: 1,
+      questionBody: "where would this go?",
+      targetAgentId: "",
+      surfaceId: "",
+    })).rejects.toThrow("explicit registered agent");
+    expect(listThreads(db, 1)).toHaveLength(0);
+  });
+
   test("ask() sends via the dry-run cmux connector and creates a pending thread", async () => {
     const db = makeDb();
     const { hub } = makeFakeHub();
@@ -48,6 +63,8 @@ describe("TerminalBtw", () => {
       filePath: "a.txt",
       startLine: 3,
       questionBody: "what does this do?",
+      targetAgentId: "agent-1",
+      surfaceId: "surface-1",
     });
 
     const threads = listThreads(db, 1);
@@ -66,6 +83,8 @@ describe("TerminalBtw", () => {
     const { questionId } = await terminalBtw.ask({
       sessionId: 1,
       questionBody: "why?",
+      targetAgentId: "agent-1",
+      surfaceId: "surface-1",
     });
 
     writeFileSync(join(resolveBtwDir(), `${questionId}.md`), "Because of X.");

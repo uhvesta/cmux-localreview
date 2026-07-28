@@ -7,8 +7,13 @@
     "cmux-localreview": "./src/cli.ts",
     "global-daemon": "./src/global-daemon.ts",
     "queue-submit": "./src/queue-submit.ts",
+    "localreview-submit": "./src/queue-submit.ts",
     "localreview-reproduce": "./src/localreview-reproduce.ts",
-    "localreview-open": "./src/localreview-open.ts"
+    "localreview-reproduce-copilot": "./src/localreview-reproduce-copilot.ts",
+    "localreview-open": "./src/localreview-open.ts",
+    "localreview-setup": "./src/localreview-setup.ts",
+    "localreview-remote": "./src/localreview-remote.ts",
+    "localreview-remote-daemon": "./src/localreview-remote-daemon.ts"
   },
   "scripts": {
     "vendor-difit-build": "cd vendor/difit && tsc --project tsconfig.cli.json && vite build",

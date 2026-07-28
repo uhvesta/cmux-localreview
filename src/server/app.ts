@@ -29,6 +29,7 @@ import { createAskRouter } from "./askRouter.ts";
 import type { BtwManager } from "./btwManager.ts";
 import type { TerminalBtw } from "./terminalBtw.ts";
 import type { WsHub } from "./wsHub.ts";
+import type { RegisteredAgent } from "./agentRegistry.ts";
 
 export interface MountedRepo {
   repo: RepoInfo;
@@ -44,6 +45,11 @@ export interface WorkspaceServerOptions {
   base?: string;
   /** Log cmux sends instead of connecting to the real socket. */
   dryRun?: boolean;
+  /** Global-daemon-only route resolver for terminal /btw questions. */
+  resolveTerminalAgent?: (agentId: string | undefined, workspacePath: string) => RegisteredAgent;
+  defaultTerminalAgentId?: string;
+  onTerminalDeliverySuccess?: (agentId: string) => void;
+  onTerminalDeliveryFailure?: (agentId: string, error: unknown) => void;
 }
 
 /** Stable short id for a repo, derived from its durable identity (gitDir). */
@@ -251,6 +257,10 @@ export async function buildWorkspaceApp(options: WorkspaceServerOptions): Promis
       workspaceRoot: options.workspaceRoot,
       dryRun: options.dryRun ?? false,
       repos: mounted,
+      resolveTerminalAgent: options.resolveTerminalAgent,
+      defaultTerminalAgentId: options.defaultTerminalAgentId,
+      onTerminalDeliverySuccess: options.onTerminalDeliverySuccess,
+      onTerminalDeliveryFailure: options.onTerminalDeliveryFailure,
     });
     app.use(router);
     return { btwManager, terminalBtw };
