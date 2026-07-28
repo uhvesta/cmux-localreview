@@ -18,6 +18,8 @@ import (
 	"strings"
 	"testing"
 
+	copilotsdk "github.com/github/copilot-sdk/go"
+	"github.com/uhvesta/cmux-localreview/internal/askruntime"
 	"github.com/uhvesta/cmux-localreview/internal/githubauth"
 )
 
@@ -103,7 +105,7 @@ var parityMatrix = map[string]parityDisposition{
 	// source of truth for native exports.
 	"comments_json":                          {Execute: true, ForceDaemonCapability: true, Reason: "Replayed with the daemon capability: native reviewer reads are capability-protected."},
 	"comments_output":                        {Execute: true, ForceDaemonCapability: true, Reason: "Replayed with the daemon capability: native reviewer reads are capability-protected."},
-	"ask_models":                             {Reason: "Native SDK model discovery is tested with a fake official SDK backend; frozen fixture has a TS-only model capability shape."},
+	"ask_models":                             {Execute: true, ForceDaemonCapability: true},
 	"ask_conversations_empty":                {Execute: true, ForceDaemonCapability: true, Reason: "Replayed with the daemon capability: native reviewer reads are deliberately capability-protected."},
 	"ask_question_set_create":                {Execute: true, ForceDaemonCapability: true},
 	"ask_question_sets":                      {Execute: true, ForceDaemonCapability: true},
@@ -189,7 +191,7 @@ func TestFrozenTypeScriptParityMatrix(t *testing.T) {
 		"local_pr_requires_read_auth", "workspaces_empty", "queue_empty", "federation_nodes_empty", "open_workspace", "repos",
 		"repo_diff", "repo_diff_ignore_whitespace", "repo_revisions", "repo_line_count", "repo_blob", "repo_generated_status", "repo_fullfile", "create_comment", "comment_import",
 		"sessions", "review_history", "ui_state_empty", "ui_state_put", "export_prompt", "new_session", "comments_json", "comments_output",
-		"ask_conversations_empty", "ask_question_set_create", "ask_question_sets", "ask_question_set_get", "ask_question_set_update", "ask_question_set_delete", "ask_conversation_create", "ask_conversation_get", "ask_inline_conversation_reuses_context", "ask_conversation_model", "ask_conversation_settings", "ask_conversation_fresh", "ask_conversation_history",
+		"ask_models", "ask_conversations_empty", "ask_question_set_create", "ask_question_sets", "ask_question_set_get", "ask_question_set_update", "ask_question_set_delete", "ask_conversation_create", "ask_conversation_get", "ask_inline_conversation_reuses_context", "ask_conversation_model", "ask_conversation_settings", "ask_conversation_fresh", "ask_conversation_history",
 		"queue_create_local", "queue_list_with_item", "queue_detail", "queue_reorder", "queue_add_feedback", "queue_feedback_prompt", "queue_export", "queue_open", "queue_complete", "queue_requeue", "queue_delete", "queue_history",
 		"agent_register", "agent_list", "agent_heartbeat", "agent_reconnect",
 	} {
@@ -268,6 +270,11 @@ func startFrozenParityDaemon(t *testing.T) *Daemon {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Model discovery is a client-level SDK operation, not a conversation turn.
+	// Keep it hermetic so the frozen model-list row proves the native picker
+	// contract without a dedicated credential or network call.
+	d.askRuntime = askruntime.New(askRouteBackend{session: &askRouteSession{}, models: []copilotsdk.ModelInfo{{ID: "fixture-model", Name: "Fixture Model"}}})
+	d.askFactory = &AskRuntimeFactory{}
 	t.Cleanup(func() { _ = d.Close() })
 	return d
 }

@@ -58,7 +58,7 @@ func TestWorkspaceModelDefaultsAreExposedAndAppliedOnlyWhenConversationIsUnset(t
 		t.Fatalf("settings=%d %s", updated.Code, updated.Body.String())
 	}
 	models := askRequest(t, d, http.MethodGet, "/ask/models", "")
-	if models.Code != http.StatusOK || !bytes.Contains(models.Body.Bytes(), []byte(`"source":"sdk"`)) || !bytes.Contains(models.Body.Bytes(), []byte(`"id":"gpt-5"`)) {
+	if models.Code != http.StatusOK || !bytes.Contains(models.Body.Bytes(), []byte(`"source":"sdk"`)) || !bytes.Contains(models.Body.Bytes(), []byte(`"id":"gpt-5"`)) || !bytes.Contains(models.Body.Bytes(), []byte(`"supportedReasoningEfforts":["low","medium","high","xhigh"]`)) {
 		t.Fatalf("models=%d %s", models.Code, models.Body.String())
 	}
 	conversation, err := ask.CreateConversation(context.Background(), d.db, ask.CreateConversationInput{ReviewSessionID: d.askSessionID()})

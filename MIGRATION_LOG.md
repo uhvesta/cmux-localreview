@@ -28,6 +28,15 @@ deliberately factual: a green unit test does not imply end-to-end parity.
   It records a reviewed contract divergence that improves the native picker;
   it is not a generic exception or a Phase-4 completion claim.
 
+## 2026-07-28 — Native `/ask` SDK model-list parity
+
+- Made the frozen `ask_models` row executable using the existing hermetic
+  official-SDK facade. Model discovery remains client-level and never opens a
+  conversation or sends a prompt.
+- The native model response now explicitly lists `low`, `medium`, `high`, and
+  `xhigh` thinking levels for its supported picker contract, preventing a
+  successful SDK refresh from hiding the UI's Thinking control.
+
 ## 2026-07-28 — Phase 0 started: frozen HTTP fixture corpus
 
 Done:

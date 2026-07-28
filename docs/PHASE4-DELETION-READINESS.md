@@ -83,7 +83,9 @@ for `includeArchived=true`, and a fresh round archives prior conversations
 without opening or replaying a Copilot session. The frozen model/settings rows
 also replay with a deliberate native adapter: the historical route discarded
 explicit thinking/context selections after a model change, while the native
-route must preserve them. Deletion is **not** ready: the matrix still contains
+route must preserve them. The SDK-backed model-list row also replays with a
+hermetic SDK facade and advertises the four supported thinking levels to the
+native picker. Deletion is **not** ready: the matrix still contains
 other explicit compatibility exceptions and the required two complete
 Phase-3 browser/Electron passes have not been recorded. Do not remove `src/`
 or package dependencies based only on this preparation work.

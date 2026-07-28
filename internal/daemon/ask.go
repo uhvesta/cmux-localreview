@@ -48,7 +48,12 @@ func (d *Daemon) handleAsk(w http.ResponseWriter, r *http.Request, path string) 
 		}
 		models := make([]map[string]any, 0, len(result.Models))
 		for _, model := range result.Models {
-			models = append(models, map[string]any{"id": model.ID, "name": model.Name, "capabilities": map[string]any{"supports": map[string]bool{"reasoningEffort": true, "contextTier": true}}})
+			// The Go SDK model listing currently identifies models but does not
+			// attach per-model reasoning metadata. The native picker supports all
+			// levels accepted by our persisted SDK session config, so advertise
+			// that explicit contract rather than making the Thinking control
+			// disappear after a successful model refresh.
+			models = append(models, map[string]any{"id": model.ID, "name": model.Name, "capabilities": map[string]any{"supports": map[string]bool{"reasoningEffort": true, "contextTier": true}}, "supportedReasoningEfforts": []string{"low", "medium", "high", "xhigh"}})
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"models": models, "state": "ready", "source": result.Source, "warning": result.Warning, "workspaceDefaults": defaults})
 		return true
