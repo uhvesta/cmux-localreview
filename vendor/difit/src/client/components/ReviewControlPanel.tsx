@@ -197,10 +197,15 @@ export function ReviewControlPanel({ collapsed, onToggleCollapsed, refreshNonce 
   }, []);
 
   const openNext = useCallback(() => run('open-next', () => daemonFetch('/api/queue/open-next', { method: 'POST' }), 'Opened the next queued review.'), [run]);
-  const decide = useCallback((item: QueueItem, decision: Extract<QueueStatus, 'approved' | 'changes_requested' | 'completed'>) =>
-    run(`decision:${item.id}`, () => daemonFetch(`/api/queue/${encodeURIComponent(item.id)}/decision`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision, publish: item.kind === 'remote' && decisionDestination === 'github' }),
-    }), decisionDestination === 'github' ? `Published ${decision.replace('_', ' ')} to GitHub.` : `Marked ${decision.replace('_', ' ')} locally.`), [decisionDestination, run]);
+  const decide = useCallback((item: QueueItem, decision: Extract<QueueStatus, 'approved' | 'changes_requested' | 'completed'>) => {
+    // GitHub's Reviews API only has approve/request-changes/comment events.
+    // Completing an item remains a local archival action even if the reviewer
+    // previously selected GitHub as the destination.
+    const publish = item.kind === 'remote' && decisionDestination === 'github' && decision !== 'completed';
+    return run(`decision:${item.id}`, () => daemonFetch(`/api/queue/${encodeURIComponent(item.id)}/decision`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision, publish }),
+    }), publish ? `Published ${decision.replace('_', ' ')} to GitHub.` : `Marked ${decision.replace('_', ' ')} locally.`);
+  }, [decisionDestination, run]);
   const requeue = useCallback((item: QueueItem) => run(`requeue:${item.id}`, () => daemonFetch(`/api/queue/${encodeURIComponent(item.id)}/requeue`, { method: 'POST' }), 'Requeued at the end of the queue.'), [run]);
   const remove = useCallback((item: QueueItem) => {
     if (!window.confirm(`Remove “${item.title}” without reviewing it? You can submit the same topic again later as a fresh review round.`)) return;
@@ -276,7 +281,7 @@ export function ReviewControlPanel({ collapsed, onToggleCollapsed, refreshNonce 
                   <option value="local">Save locally</option>
                   <option value="github">Publish to GitHub</option>
                 </select>
-                {decisionDestination === 'github' && <span role="status" style={{ color: '#f2cc60' }}>GitHub publishing is unavailable in this native build. A publish attempt will be rejected and will not save a local decision.</span>}
+                {decisionDestination === 'github' && <span role="status" style={{ color: '#f2cc60' }}>Uses the dedicated read and write GitHub App grants. The daemon rechecks this snapshot’s PR head immediately before publishing; a stale or failed publish does not save a local decision.</span>}
               </div>}
               {selected.status === 'in_review' && <>
                 <button onClick={() => void decide(selected, 'approved')} style={buttonStyle} disabled={disabled}>{selected.kind === 'remote' ? decisionDestination === 'github' ? 'Publish approval' : 'Approve locally' : 'Approve'}</button>
