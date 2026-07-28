@@ -399,19 +399,23 @@ func authCommand(args []string) error {
 		capability := flags.String("capability", "copilot", "GitHub App capability: read, write, or copilot")
 		clientID := flags.String("client-id", "", "public GitHub App client ID to configure before login")
 		clientSecretStdin := flags.Bool("client-secret-stdin", false, "read the OAuth client secret from stdin and store it in the OS secret store")
-		device := flags.Bool("device", false, "use device flow instead of the default loopback browser OAuth flow")
+		device := flags.Bool("device", false, "use the default device OAuth flow")
+		loopback := flags.Bool("loopback", false, "use browser OAuth with registered http://127.0.0.1:8787/oauth/callback")
 		noWait := flags.Bool("no-wait", false, "print authorization instructions without polling")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
 		if flags.NArg() != 0 {
-			return errors.New("usage: localreview auth login [--capability CAPABILITY] [--client-id ID] [--client-secret-stdin] [--device] [--no-wait]")
+			return errors.New("usage: localreview auth login [--capability CAPABILITY] [--client-id ID] [--client-secret-stdin] [--device|--loopback] [--no-wait]")
 		}
 		if *capability != "read" && *capability != "write" && *capability != "copilot" {
 			return errors.New("capability must be read, write, or copilot")
 		}
 		if *clientSecretStdin && *clientID == "" {
 			return errors.New("--client-secret-stdin requires --client-id")
+		}
+		if *device && *loopback {
+			return errors.New("choose only one of --device or --loopback")
 		}
 		if *clientID != "" {
 			secretValue := ""
@@ -426,9 +430,9 @@ func authCommand(args []string) error {
 				return err
 			}
 		}
-		flow := "loopback"
-		if *device {
-			flow = "device"
+		flow := "device"
+		if *loopback {
+			flow = "loopback"
 		}
 		_, response, err := daemonCall(http.MethodPost, "/github/auth/"+*capability+"/start", map[string]string{"flow": flow})
 		if err != nil {
@@ -490,7 +494,8 @@ func githubAppCommand(args []string) error {
 		fmt.Fprintln(os.Stdout, "Create dedicated GitHub OAuth Apps for cmux-localreview capabilities: read, write, and copilot.")
 		fmt.Fprintln(os.Stdout, "Use minimum permissions for each capability. Configure each app with a loopback callback and device flow, then run:")
 		fmt.Fprintln(os.Stdout, "  localreview github-app configure --capability copilot --client-id <client-id>")
-		fmt.Fprintln(os.Stdout, "  localreview github-app connect --capability copilot")
+		fmt.Fprintln(os.Stdout, "  localreview github-app connect --capability copilot  # device flow (default)")
+		fmt.Fprintln(os.Stdout, "  localreview github-app connect --capability copilot --loopback  # requires registered http://127.0.0.1:8787/oauth/callback")
 		fmt.Fprintln(os.Stdout, "Tokens and optional client secrets stay in the OS secret store; they are never printed by this CLI.")
 		return nil
 	}
@@ -537,15 +542,21 @@ func githubAppCommand(args []string) error {
 	case "connect":
 		flags := flag.NewFlagSet("github-app connect", flag.ContinueOnError)
 		capability := flags.String("capability", "", "GitHub App capability: read, write, or copilot")
-		device := flags.Bool("device", false, "use device flow instead of loopback browser OAuth")
+		device := flags.Bool("device", false, "use the default device OAuth flow")
+		loopback := flags.Bool("loopback", false, "use registered browser OAuth callback http://127.0.0.1:8787/oauth/callback")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
 		if flags.NArg() != 0 || *capability == "" {
-			return errors.New("usage: localreview github-app connect --capability <read|write|copilot> [--device]")
+			return errors.New("usage: localreview github-app connect --capability <read|write|copilot> [--device|--loopback]")
+		}
+		if *device && *loopback {
+			return errors.New("choose only one of --device or --loopback")
 		}
 		loginArgs := []string{"login", "--capability", *capability}
-		if *device {
+		if *loopback {
+			loginArgs = append(loginArgs, "--loopback")
+		} else if *device {
 			loginArgs = append(loginArgs, "--device")
 		}
 		return authCommand(loginArgs)
@@ -898,67 +909,53 @@ func openHome(args []string) error {
 	return nil
 }
 
+func usage(out io.Writer) {
+	fmt.Fprintln(out, "usage: localreview <daemon|open|submit|queue-submit|reproduce|setup|auth|github-app|remote|federation|demo> [options]")
+	fmt.Fprintln(out, "")
+	fmt.Fprintln(out, "Run `localreview <command> --help` for command flags.")
+}
+
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: localreview <daemon|open|submit|queue-submit|reproduce|setup|auth|github-app|remote|federation|demo> [options]")
+		usage(os.Stderr)
 		os.Exit(2)
 	}
+	if os.Args[1] == "--help" || os.Args[1] == "-h" || os.Args[1] == "help" {
+		usage(os.Stdout)
+		return
+	}
+	var err error
 	switch os.Args[1] {
 	case "daemon":
-		if err := daemonCommand(os.Args[2:]); err != nil {
-			fmt.Fprintln(os.Stderr, "localreview:", err)
-			os.Exit(1)
-		}
+		err = daemonCommand(os.Args[2:])
 	case "submit", "queue-submit":
-		if err := submit(os.Args[2:]); err != nil {
-			fmt.Fprintln(os.Stderr, "localreview:", err)
-			os.Exit(1)
-		}
+		err = submit(os.Args[2:])
 	case "reproduce":
-		if err := reproduce(os.Args[2:]); err != nil {
-			fmt.Fprintln(os.Stderr, "localreview:", err)
-			os.Exit(1)
-		}
+		err = reproduce(os.Args[2:])
 	case "setup":
-		if err := setupCopilot(os.Args[2:]); err != nil {
-			fmt.Fprintln(os.Stderr, "localreview:", err)
-			os.Exit(1)
-		}
+		err = setupCopilot(os.Args[2:])
 	case "auth":
-		if err := authCommand(os.Args[2:]); err != nil {
-			fmt.Fprintln(os.Stderr, "localreview:", err)
-			os.Exit(1)
-		}
+		err = authCommand(os.Args[2:])
 	case "github-app":
-		if err := githubAppCommand(os.Args[2:]); err != nil {
-			fmt.Fprintln(os.Stderr, "localreview:", err)
-			os.Exit(1)
-		}
+		err = githubAppCommand(os.Args[2:])
 	case "remote":
-		if err := remoteCommand(os.Args[2:]); err != nil {
-			fmt.Fprintln(os.Stderr, "localreview:", err)
-			os.Exit(1)
-		}
+		err = remoteCommand(os.Args[2:])
 	case "federation":
-		if err := federationCommand(os.Args[2:]); err != nil {
-			fmt.Fprintln(os.Stderr, "localreview:", err)
-			os.Exit(1)
-		}
+		err = federationCommand(os.Args[2:])
 	case "open":
-		if err := openHome(os.Args[2:]); err != nil {
-			fmt.Fprintln(os.Stderr, "localreview:", err)
-			os.Exit(1)
-		}
+		err = openHome(os.Args[2:])
 	case "demo":
 		// The native demo is intentionally just Queue Home: unlike the retired
 		// TypeScript demo it never starts a second server or fabricates review
 		// state. Pass a workspace path to activate it before opening.
-		if err := openHome(os.Args[2:]); err != nil {
-			fmt.Fprintln(os.Stderr, "localreview:", err)
-			os.Exit(1)
-		}
+		err = openHome(os.Args[2:])
 	default:
-		fmt.Fprintln(os.Stderr, "usage: localreview <daemon|open|submit|queue-submit|reproduce|setup|auth|github-app|remote|federation|demo> [options]")
+		usage(os.Stderr)
 		os.Exit(2)
 	}
+	if err == nil || errors.Is(err, flag.ErrHelp) {
+		return
+	}
+	fmt.Fprintln(os.Stderr, "localreview:", err)
+	os.Exit(1)
 }

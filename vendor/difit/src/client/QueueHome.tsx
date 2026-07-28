@@ -53,9 +53,9 @@ interface GitHubCapabilityStatus {
   message?: string;
 }
 interface GitHubAuthStatus {
-  // The Go daemon's browser-loopback flow is the primary flow.  Keep this a
-  // string instead of a stale device-only literal so an older daemon can
-  // still render its status without making Queue Home unusable.
+  // Device OAuth is the safe default: a GitHub OAuth App needs a registered
+  // callback URL, while a local machine may not reserve the optional loopback
+  // callback port. Keep this a string so older daemons still render safely.
   provider: string;
   capabilities: Record<GitHubCapability, GitHubCapabilityStatus>;
 }
@@ -136,7 +136,7 @@ export function QueueHome() {
   const [githubCapability, setGithubCapability] = useState<GitHubCapability>('read');
   const [githubClientId, setGithubClientId] = useState('');
   const [githubAction, setGithubAction] = useState<GitHubCapability | null>(null);
-  const [githubFlow, setGithubFlow] = useState<'loopback' | 'device'>('loopback');
+  const [githubFlow, setGithubFlow] = useState<'loopback' | 'device'>('device');
   const [deviceCode, setDeviceCode] = useState<{ capability: GitHubCapability; userCode: string; verificationUri: string } | null>(null);
   const [loopbackLogin, setLoopbackLogin] = useState<{ capability: GitHubCapability; authorizationUrl: string } | null>(null);
   const [showHistory, setShowHistory] = useState(true);
@@ -402,8 +402,8 @@ export function QueueHome() {
       <label style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 11, fontSize: 12 }}>
         Authorization method
         <select value={githubFlow} onChange={(event) => setGithubFlow(event.target.value as 'loopback' | 'device')} style={{ ...buttonStyle, padding: '5px 7px' }} aria-label="GitHub authorization method">
-          <option value="loopback">Browser OAuth (recommended)</option>
-          <option value="device">Device code fallback</option>
+          <option value="device">Device code (recommended)</option>
+          <option value="loopback">Browser OAuth (registered callback required)</option>
         </select>
       </label>
       <form onSubmit={configureGitHubApp} style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginTop: 11 }} aria-label="Configure GitHub App client ID">

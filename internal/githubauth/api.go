@@ -72,22 +72,24 @@ func (api API) Configure(ctx context.Context, request ConfigureRequest) error {
 	return nil
 }
 
-// Start defaults to authenticated loopback OAuth. Device flow must be selected
-// explicitly for an App registration that cannot use a loopback redirect.
+// Start defaults to device OAuth. This avoids assuming an OAuth App accepts a
+// dynamically allocated loopback redirect. Loopback is available only when an
+// operator explicitly selects it and has registered the stable callback used
+// by StartLoopback.
 func (api API) Start(ctx context.Context, request StartRequest) (StartResponse, *LoopbackFlow, error) {
 	s, e := api.service()
 	if e != nil {
 		return StartResponse{}, nil, e
 	}
 	flow := strings.TrimSpace(request.Flow)
-	if flow == "" || flow == "loopback" {
+	if flow == "loopback" {
 		f, e := s.StartLoopback(ctx, request.Capability)
 		if e != nil {
 			return StartResponse{}, nil, e
 		}
 		return StartResponse{Flow: "loopback", AuthorizationURL: f.AuthorizationURL}, f, nil
 	}
-	if flow != "device" {
+	if flow != "" && flow != "device" {
 		return StartResponse{}, nil, errors.New("GitHub OAuth flow must be loopback or device")
 	}
 	v, e := s.Start(ctx, request.Capability)

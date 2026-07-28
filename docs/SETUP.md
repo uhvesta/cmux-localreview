@@ -101,17 +101,21 @@ The native daemon has three separate capabilities:
 | `write` | explicit opt-in GitHub review publication | PR read or `/ask` |
 | `copilot` | fresh SDK-native `/ask` and formal delivery | GitHub review publication |
 
-Create the appropriate GitHub OAuth application registrations and configure
-their public client IDs. Use a secret on stdin only if the registration is
-confidential; never place it in argv or shell history.
+Create the appropriate dedicated GitHub **OAuth App** client registrations and
+configure their public client IDs. `localreview github-app` is a retained
+compatibility command name; it configures OAuth clients rather than GitHub App
+installations. The default device flow does not need a loopback callback. The
+opt-in loopback flow requires the registered
+`http://127.0.0.1:8787/oauth/callback` URI and an OAuth client secret supplied
+through stdin, never argv or shell history.
 
 ```sh
 localreview github-app guide
 localreview github-app configure --capability read --client-id YOUR_CLIENT_ID
 localreview github-app connect --capability read
 
-# The default is a browser loopback flow; use --device on a headless host.
-localreview github-app connect --capability copilot --device
+# Device is the default; it works on a headless host too.
+localreview github-app connect --capability copilot
 localreview auth status
 ```
 
@@ -134,9 +138,11 @@ localreview open
 
 Opening the remote item lets you inspect the diff and use `/ask`; no `write`
 capability is needed for local investigation. Refresh a remote item after a
-new head before making a local decision. The currently native UI deliberately
-rejects GitHub-review publication rather than pretending it was published;
-save the decision locally until the write adapter ships.
+new head before making a local decision. **Save locally** keeps the decision
+on this daemon. **Publish to GitHub** is separately opt-in and requires both
+the `read` and `write` capabilities; the daemon resolves the PR immediately
+before publishing and rejects a changed head or closed PR without saving a
+misleading local decision.
 
 ## Remote machine role
 

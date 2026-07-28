@@ -56,9 +56,10 @@ var parityMatrix = map[string]parityDisposition{
 	"browser_session_exchange": {Execute: true},
 	"github_auth_status":       {Execute: true},
 	"github_auth_configure":    {Execute: true},
-	// The Go daemon defaults to loopback OAuth.  Replay device flow here so the
-	// frozen device payload remains covered; the default change is intentional.
-	"github_auth_device_start":         {Execute: true, DeviceFlow: true, Reason: "Native defaults to loopback OAuth; this row explicitly exercises the retained device fallback."},
+	// The native daemon defaults to device OAuth. The frozen device payload
+	// therefore exercises the supported default rather than an implicit
+	// loopback callback.
+	"github_auth_device_start":         {Execute: true, DeviceFlow: true, Reason: "Native defaults to device OAuth."},
 	"github_auth_device_poll":          {Execute: true},
 	"github_auth_authenticated_status": {Execute: true},
 	"github_auth_disconnect":           {Execute: true},

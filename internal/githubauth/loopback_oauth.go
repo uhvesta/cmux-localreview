@@ -54,9 +54,11 @@ func (s *ServiceClient) SetClientSecret(c Capability, secret string) error {
 	return s.Secrets.Set(Service, clientSecretAccount(c), secret)
 }
 
-// StartLoopback is the primary browser flow. The App must permit the generated
-// 127.0.0.1 callback; callers can fall back to the existing device flow only
-// where an App registration cannot allow a loopback redirect.
+// StartLoopback is an opt-in browser flow. GitHub OAuth App registrations need
+// a pre-registered redirect URI, so the callback is deliberately stable rather
+// than an ephemeral :0 port. The operator must register exactly
+// http://127.0.0.1:8787/oauth/callback before selecting this flow; otherwise
+// use the default device flow.
 func (s *ServiceClient) StartLoopback(ctx context.Context, c Capability) (*LoopbackFlow, error) {
 	id, err := s.clientID(c)
 	if err != nil {
@@ -69,16 +71,16 @@ func (s *ServiceClient) StartLoopback(ctx context.Context, c Capability) (*Loopb
 	if strings.TrimSpace(secret) == "" {
 		return nil, fmt.Errorf("configure the %s GitHub App OAuth client secret in the system secret store before browser login", c)
 	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := net.Listen("tcp", "127.0.0.1:8787")
 	if err != nil {
-		return nil, fmt.Errorf("open loopback OAuth listener: %w", err)
+		return nil, fmt.Errorf("open registered loopback OAuth listener on 127.0.0.1:8787 (or use device flow): %w", err)
 	}
 	state, err := newOAuthState()
 	if err != nil {
 		_ = ln.Close()
 		return nil, err
 	}
-	redirect := "http://" + ln.Addr().String() + "/oauth/callback"
+	redirect := "http://127.0.0.1:8787/oauth/callback"
 	q := url.Values{"client_id": {id}, "redirect_uri": {redirect}, "state": {state}}
 	f := &LoopbackFlow{AuthorizationURL: s.authorizeEndpoint() + "?" + q.Encode(), RedirectURI: redirect, service: s, capability: c, state: state, secret: secret, listener: ln, result: make(chan error, 1)}
 	mux := http.NewServeMux()

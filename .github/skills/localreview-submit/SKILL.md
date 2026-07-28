@@ -1,6 +1,6 @@
 ---
 name: localreview-submit
-description: Capture the current Git worktree as an immutable cmux-localreview queue item, retaining cmux and Copilot ACP session context for a later review-feedback loop.
+description: Capture the current Git worktree as an immutable cmux-localreview queue item for native review.
 argument-hint: "[title]"
 user-invocable: true
 ---
@@ -17,24 +17,17 @@ current working directory and not a future or hypothetical revision.
    branch/base information that matters to the review.
 2. If the caller supplied a title, use it. Otherwise form a short title from
    the branch/change; do not include secrets or terminal output.
-3. Submit from the repository root with the command installed by
-   `localreview-setup`. It is normally:
+3. Submit from the repository root with the installed native CLI:
 
    ```sh
-   bun '/Users/avestabarzegar/agentmax/cmux-localreview/src/queue-submit.ts' . --title "<review title>"
+   localreview submit --title "<review title>" --topic "<stable-topic>" .
    ```
 
-4. If this is an existing Copilot CLI ACP session, supply the three ACP fields
-   together: `--acp-host 127.0.0.1 --acp-port <port> --acp-session-id <id>`.
-   Include `--copilot-session-id <id>` and an `--agent-id` when known. A remote
-   agent must be exposed by an SSH *local* forward first; never submit a
-   non-loopback host or a bearer token.
-5. Report the returned queue ID and snapshot path. Do not claim that feedback
-   was injected: human feedback is delivered later through the queue, using an
-   ACP prompt against the retained session.
+4. Report the returned queue ID and snapshot path. Do not claim that feedback
+   was delivered: it is an explicit reviewer action in Queue Home.
 
 The submission command captures cwd, Git branch/base/head, immutable snapshot,
-cmux surface/workspace provenance (when available), originating-agent metadata,
-and ACP/Copilot session identifiers atomically. It never captures terminal
-transcripts. Use `--watch` only when the caller explicitly wants a new queued
-snapshot for later source revisions.
+cmux surface/workspace provenance when available. It never captures terminal
+transcripts, credentials, or ACP/Copilot CLI session identifiers. Use the same
+path and stable topic for later rounds; native review links snapshots rather
+than overwriting old evidence.

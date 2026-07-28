@@ -37,8 +37,9 @@ anchor without resending prior transcript messages.
 
 ## Formal feedback delivery
 
-Formal comments remain separate from `/ask`. The reviewer can copy a fully
-qualified review prompt or choose **Send through Copilot**. Delivery is
+Formal comments remain separate from `/ask`. The reviewer can copy a review
+prompt whose file anchors are relative to the submitted workspace, or choose
+**Send through Copilot**. Delivery is
 item-scoped, explicit, serialized, and written to its delivery history. `queue`
 waits for the current SDK turn; `interrupt` is an explicit redirect policy.
 
@@ -81,6 +82,8 @@ content to the remote host.
 ## Authentication boundary
 
 Configure the `copilot` capability using `localreview github-app` or
-`localreview auth`. Tokens live only in OS secure storage. The browser UI gets
-an HttpOnly local session, not an OAuth token. `gh`, environment variables,
-PATs, and an existing Copilot CLI credential are intentionally not fallbacks.
+`localreview auth`. The former is a compatibility command name: today it
+configures a dedicated GitHub OAuth App client rather than a GitHub App
+installation. Tokens live only in OS secure storage. The browser UI gets an
+HttpOnly local session, not an OAuth token. `gh`, environment variables, PATs,
+and an existing Copilot CLI credential are intentionally not fallbacks.

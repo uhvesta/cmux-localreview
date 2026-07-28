@@ -23,7 +23,8 @@ sh ./install.sh
 `localreviewd` owns the loopback HTTP server, SQLite data, browser session
 capability, embedded UI, Git diff operations, and SDK conversation runtime.
 `localreview` is the only operator CLI; it never opens the SQLite database
-directly.
+directly. The command is self-describing: `localreview --help` prints the
+command groups and `localreview <command> --help` prints the accepted flags.
 
 ## Start the daemon and open the UI
 
@@ -153,7 +154,9 @@ PR URL and choose **Review locally** for a read-only `/ask` session, or choose
 **Add PR** only when the PR should enter the formal review queue. Reopening a
 local-only review reads the existing cached diff and `/ask` transcript; it
 does not resend a prompt to Copilot. If you later want a formal queue round,
-choose **Add PR** or run `localreview queue-submit <PR URL>` explicitly.
+choose **Add PR** or run the explicit remote command below. `submit` and its
+compatible `queue-submit` alias take a local Git workspace path; they do not
+accept a PR URL.
 
 `localreview queue-submit` remains a compatible alias for `localreview submit`
 while existing skills and automation are migrated.
@@ -186,8 +189,10 @@ prompt.
 
 The Go daemon accepts only its dedicated Copilot credential source. It does
 not fall back to `gh`, a PAT, environment variables, or an existing Copilot
-CLI login. Register a distinct GitHub OAuth App for each capability, then
-store the client secret through stdin (never as a command-line argument):
+CLI login. The compatibility command is named `github-app`, but the current
+implementation uses a dedicated **GitHub OAuth App client registration** for
+each capability; it is not a GitHub App installation flow. Store the OAuth
+client secret through stdin (never as a command-line argument):
 
 ```sh
 printf '%s' "$COPILOT_APP_CLIENT_SECRET" | \
@@ -198,8 +203,11 @@ localreview auth status
 localreview auth logout copilot
 ```
 
-The default flow is state-verified browser OAuth on an ephemeral `127.0.0.1`
-callback. `--device` explicitly selects the terminal/device fallback. Tokens
+The default flow is the state-verified GitHub device flow. It is reliable on
+both desktop and headless hosts and does not need a redirect callback.
+`--loopback` is an opt-in browser flow only for an OAuth App that has registered
+exactly `http://127.0.0.1:8787/oauth/callback`; it requires the configured
+OAuth client secret. Tokens
 and client secrets are stored only through the OS secret store and never
 returned to the browser or CLI output. When credentials or the Copilot SDK are
 unavailable, the picker reports an unauthenticated/fallback state instead of
@@ -212,15 +220,15 @@ the native CLI retains its setup vocabulary as a thin, secure alias:
 ```sh
 localreview github-app guide
 localreview github-app configure --capability copilot --client-id "$COPILOT_APP_CLIENT_ID"
-localreview github-app connect --capability copilot       # loopback browser flow
-localreview github-app connect --capability copilot --device
+localreview github-app connect --capability copilot       # device flow (default)
+localreview github-app connect --capability copilot --loopback
 localreview github-app status
 localreview github-app disconnect --capability copilot
 ```
 
-`github-app configure` saves only the public client ID. If your registration
-uses a confidential client, add `--client-secret-stdin` and pipe the secret;
-never place it in a shell history or argument list.
+`github-app configure` saves only the public client ID. The opt-in loopback
+flow requires `--client-secret-stdin`; pipe the secret rather than placing it
+in shell history or an argument list. Device flow does not need it.
 
 ### Deterministic `/ask` and `/btw` acceptance fixture (source checkouts only)
 
@@ -285,9 +293,11 @@ localreview open
 
 The daemon resolves the PR and pins its managed worktree to the resolved head.
 Refresh it in Queue Home after a push. Local review, `/ask`, and saved local
-decisions do not need the `write` capability. GitHub Reviews publication is
-not shipped in the native daemon yet: a publish attempt is rejected clearly
-instead of being silently recorded locally.
+decisions do not need the `write` capability. **Save locally** records only a
+local decision. **Publish to GitHub** is an explicit, opt-in action for an
+open remote PR that requires both `read` and `write`; it re-resolves the head
+immediately before publishing and refuses a stale or closed pull request. A
+failed publication does not save a misleading local decision.
 
 ### Federating a remote daemon over SSH
 

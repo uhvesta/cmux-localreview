@@ -67,7 +67,9 @@ linkage. The side card and full chat are two views of the same conversation.
 ## Authentication and safety
 
 - Use `localreview auth` / `localreview github-app`, not `gh`, PATs, shell
-  environment tokens, or shared Copilot CLI login state.
+  environment tokens, or shared Copilot CLI login state. `github-app` is a
+  compatibility CLI name for the current dedicated GitHub OAuth App client
+  setup, not a GitHub App installation.
 - OAuth credentials are daemon-only OS-secret-store material. Never paste
   client secrets, discovery JSON, browser URLs, or tokens into a handoff.
 - The daemon is loopback-only. A remote worker should use the same command on

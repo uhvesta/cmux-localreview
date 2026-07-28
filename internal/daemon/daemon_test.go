@@ -149,12 +149,8 @@ func TestGitHubAuthHTTPContract(t *testing.T) {
 		t.Fatalf("configure secret=%d %s", response.StatusCode, body)
 	}
 	response, body = request(http.MethodPost, "/api/github/auth/read/start", `{}`)
-	if response.StatusCode != http.StatusAccepted || !strings.Contains(string(body), `"flow":"loopback"`) || !strings.Contains(string(body), "127.0.0.1") || strings.Contains(string(body), "fixture-secret") {
-		t.Fatalf("loopback start=%d %s", response.StatusCode, body)
-	}
-	response, body = request(http.MethodPost, "/api/github/auth/read/start", `{"flow":"device"}`)
-	if response.StatusCode != http.StatusAccepted || !strings.Contains(string(body), "ABCD-1234") {
-		t.Fatalf("start=%d %s", response.StatusCode, body)
+	if response.StatusCode != http.StatusAccepted || !strings.Contains(string(body), `"flow":"device"`) || !strings.Contains(string(body), "ABCD-1234") || strings.Contains(string(body), "fixture-secret") {
+		t.Fatalf("default device start=%d %s", response.StatusCode, body)
 	}
 	response, body = request(http.MethodPost, "/api/github/auth/read/poll", "{}")
 	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "fixture-reviewer") || strings.Contains(string(body), "fixture-token") {

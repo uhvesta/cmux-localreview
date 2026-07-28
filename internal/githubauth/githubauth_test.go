@@ -240,9 +240,9 @@ func TestAPIFacadeUsesExplicitFlowAndHidesCredentials(t *testing.T) {
 	if err != nil || status.Provider != "github-app-device-flow" || len(status.Capabilities) != 3 {
 		t.Fatalf("status=%#v err=%v", status, err)
 	}
-	result, flow, err := api.Start(context.Background(), StartRequest{Capability: Read, Flow: "device"})
+	result, flow, err := api.Start(context.Background(), StartRequest{Capability: Read})
 	if err != nil || flow != nil || result.UserCode != "C" || result.Flow != "device" {
-		t.Fatalf("result=%#v flow=%#v err=%v", result, flow, err)
+		t.Fatalf("default result=%#v flow=%#v err=%v", result, flow, err)
 	}
 	if _, _, err := api.Start(context.Background(), StartRequest{Capability: Read, Flow: "bad"}); err == nil {
 		t.Fatal("accepted implicit unsupported OAuth flow")

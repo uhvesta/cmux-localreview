@@ -70,11 +70,14 @@ localreview auth status
 localreview github-app connect --capability copilot
 ```
 
-For a headless machine add `--device`. Return to the existing `/ask` transcript
-after authentication; do not re-submit a question simply because the panel was
-reopened. If a turn is visibly streaming, cancel it before starting a different
-turn. A saved error means delivery failed and is useful diagnostics, not a
-hidden retry request.
+Device flow is already the default and works on a headless machine. The opt-in
+browser loopback flow requires the configured OAuth client secret and registered
+`http://127.0.0.1:8787/oauth/callback`; configure it through stdin with
+`localreview auth login --client-secret-stdin --loopback`, never as an argument.
+Return to the existing `/ask` transcript after authentication; do not re-submit
+a question simply because the panel was reopened. If a turn is visibly
+streaming, cancel it before starting a different turn. A saved error means
+delivery failed and is useful diagnostics, not a hidden retry request.
 
 The native daemon starts the Copilot SDK lazily only after an explicit model
 load or prompt. Its isolated SDK state lives under the daemon data directory
