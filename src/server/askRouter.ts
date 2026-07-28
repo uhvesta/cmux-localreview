@@ -30,6 +30,35 @@ export interface AskRouterOptions {
 }
 
 /**
+ * Keep the human's saved transcript terse, but give Copilot the exact anchor
+ * when a question came from a line/range in the reviewer. A persistent inline
+ * conversation repeats its anchor on follow-up turns so the model never has
+ * to infer what "this" refers to from an earlier answer.
+ */
+export function formatAskPrompt(workspaceRoot: string, question: string, location?: AskLocation): string {
+  if (!location?.filePath) return question;
+  const candidatePath = resolve(workspaceRoot, location.filePath);
+  const candidateRelative = relative(workspaceRoot, candidatePath);
+  const withinWorkspace = candidateRelative === "" || (!candidateRelative.startsWith("..") && !candidateRelative.includes(`${process.platform === "win32" ? "\\\\" : "/"}..`));
+  const lineRange = location.startLine
+    ? location.endLine && location.endLine !== location.startLine
+      ? `L${location.startLine}-L${location.endLine}`
+      : `L${location.startLine}`
+    : "unspecified line";
+  return [
+    "This is an inline code-review question. Treat the following location as authoritative context; answer the question without making edits.",
+    `Workspace root: ${workspaceRoot}`,
+    `Repository: ${location.repoId ?? "current workspace repository"}`,
+    `File: ${withinWorkspace ? candidatePath : location.filePath}`,
+    `Side: ${location.side ?? "current"}`,
+    `Lines: ${lineRange}`,
+    location.selectedCode ? `Selected code:\n\`\`\`\n${location.selectedCode}\n\`\`\`` : "",
+    "Question:",
+    question,
+  ].filter(Boolean).join("\n\n");
+}
+
+/**
  * Owns the Copilot SDK connection for one review workspace.  The client runs
  * in that workspace but its persistent runtime state is kept outside the
  * repository.  The permission handler is intentionally read-only: no shell,
@@ -135,6 +164,8 @@ export class AskService {
     onDelta: (delta: string) => void,
     location?: AskLocation,
   ): Promise<{ messageId: number; content: string; aborted: boolean }> {
+    const conversation = getAskConversation(this.db, conversationId);
+    if (!conversation) throw new Error("Unknown /ask conversation");
     const active = await this.sessionFor(conversationId);
     if (active.sending) throw new Error("This /ask conversation is already responding");
     const assistant = insertAskMessage(this.db, {
@@ -160,7 +191,9 @@ export class AskService {
     });
 
     try {
-      const final = await active.session.sendAndWait({ prompt });
+      const final = await active.session.sendAndWait({
+        prompt: formatAskPrompt(this.realWorkspaceRoot, prompt, location ?? conversation.context ?? undefined),
+      });
       if (final?.data.content) content = final.data.content;
       return { messageId: assistant.id, content, aborted };
     } finally {

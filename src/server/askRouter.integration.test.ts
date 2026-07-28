@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runMigrations } from "./db.ts";
-import { createAskRouter } from "./askRouter.ts";
+import { createAskRouter, formatAskPrompt } from "./askRouter.ts";
 
 const roots: string[] = [];
 const servers: Server[] = [];
@@ -35,6 +35,23 @@ afterEach(async () => {
 });
 
 describe("/ask HTTP integration with an injected Copilot boundary", () => {
+  test("formats inline questions with workspace, file, range, side, and selected code", () => {
+    const formatted = formatAskPrompt("/review/workspace", "Could this throw path be simplified?", {
+      repoId: "repo-fixture",
+      filePath: "src/parser.ts",
+      side: "current",
+      startLine: 20,
+      endLine: 23,
+      selectedCode: "if (!input) throw new Error('missing');",
+    });
+    expect(formatted).toContain("Workspace root: /review/workspace");
+    expect(formatted).toContain("File: /review/workspace/src/parser.ts");
+    expect(formatted).toContain("Side: current");
+    expect(formatted).toContain("Lines: L20-L23");
+    expect(formatted).toContain("if (!input) throw new Error('missing');");
+    expect(formatted).toEndWith("Could this throw path be simplified?");
+  });
+
   test("persists question sets and inline conversations without requiring a real Copilot login", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
