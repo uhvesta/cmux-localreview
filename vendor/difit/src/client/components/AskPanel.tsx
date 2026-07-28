@@ -51,11 +51,13 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort | ''>('');
   const [contextTier, setContextTier] = useState<ContextTier>('default');
   const [prompt, setPrompt] = useState(storedDraft);
+  const [retryPrompt, setRetryPrompt] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modelStatus, setModelStatus] = useState<'loading' | 'available' | 'unavailable'>('loading');
   const [editingQuestionSet, setEditingQuestionSet] = useState(false);
   const activeResponseRef = useRef<AbortController | null>(null);
+  const sendInFlightRef = useRef(false);
   const activeEventSourceRef = useRef<EventSource | null>(null);
   const abortEventStreamRef = useRef<(() => void) | null>(null);
   // Several entry points can restore a transcript at once (panel refresh,
@@ -283,13 +285,28 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
     } finally { activeResponseRef.current = null; }
   }, [conversationId, createConversation, loadConversation]);
 
-  const send = useCallback(async () => {
-    const text = prompt.trim();
-    if (!text || sending) return;
+  const send = useCallback(async (promptOverride?: string) => {
+    const text = (promptOverride ?? prompt).trim();
+    // State updates are asynchronous. The ref closes the double-click/keyboard
+    // race before `sending` has rendered disabled controls.
+    if (!text || sending || sendInFlightRef.current) return;
+    sendInFlightRef.current = true;
     setSending(true); setError(null); setPrompt('');
-    try { await sendPrompt(text); }
-    catch (err) { if ((err as { name?: string }).name !== 'AbortError') setError(err instanceof Error ? err.message : 'Failed to send /ask message.'); }
-    finally { setSending(false); }
+    try {
+      await sendPrompt(text);
+      setRetryPrompt(null);
+    } catch (err) {
+      if ((err as { name?: string }).name !== 'AbortError') {
+        setError(err instanceof Error ? err.message : 'Failed to send /ask message.');
+        setRetryPrompt(text);
+        // The regular draft store persists this text across a reload; a failed
+        // transient stream must never strand the reviewer without their words.
+        setPrompt((current) => current || text);
+      }
+    } finally {
+      sendInFlightRef.current = false;
+      setSending(false);
+    }
   }, [prompt, sendPrompt, sending]);
 
   const cancel = useCallback(async () => {
@@ -422,7 +439,7 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
     </div>
     {historicalConversations.length > 0 && <label style={{ margin: '7px 10px 0', fontSize: 11, opacity: 0.78 }}><input type="checkbox" checked={showHistory} onChange={(event) => setShowHistory(event.target.checked)} /> Show previous Ask sessions ({historicalConversations.length})</label>}
     {visibleConversations.length > 0 && <select aria-label="Ask conversation" value={conversationId ?? ''} onChange={(event) => void loadConversation(event.target.value)} style={{ margin: '7px 10px 0', fontSize: 11, background: 'transparent', color: 'inherit' }}>{visibleConversations.map((item) => <option key={item.id} value={item.id}>{item.archivedAt || item.reviewSessionId !== activeReviewSessionId ? 'Previous · ' : 'Current · '}{item.id.slice(0, 8)} {item.model ? `· ${item.model}` : ''}</option>)}</select>}
-    {error && <div role="alert" style={{ padding: '7px 10px', color: '#e5534b', fontSize: 11 }}>{error} <button onClick={() => void refresh()} style={{ ...panelButton, marginLeft: 5 }}>Retry</button></div>}
+    {error && <div role="alert" style={{ padding: '7px 10px', color: '#e5534b', fontSize: 11 }}>{error} {retryPrompt && <button onClick={() => void send(retryPrompt)} disabled={sending} style={{ ...panelButton, marginLeft: 5 }}>Retry last question</button>} <button onClick={() => void refresh()} style={{ ...panelButton, marginLeft: 5 }}>Refresh chat</button></div>}
     {historicalConversation && <div role="status" style={{ padding: '7px 10px', color: '#b6c2cf', fontSize: 11, borderBottom: '1px solid rgba(127,127,127,0.25)' }}>Previous Ask session — read-only so it does not clutter or alter this review round.{selectedConversation?.reviewSessionId === activeReviewSessionId && <button onClick={() => void resumeConversation()} style={{ ...panelButton, marginLeft: 6 }}>Resume this session</button>}</div>}
     {editingQuestionSet && <div style={{ padding: 9, borderBottom: '1px solid rgba(127,127,127,0.3)', display: 'grid', gap: 5 }}>
       <label style={{ fontSize: 10, opacity: 0.7 }}>Named question set — separate questions with a blank line; order is preserved.</label>

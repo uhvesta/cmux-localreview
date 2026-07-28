@@ -52,6 +52,7 @@ export function InlineAskForm({ location, initialPrompt, onInitialPromptSent, on
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<AskMessage[]>([]);
   const [prompt, setPrompt] = useState('');
+  const [retryPrompt, setRetryPrompt] = useState<string | null>(null);
   const [status, setStatus] = useState<'loading' | 'idle' | 'sending' | 'cancelling' | 'error'>('loading');
   const [activity, setActivity] = useState('Opening the review’s shared Copilot conversation…');
   const [error, setError] = useState<string | null>(null);
@@ -60,6 +61,7 @@ export function InlineAskForm({ location, initialPrompt, onInitialPromptSent, on
   const eventSourceRef = useRef<EventSource | null>(null);
   const abortStreamRef = useRef<(() => void) | null>(null);
   const cancelRequestedRef = useRef(false);
+  const sendInFlightRef = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -88,7 +90,8 @@ export function InlineAskForm({ location, initialPrompt, onInitialPromptSent, on
 
   const send = async (promptOverride?: string) => {
     const text = (promptOverride ?? prompt).trim();
-    if (!text || !conversationId || status === 'sending') return;
+    if (!text || !conversationId || status === 'sending' || status === 'cancelling' || sendInFlightRef.current) return;
+    sendInFlightRef.current = true;
     const optimisticUser: AskMessage = { id: -Date.now(), role: 'user', body: text, pending: false, location };
     const optimisticAssistant: AskMessage = { id: -(Date.now() + 1), role: 'assistant', body: '', pending: true, location };
     cancelRequestedRef.current = false;
@@ -161,12 +164,14 @@ export function InlineAskForm({ location, initialPrompt, onInitialPromptSent, on
         setMessages(Array.isArray(body.messages) ? body.messages : []);
       }
       window.dispatchEvent(new CustomEvent('cmux-localreview:ask-updated', { detail: { conversationId } }));
-      setStatus('idle'); setActivity('');
+      setRetryPrompt(null); setStatus('idle'); setActivity('');
     } catch (err) {
       eventSourceRef.current?.close(); eventSourceRef.current = null; abortStreamRef.current = null;
       if ((err as { name?: string }).name === 'AbortError' && cancelRequestedRef.current) return;
       setMessages((current) => current.map((message) => message.id === optimisticAssistant.id ? { ...message, pending: false, body: message.body || 'Copilot did not complete this response.' } : message));
-      setError(err instanceof Error ? err.message : 'Inline /ask failed.'); setStatus('error'); setActivity('Copilot stopped before completing the response.');
+      setError(err instanceof Error ? err.message : 'Inline /ask failed.'); setRetryPrompt(text); setPrompt((current) => current || text); setStatus('error'); setActivity('Copilot stopped before completing the response.');
+    } finally {
+      sendInFlightRef.current = false;
     }
   };
 
@@ -240,7 +245,7 @@ export function InlineAskForm({ location, initialPrompt, onInitialPromptSent, on
       <button type="button" onClick={onClose} className="text-xs underline">Close conversation</button>
     </div>
     <p className="mb-3 text-xs text-github-text-muted">This inline view shows this code location. Copilot keeps questions from every inline /ask and the side chat in one long-lived review session. This private chat never becomes review feedback unless you explicitly convert an answer.</p>
-    {error && <div role="alert" className="mb-2 rounded border border-red-500/40 bg-red-950/20 p-2 text-xs text-red-200">{error}</div>}
+    {error && <div role="alert" className="mb-2 rounded border border-red-500/40 bg-red-950/20 p-2 text-xs text-red-200"><span>{error}</span>{retryPrompt && <button type="button" onClick={() => void send(retryPrompt)} disabled={busy} className="ml-2 underline disabled:opacity-50">Retry last question</button>}</div>}
     {(status === 'loading' || busy || status === 'error') && <div role="status" aria-live="polite" className="mb-2 flex items-center gap-2 rounded border border-blue-500/30 bg-blue-950/20 px-2 py-1.5 text-xs text-blue-100"><span aria-hidden="true" className={busy || status === 'loading' ? 'inline-block h-2 w-2 animate-pulse rounded-full bg-blue-300' : 'inline-block h-2 w-2 rounded-full bg-red-300'} />{activity}</div>}
     <div className="max-h-72 space-y-2 overflow-y-auto" aria-live="polite" aria-relevant="additions text">
       {status === 'loading' && <div className="text-xs text-github-text-muted">Restoring the shared /ask conversation…</div>}

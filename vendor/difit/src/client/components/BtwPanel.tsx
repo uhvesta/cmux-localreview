@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -60,8 +60,10 @@ async function fetchThreads(): Promise<BtwThreadDTO[]> {
 export function BtwPanel({ selectedRepoId, refreshNonce, collapsed, onToggleCollapsed }: BtwPanelProps) {
   const [threads, setThreads] = useState<BtwThreadDTO[]>([]);
   const [question, setQuestion] = useState(() => readStoredString(BTW_DRAFT_STORAGE_KEY));
+  const [retryQuestion, setRetryQuestion] = useState<string | null>(null);
   const [asking, setAsking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const askInFlightRef = useRef(false);
 
   const refresh = useCallback(() => {
     fetchThreads()
@@ -91,9 +93,10 @@ export function BtwPanel({ selectedRepoId, refreshNonce, collapsed, onToggleColl
     }
   }, [question]);
 
-  const ask = useCallback(async () => {
-    const body = question.trim();
-    if (!body) return;
+  const ask = useCallback(async (questionOverride?: string) => {
+    const body = (questionOverride ?? question).trim();
+    if (!body || askInFlightRef.current) return;
+    askInFlightRef.current = true;
     setAsking(true);
     setError(null);
     try {
@@ -109,10 +112,14 @@ export function BtwPanel({ selectedRepoId, refreshNonce, collapsed, onToggleColl
       const data = (await res.json()) as { error?: string };
       if (!res.ok) throw new Error(data.error ?? `Failed to ask: ${res.status}`);
       setQuestion('');
+      setRetryQuestion(null);
       refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to ask /btw question');
+      setRetryQuestion(body);
+      setQuestion((current) => current || body);
     } finally {
+      askInFlightRef.current = false;
       setAsking(false);
     }
   }, [question, selectedRepoId, refresh]);
@@ -219,8 +226,8 @@ export function BtwPanel({ selectedRepoId, refreshNonce, collapsed, onToggleColl
 
       <div style={{ padding: 10, borderTop: '1px solid rgba(127,127,127,0.3)' }}>
         {error && (
-          <div style={{ fontSize: 11, color: '#e5534b', marginBottom: 6 }}>
-            {error}
+          <div role="alert" style={{ fontSize: 11, color: '#e5534b', marginBottom: 6 }}>
+            {error} {retryQuestion && <button type="button" onClick={() => void ask(retryQuestion)} disabled={asking} style={{ marginLeft: 5, fontSize: 11, padding: '2px 5px', borderRadius: 4, border: '1px solid rgba(127,127,127,0.4)', background: 'transparent', color: 'inherit', cursor: 'pointer' }}>Retry last question</button>}
           </div>
         )}
         <textarea
