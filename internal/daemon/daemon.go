@@ -296,6 +296,30 @@ func (d *Daemon) reviewContext(id string) (workspaceReview, reviewRepo, bool) {
 	return workspaceReview{}, reviewRepo{}, false
 }
 
+func repoRelativePath(value string) (string, error) {
+	clean := filepath.Clean(filepath.FromSlash(value))
+	if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", errors.New("invalid repository-relative path")
+	}
+	return filepath.ToSlash(clean), nil
+}
+
+func readRepoFile(repo reviewRepo, path, ref string) ([]byte, error) {
+	relative, err := repoRelativePath(path)
+	if err != nil {
+		return nil, err
+	}
+	if ref == "" || ref == "." || ref == "working" {
+		return os.ReadFile(filepath.Join(repo.AbsolutePath, filepath.FromSlash(relative)))
+	}
+	command := exec.Command("git", "-C", repo.AbsolutePath, "show", ref+":"+relative)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("git show: %s", strings.TrimSpace(string(output)))
+	}
+	return output, nil
+}
+
 func dereference(value *string) string {
 	if value == nil {
 		return ""
@@ -455,6 +479,67 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 	// sibling routes (comments/blobs/revisions) are ported independently.
 	if strings.HasPrefix(path, "/repos/") {
 		parts := strings.Split(strings.Trim(path, "/"), "/")
+		if len(parts) >= 5 && parts[0] == "repos" && parts[2] == "api" && parts[3] == "blob" && r.Method == http.MethodGet {
+			repo, ok := d.reviewRepo(parts[1])
+			if !ok {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "Unknown review repository"})
+				return
+			}
+			contents, err := readRepoFile(repo, strings.Join(parts[4:], "/"), r.URL.Query().Get("ref"))
+			if err != nil {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+				return
+			}
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			_, _ = w.Write(contents)
+			return
+		}
+		if len(parts) >= 5 && parts[0] == "repos" && parts[2] == "api" && parts[3] == "fullfile" && r.Method == http.MethodGet {
+			repo, ok := d.reviewRepo(parts[1])
+			if !ok {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "Unknown review repository"})
+				return
+			}
+			filePath := strings.Join(parts[4:], "/")
+			diff, err := gitdiff.Parse(repo.AbsolutePath, gitdiff.Selection{})
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			var selected *gitdiff.File
+			for index := range diff.Files {
+				if diff.Files[index].Path == filePath || (diff.Files[index].OldPath != nil && *diff.Files[index].OldPath == filePath) {
+					selected = &diff.Files[index]
+					break
+				}
+			}
+			if selected == nil {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "File not found in diff"})
+				return
+			}
+			side := "current"
+			ref := diff.TargetCommitish
+			readPath := filePath
+			if r.URL.Query().Get("side") == "base" {
+				side = "base"
+				ref = diff.BaseCommitish
+				if selected.OldPath != nil {
+					readPath = *selected.OldPath
+				}
+			}
+			if (side == "current" && selected.Status == "deleted") || (side == "base" && selected.Status == "added") {
+				writeJSON(w, http.StatusOK, map[string]any{"side": side, "path": filePath, "status": selected.Status, "deleted": side == "current", "added": side == "base"})
+				return
+			}
+			contents, err := readRepoFile(repo, readPath, ref)
+			if err != nil {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+				return
+			}
+			lines := strings.Split(strings.TrimSuffix(string(contents), "\n"), "\n")
+			writeJSON(w, http.StatusOK, map[string]any{"side": side, "path": filePath, "oldPath": selected.OldPath, "status": selected.Status, "lines": lines, "gates": []any{}})
+			return
+		}
 		if len(parts) == 4 && parts[0] == "repos" && parts[2] == "api" && parts[3] == "comments-json" && r.Method == http.MethodGet {
 			review, repo, ok := d.reviewContext(parts[1])
 			if !ok {
