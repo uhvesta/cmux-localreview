@@ -7,7 +7,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -221,5 +223,60 @@ func TestQueueHomeReadModelsAreAvailableBeforeWorkspaceActivation(t *testing.T) 
 		if err != nil || response.StatusCode != http.StatusOK || !strings.Contains(string(body), "nodes") && path != "/api/workspaces" {
 			t.Fatalf("%s status=%d body=%s err=%v", path, response.StatusCode, body, err)
 		}
+	}
+}
+
+func TestWorkspaceActivationDiscoversNestedRepositories(t *testing.T) {
+	workspace := t.TempDir()
+	for _, relative := range []string{".", "tools/child"} {
+		repo := filepath.Join(workspace, relative)
+		if err := os.MkdirAll(repo, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		for _, arguments := range [][]string{{"init"}, {"config", "user.email", "test@example.com"}, {"config", "user.name", "Test"}} {
+			if output, err := exec.Command("git", append([]string{"-C", repo}, arguments...)...).CombinedOutput(); err != nil {
+				t.Fatalf("git %v: %v %s", arguments, err, output)
+			}
+		}
+	}
+	dir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d, err := Start(ctx, Options{DataDir: dir, UIDir: filepath.Join(dir, "missing-ui")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	contents, err := os.ReadFile(filepath.Join(dir, "daemon.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var discovered discovery
+	if err := json.Unmarshal(contents, &discovered); err != nil {
+		t.Fatal(err)
+	}
+	base := "http://127.0.0.1:" + fmt.Sprint(d.Port())
+	req, _ := http.NewRequest(http.MethodPost, base+"/api/workspaces/open", strings.NewReader(`{"workspacePath":`+strconv.Quote(workspace)+`}`))
+	req.Header.Set("Authorization", "Bearer "+discovered.Token)
+	req.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "tools/child") {
+		t.Fatalf("open status=%d body=%s", response.StatusCode, body)
+	}
+	req, _ = http.NewRequest(http.MethodGet, base+"/api/repos", nil)
+	req.Header.Set("Authorization", "Bearer "+discovered.Token)
+	response, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "tools/child") {
+		t.Fatalf("repos status=%d body=%s", response.StatusCode, body)
 	}
 }

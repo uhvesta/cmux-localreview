@@ -6,6 +6,7 @@ package daemon
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -15,8 +16,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -50,6 +53,18 @@ type Daemon struct {
 	mu       sync.Mutex
 	sessions map[string]time.Time
 	db       *sql.DB
+	review   *workspaceReview
+}
+
+type reviewRepo struct {
+	ID                    string `json:"id"`
+	AbsolutePath          string `json:"-"`
+	WorkspaceRelativePath string `json:"workspaceRelativePath"`
+}
+
+type workspaceReview struct {
+	Root  string
+	Repos []reviewRepo
 }
 
 func dataDirectory(override string) (string, error) {
@@ -149,6 +164,97 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	_ = json.NewEncoder(w).Encode(value)
 }
 
+func repoID(path string) string {
+	hash := sha256.Sum256([]byte(path))
+	return fmt.Sprintf("%x", hash[:6])
+}
+
+func gitRoot(path string) (string, error) {
+	command := exec.Command("git", "-C", path, "rev-parse", "--show-toplevel")
+	output, err := command.Output()
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(strings.TrimSpace(string(output)))
+}
+
+// discoverReviewRepos finds nested repositories without treating .git's
+// internal contents as workspace files. A workspace may itself be a repository
+// or contain several independent repositories.
+func discoverReviewRepos(root string) ([]reviewRepo, error) {
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	repos := []reviewRepo{}
+	add := func(candidate string) error {
+		gitDir, err := gitRoot(candidate)
+		if err != nil || seen[gitDir] {
+			return nil
+		}
+		relative, err := filepath.Rel(resolved, gitDir)
+		if err != nil || strings.HasPrefix(relative, "..") {
+			return nil
+		}
+		if relative == "." {
+			relative = "."
+		}
+		seen[gitDir] = true
+		repos = append(repos, reviewRepo{ID: repoID(gitDir), AbsolutePath: gitDir, WorkspaceRelativePath: filepath.ToSlash(relative)})
+		return nil
+	}
+	if err := add(resolved); err != nil {
+		return nil, err
+	}
+	err = filepath.WalkDir(resolved, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !entry.IsDir() {
+			return nil
+		}
+		if entry.Name() == ".git" {
+			return filepath.SkipDir
+		}
+		if path != resolved {
+			if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
+				if err := add(path); err != nil {
+					return err
+				}
+				return filepath.SkipDir
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(repos, func(i, j int) bool { return repos[i].WorkspaceRelativePath < repos[j].WorkspaceRelativePath })
+	if len(repos) == 0 {
+		return nil, errors.New("no Git repositories found under workspace")
+	}
+	return repos, nil
+}
+
+func safeWorkspacePath(value string) (string, error) {
+	if strings.TrimSpace(value) == "" {
+		return "", errors.New("workspacePath is required")
+	}
+	abs, err := filepath.Abs(value)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", errors.New("workspacePath must be a directory")
+	}
+	return filepath.EvalSymlinks(abs)
+}
+
 func dereference(value *string) string {
 	if value == nil {
 		return ""
@@ -193,6 +299,92 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"workspaces": workspaces, "activeWorkspace": active})
+		return
+	}
+	if path == "/workspaces" && r.Method == http.MethodPost {
+		var input struct {
+			WorkspacePath string `json:"workspacePath"`
+			Path          string `json:"path"`
+			Label         string `json:"label"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&input); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid workspace"})
+			return
+		}
+		workspace, err := safeWorkspacePath(input.WorkspacePath)
+		if workspace == "" {
+			workspace, err = safeWorkspacePath(input.Path)
+		}
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		if _, err := d.db.Exec(`INSERT INTO workspace_registry(root_path,label,last_opened_at,active) VALUES(?,?,?,0) ON CONFLICT(root_path) DO UPDATE SET label=COALESCE(excluded.label,label),last_opened_at=excluded.last_opened_at`, workspace, nullable(input.Label), time.Now().UnixMilli()); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{"workspacePath": workspace})
+		return
+	}
+	if path == "/workspaces/open" && r.Method == http.MethodPost {
+		var input struct {
+			WorkspacePath string `json:"workspacePath"`
+			Path          string `json:"path"`
+			Label         string `json:"label"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&input); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid workspace"})
+			return
+		}
+		workspace, err := safeWorkspacePath(input.WorkspacePath)
+		if workspace == "" {
+			workspace, err = safeWorkspacePath(input.Path)
+		}
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		repos, err := discoverReviewRepos(workspace)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		d.mu.Lock()
+		d.review = &workspaceReview{Root: workspace, Repos: repos}
+		d.mu.Unlock()
+		now := time.Now().UnixMilli()
+		tx, err := d.db.Begin()
+		if err == nil {
+			_, err = tx.Exec(`UPDATE workspace_registry SET active=0`)
+			if err == nil {
+				_, err = tx.Exec(`INSERT INTO workspace_registry(root_path,label,last_opened_at,active) VALUES(?,?,?,1) ON CONFLICT(root_path) DO UPDATE SET label=COALESCE(excluded.label,label),last_opened_at=excluded.last_opened_at,active=1`, workspace, nullable(input.Label), now)
+			}
+			if err == nil {
+				err = tx.Commit()
+			} else {
+				_ = tx.Rollback()
+			}
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"workspacePath": workspace, "repos": repos, "reviewUrl": "/review"})
+		return
+	}
+	if path == "/repos" && r.Method == http.MethodGet {
+		d.mu.Lock()
+		review := d.review
+		d.mu.Unlock()
+		if review == nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "No workspace is open. Use POST /api/workspaces/open."})
+			return
+		}
+		items := make([]map[string]any, 0, len(review.Repos))
+		for _, repo := range review.Repos {
+			items = append(items, map[string]any{"id": repo.ID, "workspaceRelativePath": repo.WorkspaceRelativePath, "changeCount": 0, "files": []string{}})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"workspaceRoot": review.Root, "repos": items})
 		return
 	}
 	if path == "/federation/queue" && r.Method == http.MethodGet {
@@ -453,6 +645,13 @@ func nullableString(value sql.NullString) any {
 		return nil
 	}
 	return value.String
+}
+
+func nullable(value string) any {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return value
 }
 
 func staticHandler(uiDir string) http.Handler {
