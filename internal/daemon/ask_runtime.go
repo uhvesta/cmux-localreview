@@ -96,6 +96,11 @@ func (f AskRuntimeFactory) Open(ctx context.Context, workingDirectory string) (*
 	if err != nil {
 		return nil, nil, err
 	}
+	// Prefer an installed current CLI when available. This remains an official
+	// Go SDK child process with the dedicated token injected below; it never
+	// adopts the CLI's login or ACP state. The SDK's embedded CLI stays the
+	// fallback for release installs that have not installed Copilot yet.
+	config.CLIPath = copilot.PreferredCLIPath()
 	runtime, close, err := f.Build(ctx, config)
 	if err != nil {
 		return nil, nil, fmt.Errorf("start Copilot /ask runtime: %w", err)

@@ -26,6 +26,25 @@ func TestClientConfigBuildsDedicatedSDKRuntimeOptionsWithoutIO(t *testing.T) {
 	}
 }
 
+func TestClientConfigUsesInstalledRuntimeWithoutAdoptingItsLogin(t *testing.T) {
+	options, err := (ClientConfig{
+		WorkingDirectory: "/tmp/review",
+		BaseDirectory:    "/tmp/copilot-home",
+		GitHubToken:      "dedicated-test-token",
+		CLIPath:          "/opt/local/bin/copilot",
+	}).SDKOptions()
+	if err != nil {
+		t.Fatalf("SDKOptions() error = %v", err)
+	}
+	connection, ok := options.Connection.(copilotsdk.StdioConnection)
+	if !ok || connection.Path != "/opt/local/bin/copilot" {
+		t.Fatalf("connection=%#v", options.Connection)
+	}
+	if options.UseLoggedInUser == nil || *options.UseLoggedInUser || options.GitHubToken != "dedicated-test-token" {
+		t.Fatalf("installed runtime must still use only the injected credential: %#v", options)
+	}
+}
+
 func TestSessionConfigBuildsModelAndStreamingControlsWithoutIO(t *testing.T) {
 	config, err := (SessionConfig{
 		ID:               "ask-123",

@@ -87,11 +87,12 @@ the dedicated capability still needs to be authorized, not that the prompt was
 silently sent.
 
 The official Go SDK still launches the **Copilot CLI binary** as its isolated
-runtime. The binary is required, but its local login is not used: the daemon
-passes only the dedicated `copilot` OAuth capability to that child process. If
-the model picker says that the CLI runtime disconnected or reset its
-connection, run the following locally, then reopen `/ask` and press **Refresh
-chat**:
+runtime. The daemon prefers a current `copilot` executable found on `PATH` and
+uses the SDK-bundled runtime only when none is installed. Its local login is
+not used in either case: the daemon passes only the dedicated `copilot` OAuth
+capability to that child process. If the model picker says that the CLI runtime
+disconnected or reset its connection, run the following locally, then reopen
+`/ask` and press **Refresh chat**:
 
 ```sh
 copilot --version

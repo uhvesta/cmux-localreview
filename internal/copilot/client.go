@@ -6,6 +6,7 @@ package copilot
 import (
 	"context"
 	"errors"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -21,6 +22,11 @@ type ClientConfig struct {
 	WorkingDirectory string
 	BaseDirectory    string
 	GitHubToken      string
+	// CLIPath is deliberately only an executable path, never an ACP endpoint
+	// or a logged-in-user connection. When non-empty the official Go SDK uses
+	// this installed runtime while the daemon still supplies the only auth
+	// credential through GitHubToken.
+	CLIPath string
 }
 
 // SDKOptions returns the SDK configuration without performing I/O. The SDK is
@@ -45,7 +51,22 @@ func (config ClientConfig) SDKOptions() (*copilotsdk.ClientOptions, error) {
 		UseLoggedInUser:  &loggedIn,
 		Mode:             copilotsdk.ModeCopilotCli,
 	}
+	if path := strings.TrimSpace(config.CLIPath); path != "" {
+		options.Connection = copilotsdk.StdioConnection{Path: path}
+	}
 	return options, nil
+}
+
+// PreferredCLIPath chooses a current official Copilot CLI when one is
+// installed. The Go SDK otherwise extracts its embedded runtime, which is a
+// safe fallback but can lag the locally installed CLI's service protocol.
+// This lookup never invokes the CLI and never reads its auth state.
+func PreferredCLIPath() string {
+	path, err := exec.LookPath("copilot")
+	if err != nil {
+		return ""
+	}
+	return path
 }
 
 // NewClient constructs a not-yet-started SDK client. Calling this function
