@@ -1,0 +1,40 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  native-archives:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.9"
+      - uses: bazel-contrib/setup-bazel@0.15.0
+        with:
+          bazelisk-version: "1.28.1"
+      - name: Install UI build dependencies
+        run: bun install --frozen-lockfile
+      - name: Build embedded UI and verify native tree
+        run: |
+          bash scripts/stage-ui-assets.sh
+          go test ./...
+          bazel test //...
+      - name: Build signed-checksum native archives
+        run: bazel build //release:archives //release:checksums
+      - name: Collect release files
+        run: |
+          mkdir -p release-out
+          cp bazel-bin/release/*.tar.gz bazel-bin/release/checksums.txt release-out/
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: release-out/*

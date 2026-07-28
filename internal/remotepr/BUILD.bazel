@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "remotepr",
+    srcs = ["remotepr.go"],
+    importpath = "github.com/uhvesta/cmux-localreview/internal/remotepr",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "remotepr_test",
+    srcs = ["remotepr_test.go"],
+    embed = [":remotepr"],
+)

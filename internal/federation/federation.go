@@ -167,6 +167,18 @@ func List(db *sql.DB) ([]Node, error) {
 	return out, rows.Err()
 }
 
+// Remove deletes the complete secret-bearing configuration.  Callers must
+// stop any live transport before invoking this operation; this package never
+// owns a transport process itself.
+func Remove(db *sql.DB, id string) (bool, error) {
+	result, err := db.Exec(`DELETE FROM federation_nodes WHERE id=?`, id)
+	if err != nil {
+		return false, err
+	}
+	changed, err := result.RowsAffected()
+	return changed > 0, err
+}
+
 // MarkConnected clears an old transport error only after a successful remote
 // request, making retry state visible and preventing stale error banners.
 func MarkConnected(db *sql.DB, id string) error {

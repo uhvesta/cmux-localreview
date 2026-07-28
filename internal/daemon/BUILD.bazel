@@ -2,31 +2,49 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "daemon",
-    srcs = ["ask.go", "ask_runtime.go", "ask_stream.go", "comment_imports.go", "daemon.go", "queue_watcher.go"],
+    srcs = [
+        "ask.go",
+        "ask_runtime.go",
+        "ask_stream.go",
+        "btw.go",
+        "comment_imports.go",
+        "daemon.go",
+        "federation_api.go",
+        "queue_watcher.go",
+        "remote_pr.go",
+    ],
     importpath = "github.com/uhvesta/cmux-localreview/internal/daemon",
     visibility = ["//visibility:public"],
     deps = [
         "//internal/agent",
         "//internal/ask",
-		"//internal/askruntime",
-		"//internal/copilot",
+        "//internal/askruntime",
+        "//internal/copilot",
+        "//internal/federation",
         "//internal/gitdiff",
         "//internal/githubauth",
         "//internal/queue",
-		"//internal/snapshot",
+        "//internal/remotepr",
+        "//internal/snapshot",
         "//internal/store",
         "//internal/webassets",
         "//internal/wshub",
-		"@com_github_github_copilot_sdk_go//:go_default_library",
+        "@com_github_github_copilot_sdk_go//:go_default_library",
     ],
 )
 
 go_test(
     name = "daemon_test",
-    srcs = ["ask_runtime_test.go", "ask_test.go", "daemon_test.go"],
+    srcs = [
+        "ask_runtime_test.go",
+        "ask_test.go",
+        "btw_test.go",
+        "daemon_test.go",
+        "federation_api_test.go",
+    ],
     embed = [":daemon"],
-	deps = [
-		"//internal/askruntime",
-		"//internal/copilot",
-	],
+    deps = [
+        "//internal/askruntime",
+        "//internal/copilot",
+    ],
 )

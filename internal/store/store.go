@@ -13,7 +13,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const SchemaVersion = 19
+const SchemaVersion = 20
 
 // Open configures the SQLite durability settings shared by both daemon
 // implementations. The migration history is an on-disk compatibility
@@ -49,6 +49,19 @@ func migrate(db *sql.DB) error {
 	if version == SchemaVersion {
 		return nil
 	}
+	// SQLite updates child foreign-key declarations when a parent table is
+	// renamed. v20 intentionally swaps the legacy parent in place, so keep the
+	// old declaration pointing at the final `btw_threads` name while the swap is
+	// in progress. Both pragmas must be changed outside the transaction.
+	rebuildBtw := version > 0 && version < 20
+	if rebuildBtw {
+		if _, err := db.Exec("PRAGMA foreign_keys = OFF; PRAGMA legacy_alter_table = ON"); err != nil {
+			return err
+		}
+		defer func() {
+			_, _ = db.Exec("PRAGMA legacy_alter_table = OFF; PRAGMA foreign_keys = ON")
+		}()
+	}
 	tx, err := db.Begin()
 	if err != nil {
 		return err
@@ -63,6 +76,20 @@ func migrate(db *sql.DB) error {
 		version = SchemaVersion
 	} else {
 		for next := version + 1; next <= SchemaVersion; next++ {
+			// A handful of pre-release focused-migration databases were stamped
+			// with a schema version while containing only the table under test.
+			// They have never had /btw data to preserve, so v20 can safely be
+			// considered applied instead of manufacturing foreign-key parents.
+			if next == 20 {
+				var exists int
+				if err := tx.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='btw_threads'`).Scan(&exists); err != nil {
+					return err
+				}
+				if exists == 0 {
+					version = next
+					continue
+				}
+			}
 			statements, ok := legacyMigrations[next]
 			if !ok {
 				return fmt.Errorf("missing schema migration v%d", next)
@@ -131,6 +158,17 @@ var legacyMigrations = map[int][]string{
 	17: {`ALTER TABLE queue_items ADD COLUMN identity_key TEXT`, `ALTER TABLE queue_items ADD COLUMN review_topic TEXT`, `ALTER TABLE queue_items ADD COLUMN removed_at INTEGER`, `ALTER TABLE queue_items ADD COLUMN removed_reason TEXT`, `CREATE INDEX idx_queue_items_identity_created ON queue_items(identity_key, created_at DESC)`, `CREATE INDEX idx_queue_items_active_position ON queue_items(removed_at, status, position)`},
 	18: {`ALTER TABLE queue_feedback ADD COLUMN source_key TEXT`, `ALTER TABLE queue_feedback ADD COLUMN side TEXT`, `ALTER TABLE queue_feedback ADD COLUMN end_line INTEGER`, `CREATE UNIQUE INDEX idx_queue_feedback_source_key ON queue_feedback(queue_item_id, source_key) WHERE source_key IS NOT NULL`},
 	19: {`ALTER TABLE comments ADD COLUMN channel TEXT NOT NULL DEFAULT 'formal' CHECK(channel IN ('formal','ask'))`, `CREATE INDEX idx_comments_session_repo_channel ON comments(session_id, repo_id, channel)`},
+	// v20 is the native /btw cutover.  Existing ACP history remains readable,
+	// while new durable SDK threads use the explicit `copilot` transport.
+	// SQLite cannot modify a CHECK constraint in place, so rebuild only this
+	// small parent table; question and answer rows retain their thread IDs.
+	20: {
+		`ALTER TABLE btw_threads RENAME TO btw_threads_legacy_v20`,
+		`CREATE TABLE btw_threads (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER NOT NULL REFERENCES sessions(id), transport TEXT NOT NULL CHECK (transport IN ('acp', 'copilot', 'terminal')), acp_provider TEXT, acp_session_id TEXT, copilot_session_id TEXT, repo_id INTEGER REFERENCES repos(id), file_path TEXT, start_line INTEGER, end_line INTEGER, created_at INTEGER NOT NULL, target_agent_id TEXT)`,
+		`INSERT INTO btw_threads(id,session_id,transport,acp_provider,acp_session_id,copilot_session_id,repo_id,file_path,start_line,end_line,created_at,target_agent_id) SELECT id,session_id,transport,acp_provider,acp_session_id,NULL,repo_id,file_path,start_line,end_line,created_at,target_agent_id FROM btw_threads_legacy_v20`,
+		`DROP TABLE btw_threads_legacy_v20`,
+		`CREATE INDEX idx_btw_threads_target_agent ON btw_threads(target_agent_id)`,
+	},
 }
 
 // currentSchema is intentionally explicit instead of an ORM model: database
@@ -143,7 +181,7 @@ var currentSchema = []string{
 	`CREATE UNIQUE INDEX idx_comments_thread ON comments(session_id, repo_id, thread_id)`,
 	`CREATE INDEX idx_comments_session_repo_channel ON comments(session_id, repo_id, channel)`,
 	`CREATE TABLE comment_tombstones (session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, repo_id INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE, thread_id TEXT NOT NULL, deleted_at INTEGER NOT NULL, PRIMARY KEY(session_id,repo_id,thread_id))`,
-	`CREATE TABLE btw_threads (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER NOT NULL REFERENCES sessions(id), transport TEXT NOT NULL CHECK (transport IN ('acp', 'terminal')), acp_provider TEXT, acp_session_id TEXT, repo_id INTEGER REFERENCES repos(id), file_path TEXT, start_line INTEGER, end_line INTEGER, created_at INTEGER NOT NULL, target_agent_id TEXT)`,
+	`CREATE TABLE btw_threads (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER NOT NULL REFERENCES sessions(id), transport TEXT NOT NULL CHECK (transport IN ('acp', 'copilot', 'terminal')), acp_provider TEXT, acp_session_id TEXT, copilot_session_id TEXT, repo_id INTEGER REFERENCES repos(id), file_path TEXT, start_line INTEGER, end_line INTEGER, created_at INTEGER NOT NULL, target_agent_id TEXT)`,
 	`CREATE TABLE btw_questions (id INTEGER PRIMARY KEY AUTOINCREMENT, thread_id INTEGER NOT NULL REFERENCES btw_threads(id), body TEXT NOT NULL, created_at INTEGER NOT NULL)`,
 	`CREATE TABLE btw_answers (id INTEGER PRIMARY KEY AUTOINCREMENT, question_id INTEGER NOT NULL REFERENCES btw_questions(id), body TEXT NOT NULL, pending INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`,
 	`CREATE TABLE exports (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER NOT NULL REFERENCES sessions(id), content TEXT NOT NULL, destination TEXT NOT NULL CHECK (destination IN ('clipboard', 'cmux')), created_at INTEGER NOT NULL)`,

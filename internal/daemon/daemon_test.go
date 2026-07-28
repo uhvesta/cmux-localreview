@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/uhvesta/cmux-localreview/internal/githubauth"
+	queueStore "github.com/uhvesta/cmux-localreview/internal/queue"
 )
 
 func TestLoopbackDiscoveryAndBrowserSession(t *testing.T) {
@@ -252,6 +253,125 @@ func TestQueueHTTPContract(t *testing.T) {
 	response, err = http.DefaultClient.Do(list)
 	if err != nil || response.StatusCode != http.StatusOK {
 		t.Fatalf("list=%v err=%v", response, err)
+	}
+}
+
+// A local PR investigation must use only the daemon-owned read credential,
+// materialize the PR in cache, and open the reviewer without manufacturing a
+// queue row or exposing a credential to the browser.
+func TestLocalReadOnlyPullRequestAndRemoteQueueLifecycle(t *testing.T) {
+	root := t.TempDir()
+	source, remote := filepath.Join(root, "source"), filepath.Join(root, "origin.git")
+	for _, command := range [][]string{{"init", "-q", "-b", "main", source}, {"init", "--bare", "-q", remote}} {
+		if output, err := exec.Command("git", command...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", command, err, output)
+		}
+	}
+	git := func(args ...string) string {
+		output, err := exec.Command("git", append([]string{"-C", source}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v %s", args, err, output)
+		}
+		return strings.TrimSpace(string(output))
+	}
+	git("config", "user.email", "localreview-test@example.invalid")
+	git("config", "user.name", "localreview-test")
+	if err := os.WriteFile(filepath.Join(source, "review.txt"), []byte("base\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "review.txt")
+	git("commit", "-qm", "base")
+	baseSHA := git("rev-parse", "HEAD")
+	git("checkout", "-qb", "feature")
+	if err := os.WriteFile(filepath.Join(source, "review.txt"), []byte("base\nfeature\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "review.txt")
+	git("commit", "-qm", "feature")
+	headSHA := git("rev-parse", "HEAD")
+	git("remote", "add", "origin", remote)
+	git("push", "-q", "origin", baseSHA+":refs/heads/main")
+	git("push", "-q", "origin", headSHA+":refs/pull/7/head")
+
+	transport := authTransport(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path != "/repos/acme/widget/pulls/7" {
+			return nil, fmt.Errorf("unexpected GitHub endpoint %s", request.URL)
+		}
+		if request.Header.Get("Authorization") != "Bearer read-token" {
+			return nil, fmt.Errorf("missing read credential")
+		}
+		body := fmt.Sprintf(`{"number":7,"html_url":"https://github.com/acme/widget/pull/7","title":"Feature","body":"PR body","state":"open","draft":false,"head":{"sha":%q,"ref":"feature"},"base":{"sha":%q,"ref":"main","repo":{"full_name":"acme/widget","clone_url":%q}}}`, headSHA, baseSHA, remote)
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
+	})
+	secrets := authSecrets{}
+	token, _ := json.Marshal(githubauth.Token{AccessToken: "read-token", ClientID: "Iv1.fixtureRead"})
+	secrets[githubauth.Service+"/github.com:read"] = string(token)
+	auth := githubauth.New(secrets, authConfig{githubauth.Read: "Iv1.fixtureRead"}, transport, func(string) error { return nil })
+	data := filepath.Join(root, "daemon")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d, err := Start(ctx, Options{DataDir: data, UIDir: filepath.Join(root, "ui"), GitHubAuth: auth})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	call := func(method, path, payload string) (int, []byte) {
+		req, _ := http.NewRequest(method, "http://127.0.0.1:"+strconv.Itoa(d.Port())+path, strings.NewReader(payload))
+		req.Header.Set("Authorization", "Bearer "+d.token)
+		req.Header.Set("Content-Type", "application/json")
+		response, callErr := http.DefaultClient.Do(req)
+		if callErr != nil {
+			t.Fatal(callErr)
+		}
+		body, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		return response.StatusCode, body
+	}
+	status, body := call(http.MethodPost, "/api/local-review/pr", `{"remoteUrl":"https://github.com/acme/widget/pull/7"}`)
+	if status != http.StatusOK || !strings.Contains(string(body), "localOnly=1") || strings.Contains(string(body), "read-token") {
+		t.Fatalf("open status=%d body=%s", status, body)
+	}
+	var opened struct {
+		Repos []struct {
+			ID string `json:"id"`
+		} `json:"repos"`
+	}
+	if json.Unmarshal(body, &opened) != nil || len(opened.Repos) != 1 || opened.Repos[0].ID == "" {
+		t.Fatalf("bad open response %s", body)
+	}
+	// The clean detached worktree has no working-tree changes. The daemon must
+	// retain the immutable PR base selected at open time so the default diff is
+	// still the PR diff rather than a misleading empty response.
+	status, body = call(http.MethodGet, "/api/repos/"+opened.Repos[0].ID+"/api/diff", "")
+	if status != http.StatusOK || !strings.Contains(string(body), "feature") {
+		t.Fatalf("default PR diff=%d %s", status, body)
+	}
+	if _, err := queueStore.List(d.db, true); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := d.db.QueryRow("SELECT COUNT(*) FROM queue_items").Scan(&count); err != nil || count != 0 {
+		t.Fatalf("read-only open created queue row count=%d err=%v", count, err)
+	}
+	status, body = call(http.MethodPost, "/api/queue", `{"remoteUrl":"https://github.com/acme/widget/pull/7"}`)
+	if status != http.StatusCreated || !strings.Contains(string(body), headSHA) {
+		t.Fatalf("remote queue status=%d body=%s", status, body)
+	}
+	var queued struct {
+		Item struct {
+			ID string `json:"id"`
+		} `json:"item"`
+	}
+	if json.Unmarshal(body, &queued) != nil || queued.Item.ID == "" {
+		t.Fatalf("bad queue response %s", body)
+	}
+	status, body = call(http.MethodGet, "/api/queue/"+queued.Item.ID+"/remote-status", "")
+	if status != http.StatusOK || !strings.Contains(string(body), `"worktreePresent":true`) {
+		t.Fatalf("status=%d body=%s", status, body)
+	}
+	status, body = call(http.MethodPost, "/api/queue/"+queued.Item.ID+"/cleanup", `{"removeMirror":true}`)
+	if status != http.StatusOK || !strings.Contains(string(body), `"worktreeRemoved":true`) {
+		t.Fatalf("cleanup=%d body=%s", status, body)
 	}
 }
 

@@ -113,6 +113,9 @@ type workspaceReview struct {
 	Root      string
 	SessionID int64
 	Repos     []reviewRepo
+	// Base is a remote PR's immutable base SHA. Empty means the ordinary
+	// working-tree comparison selected by the reviewer UI.
+	Base string
 }
 
 func dataDirectory(override string) (string, error) {
@@ -566,6 +569,10 @@ func shellQuote(value string) string {
 // workspace open. Queue opening calls it as well: changing queue lifecycle
 // alone is not enough for the reviewer UI to resolve /api/repos.
 func (d *Daemon) activateWorkspace(workspace, label string) ([]reviewRepo, error) {
+	return d.activateWorkspaceWithBase(workspace, label, "")
+}
+
+func (d *Daemon) activateWorkspaceWithBase(workspace, label, base string) ([]reviewRepo, error) {
 	workspace, err := safeWorkspacePath(workspace)
 	if err != nil {
 		return nil, err
@@ -606,7 +613,7 @@ func (d *Daemon) activateWorkspace(workspace, label string) ([]reviewRepo, error
 		return nil, err
 	}
 	d.mu.Lock()
-	d.review = &workspaceReview{Root: workspace, SessionID: sessionID, Repos: repos}
+	d.review = &workspaceReview{Root: workspace, SessionID: sessionID, Repos: repos, Base: base}
 	d.mu.Unlock()
 	d.startDiffWatcher(repos)
 	return repos, nil
@@ -718,12 +725,21 @@ func (d *Daemon) serveWatch(w http.ResponseWriter, r *http.Request) {
 // explicitly; they never fall back to a Node process behind the caller.
 func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api")
+	remoteParts := strings.Split(strings.Trim(path, "/"), "/")
+	if d.handleRemoteLifecycle(w, r, remoteParts) {
+		return
+	}
 	if path == "/watch" && r.Method == http.MethodGet {
 		d.serveWatch(w, r)
 		return
 	}
 	if strings.HasPrefix(path, "/ask/") {
 		if d.handleAsk(w, r, path) {
+			return
+		}
+	}
+	if strings.HasPrefix(path, "/btw/") {
+		if d.handleBtw(w, r, path) {
 			return
 		}
 	}
@@ -1486,7 +1502,15 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusNotFound, map[string]string{"error": "Unknown review repository"})
 				return
 			}
-			selection := gitdiff.Selection{BaseCommitish: r.URL.Query().Get("base"), TargetCommitish: r.URL.Query().Get("target"), IgnoreWhitespace: r.URL.Query().Get("ignoreWhitespace") == "true"}
+			base := r.URL.Query().Get("base")
+			if base == "" {
+				d.mu.Lock()
+				if d.review != nil {
+					base = d.review.Base
+				}
+				d.mu.Unlock()
+			}
+			selection := gitdiff.Selection{BaseCommitish: base, TargetCommitish: r.URL.Query().Get("target"), IgnoreWhitespace: r.URL.Query().Get("ignoreWhitespace") == "true"}
 			if raw := r.URL.Query().Get("contextLines"); raw != "" {
 				if value, err := strconv.Atoi(raw); err == nil && value >= 0 && value <= 10_000 {
 					selection.ContextLines = &value
@@ -1535,15 +1559,7 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if path == "/federation/queue" && r.Method == http.MethodGet {
-		// The local view never fabricates remote data. Federation transport is
-		// ported separately; an empty aggregate keeps Queue Home available and
-		// communicates exactly that no remote queues are connected yet.
-		writeJSON(w, http.StatusOK, map[string]any{"nodes": []any{}})
-		return
-	}
-	if path == "/federation/nodes" && r.Method == http.MethodGet {
-		writeJSON(w, http.StatusOK, map[string]any{"nodes": []any{}})
+	if d.handleFederation(w, r, path) {
 		return
 	}
 	if path == "/agents" {
@@ -1583,12 +1599,23 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			writeJSON(w, http.StatusOK, map[string]any{"items": items})
 		case http.MethodPost:
-			var input queueStore.EnqueueInput
-			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&input); err != nil {
+			var request struct {
+				queueStore.EnqueueInput
+				Snapshot *bool `json:"snapshot"`
+			}
+			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&request); err != nil {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid queue item"})
 				return
 			}
-			item, created, err := queueStore.Enqueue(d.db, input)
+			input := request.EnqueueInput
+			var item *queueStore.Item
+			var created bool
+			var err error
+			if strings.TrimSpace(input.RemoteURL) != "" || input.Kind == "remote" {
+				item, created, err = d.enqueueRemotePullRequest(r.Context(), input, request.Snapshot == nil || *request.Snapshot)
+			} else {
+				item, created, err = queueStore.Enqueue(d.db, input)
+			}
 			if err != nil {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 				return
