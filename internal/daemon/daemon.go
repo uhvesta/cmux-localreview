@@ -474,6 +474,117 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"workspaceRoot": review.Root, "repos": items})
 		return
 	}
+	if path == "/ui-state" && r.Method == http.MethodGet {
+		key := r.URL.Query().Get("key")
+		if key == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "key is required"})
+			return
+		}
+		var value string
+		var revision int
+		var updated int64
+		err := d.db.QueryRow(`SELECT value,revision,updated_at FROM ui_state WHERE key=?`, key).Scan(&value, &revision, &updated)
+		if errors.Is(err, sql.ErrNoRows) {
+			writeJSON(w, http.StatusOK, map[string]any{"key": key, "value": nil, "revision": 0, "updatedAt": nil})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		var parsed any
+		_ = json.Unmarshal([]byte(value), &parsed)
+		writeJSON(w, http.StatusOK, map[string]any{"key": key, "value": parsed, "revision": revision, "updatedAt": updated})
+		return
+	}
+	if path == "/ui-state" && r.Method == http.MethodPut {
+		var input struct {
+			Key      string `json:"key"`
+			Value    any    `json:"value"`
+			Revision *int   `json:"revision"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&input); err != nil || input.Key == "" || len(input.Key) > 512 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "valid key is required"})
+			return
+		}
+		encoded, _ := json.Marshal(input.Value)
+		tx, err := d.db.Begin()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		var current int
+		scanErr := tx.QueryRow(`SELECT revision FROM ui_state WHERE key=?`, input.Key).Scan(&current)
+		if scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+			_ = tx.Rollback()
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": scanErr.Error()})
+			return
+		}
+		if input.Revision != nil && *input.Revision != current {
+			_ = tx.Rollback()
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "stale ui state", "revision": current})
+			return
+		}
+		next := current + 1
+		_, err = tx.Exec(`INSERT INTO ui_state(key,value,updated_at,revision) VALUES(?,?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at,revision=excluded.revision`, input.Key, string(encoded), time.Now().UnixMilli(), next)
+		if err == nil {
+			err = tx.Commit()
+		} else {
+			_ = tx.Rollback()
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"key": input.Key, "revision": next})
+		return
+	}
+	if path == "/sessions/new" && r.Method == http.MethodPost {
+		d.mu.Lock()
+		review := d.review
+		d.mu.Unlock()
+		if review == nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "No workspace is open"})
+			return
+		}
+		var input struct {
+			Label string `json:"label"`
+		}
+		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&input)
+		now := time.Now().UnixMilli()
+		tx, err := d.db.Begin()
+		if err == nil {
+			_, err = tx.Exec(`UPDATE sessions SET frozen_at=? WHERE id=? AND frozen_at IS NULL`, now, review.SessionID)
+			var result sql.Result
+			if err == nil {
+				result, err = tx.Exec(`INSERT INTO sessions(label,started_at) VALUES(?,?)`, nullable(input.Label), now)
+			}
+			var id int64
+			if err == nil {
+				id, err = result.LastInsertId()
+				if err == nil {
+					d.mu.Lock()
+					if d.review != nil {
+						d.review.SessionID = id
+					}
+					d.mu.Unlock()
+				}
+			}
+			if err == nil {
+				err = tx.Commit()
+			} else {
+				_ = tx.Rollback()
+			}
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"sessionId": id})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
 	// The React reviewer scopes all repository API calls below this prefix.
 	// Start with `/api/diff`, whose response is the primary rendering contract;
 	// sibling routes (comments/blobs/revisions) are ported independently.
