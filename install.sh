@@ -7,6 +7,36 @@ repo="${LOCALREVIEW_REPOSITORY:-uhvesta/cmux-localreview}"
 version="${LOCALREVIEW_VERSION:-latest}"
 prefix="${LOCALREVIEW_INSTALL_PREFIX:-$HOME/.local/bin}"
 release_base="${LOCALREVIEW_RELEASE_BASE_URL:-https://github.com/$repo/releases}"
+setup_workspace=
+setup_personal=0
+
+usage() {
+  cat <<'EOF'
+Usage: sh install.sh [options]
+
+Install the signed native release for this macOS or Linux host.
+
+Options:
+  --prefix PATH       Install launchers in PATH (default: ~/.local/bin)
+  --setup WORKSPACE   Also install managed Copilot project skills in WORKSPACE
+  --personal-skills   With --setup, also install managed skills in ~/.copilot
+  -h, --help          Show this help
+
+The installer never writes OAuth credentials. Configure the dedicated public
+GitHub OAuth client IDs afterwards with `localreview github-app configure`.
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --prefix) [ "$#" -ge 2 ] || { echo "--prefix requires a path" >&2; exit 2; }; prefix=$2; shift 2 ;;
+    --setup) [ "$#" -ge 2 ] || { echo "--setup requires a workspace path" >&2; exit 2; }; setup_workspace=$2; shift 2 ;;
+    --personal-skills) setup_personal=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+[ "$setup_personal" -eq 0 ] || [ -n "$setup_workspace" ] || { echo "--personal-skills requires --setup WORKSPACE" >&2; exit 2; }
 
 case "$(uname -s)" in
   Darwin) os="darwin" ;;
@@ -75,6 +105,14 @@ exec "\$(dirname "\$0")/localreview" $native_args "\$@"
 EOF
   chmod 0755 "$prefix/$name"
 done
+
+if [ -n "$setup_workspace" ]; then
+  if [ "$setup_personal" -eq 1 ]; then
+    "$prefix/localreview" setup --personal "$setup_workspace"
+  else
+    "$prefix/localreview" setup "$setup_workspace"
+  fi
+fi
 
 echo "Installed localreview, localreviewd, and compatible native aliases in $prefix"
 case ":$PATH:" in *":$prefix:"*) ;; *) echo "Add $prefix to PATH to use localreview." ;; esac

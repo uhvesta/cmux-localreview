@@ -20,6 +20,12 @@ Release archives install the same two binaries under `~/.local/bin`:
 sh ./install.sh
 ```
 
+For an unattended macOS/Linux bootstrap that also projects the managed Copilot
+skills into a known workspace, use `sh ./install.sh --setup /absolute/path/to/project`.
+Add `--personal-skills` only when you also want the managed copies under
+`~/.copilot/skills`. This remains credential-free: configure the dedicated
+public OAuth client IDs later with `localreview github-app configure`.
+
 `localreviewd` owns the loopback HTTP server, SQLite data, browser session
 capability, embedded UI, Git diff operations, and SDK conversation runtime.
 `localreview` is the only operator CLI; it never opens the SQLite database

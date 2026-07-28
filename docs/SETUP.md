@@ -19,6 +19,19 @@ export PATH="$HOME/.local/bin:$PATH"  # add through your own shell provisioning
 localreview daemon run --port 0
 ```
 
+To install the release and configure one project's managed Copilot skills in
+one step, pass the workspace explicitly. This is safe for bootstrap scripts:
+it writes only cmux-localreview-owned skill files and a bounded instruction
+block; it does not perform OAuth or create credentials.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/uhvesta/cmux-localreview/main/install.sh | \
+  sh -s -- --setup /absolute/path/to/project
+
+# Add the optional personal skill copies too.
+sh ./install.sh --setup /absolute/path/to/project --personal-skills
+```
+
 The script does not install a package manager, change a shell profile, or
 handle credentials. It also writes compatibility launchers such as
 `queue-submit`, `localreview-submit`, `localreview-open`, and

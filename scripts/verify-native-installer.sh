@@ -15,7 +15,8 @@ archive=${1:-$root/bazel-bin/release/localreview_darwin_arm64.tar.gz}
 stage=$(mktemp -d "${TMPDIR:-/tmp}/localreview-release-fixture.XXXXXX")
 prefix=$(mktemp -d "${TMPDIR:-/tmp}/localreview-release-prefix.XXXXXX")
 data=$(mktemp -d "${TMPDIR:-/tmp}/localreview-release-data.XXXXXX")
-cleanup() { rm -rf "$stage" "$prefix" "$data"; }
+project=$(mktemp -d "${TMPDIR:-/tmp}/localreview-release-project.XXXXXX")
+cleanup() { rm -rf "$stage" "$prefix" "$data" "$project"; }
 trap cleanup EXIT INT TERM
 
 mkdir -p "$stage/download/vtest"
@@ -40,7 +41,7 @@ PATH="$fake_bin:$PATH" \
   LOCALREVIEW_VERSION=vtest \
   LOCALREVIEW_RELEASE_BASE_URL=https://release-fixture.invalid \
   LOCALREVIEW_INSTALL_PREFIX="$prefix" \
-  sh "$root/install.sh"
+  sh "$root/install.sh" --setup "$project"
 
 for executable in \
   localreview localreviewd cmux-localreview global-daemon queue-submit \
@@ -54,6 +55,13 @@ done
 # runtime. --help exits nonzero under flag, so only assert its native usage.
 CMUX_LOCALREVIEW_DATA_DIR="$data" "$prefix/queue-submit" --help 2>&1 | grep -q 'Usage of queue-submit:'
 CMUX_LOCALREVIEW_DATA_DIR="$data" "$prefix/localreview-reproduce-copilot" --help 2>&1 | grep -q 'Usage of reproduce:'
+
+# `--setup` must run the installed release-local CLI, not merely copy helper
+# names. It creates only its managed Copilot skills/instructions in the chosen
+# workspace; OAuth setup remains an explicit, separate operator action.
+grep -q 'cmux-localreview-managed' "$project/.github/skills/localreview-submit/SKILL.md"
+grep -q 'cmux-localreview-managed' "$project/.github/copilot-instructions.md"
+CMUX_LOCALREVIEW_DATA_DIR="$data" "$prefix/localreview-github-app" guide | grep -q 'OAuth Apps'
 
 CMUX_LOCALREVIEW_DATA_DIR="$data" "$prefix/localreview" daemon run --port 0 >"$data/daemon.log" 2>&1 &
 daemon_pid=$!
