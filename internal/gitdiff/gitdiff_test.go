@@ -105,6 +105,34 @@ func TestParseIncludesUntrackedFilesForWorkingTreeSelections(t *testing.T) {
 		t.Fatalf("staged selection unexpectedly includes untracked files: %#v", staged.Files)
 	}
 }
+
+func TestParseKeepsParentDiffWhenWorkspaceContainsNestedRepository(t *testing.T) {
+	d := repo(t)
+	if err := os.WriteFile(filepath.Join(d, "file.txt"), []byte("parent dirty\ntwo\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(d, "nested")
+	if err := os.MkdirAll(nested, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, nested, "init")
+	runGit(t, nested, "config", "user.email", "nested@example.com")
+	runGit(t, nested, "config", "user.name", "Nested")
+	if err := os.WriteFile(filepath.Join(nested, "nested.txt"), []byte("nested\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, nested, "add", ".")
+	runGit(t, nested, "commit", "-m", "nested initial")
+
+	response, err := Parse(d, Selection{})
+	if err != nil {
+		t.Fatalf("parse parent workspace with nested repository: %v", err)
+	}
+	if len(response.Files) != 1 || response.Files[0].Path != "file.txt" || response.Files[0].Status != "modified" {
+		t.Fatalf("parent diff=%#v", response.Files)
+	}
+}
+
 func TestParseAddedDeletedAndRenamed(t *testing.T) {
 	d := repo(t)
 	if err := os.WriteFile(filepath.Join(d, "new.txt"), []byte("new\n"), 0600); err != nil {

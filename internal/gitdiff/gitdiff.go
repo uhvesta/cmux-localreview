@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -210,7 +211,21 @@ func parseUntracked(repo string) ([]File, error) {
 		if path == "" {
 			continue
 		}
-		contents, err := os.ReadFile(repo + string(os.PathSeparator) + path)
+		// Git reports an untracked nested repository as a directory marker
+		// (for example "nested/") rather than walking into its .git metadata.
+		// The daemon discovers that repository separately, so attempting to read
+		// the marker as a file must not discard the parent repository's entire
+		// diff. Ordinary untracked directories are already expanded to their
+		// files by ls-files; empty directories have no diff representation.
+		fullPath := filepath.Join(repo, filepath.FromSlash(path))
+		info, err := os.Stat(fullPath)
+		if err != nil {
+			return nil, fmt.Errorf("stat untracked %s: %w", path, err)
+		}
+		if info.IsDir() {
+			continue
+		}
+		contents, err := os.ReadFile(fullPath)
 		if err != nil {
 			return nil, fmt.Errorf("read untracked %s: %w", path, err)
 		}
