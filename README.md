@@ -83,7 +83,7 @@ localreview setup [--personal] [--dry-run] [WORKSPACE]
 localreview auth login|status|logout
 localreview github-app guide|configure|connect|status|disconnect
 localreview remote daemon|submit|status
-localreview federation add|list|connect|disconnect|queue|workspaces
+localreview federation add|list|connect|disconnect|delete|queue|workspaces
 ```
 
 Run `localreview <command> --help` for argument validation. The Go CLI is the

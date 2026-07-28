@@ -672,3 +672,43 @@ Validated:
 
 - `TestFrozenTypeScriptParityMatrix`, `TestBtw*`, and the equivalent Bazel
   parity target pass.
+
+## 2026-07-28 — Production SSH federation loopback validation
+
+Done:
+
+- Fixed the native OpenSSH dialer so `ClearAllForwardings=yes` cannot silently
+  remove its own explicit `-L` loopback forward.
+- Decoupled a live SSH process from the short-lived HTTP request that opened
+  it. Request cancellation still stops an unfinished setup; explicit
+  **Disconnect**, node removal, and daemon shutdown own a live tunnel's
+  lifetime.
+- Added `CMUX_LOCALREVIEW_SSH_CONFIG` for a daemon-owned, non-group/world
+  writable OpenSSH config. This supports a self-hosted service account,
+  nonstandard port, or bastion `Host` alias without changing a user's global
+  SSH configuration.
+- Added `localreview federation delete <node-id>` so the CLI can remove the
+  secure-store capability, cache, and any live tunnel as well as the Queue
+  Home UI can.
+- Corrected Queue Home copy: the native release has a real SSH transport; it
+  no longer claims federation is unavailable.
+
+Validated with a real local OpenSSH server, not the fake dialer:
+
+- Generated an ephemeral SSH host/user keypair and ran `/usr/sbin/sshd` on a
+  high loopback port with public-key-only authentication.
+- Started two independently configured production `localreviewd` binaries,
+  each loopback-only. The local daemon reached the remote daemon through a
+  service-configured OpenSSH host alias and the remote daemon's real discovery
+  capability.
+- Used the production `localreview` CLI for **add → connect → uncached queue
+  read → cached queue read → workspace read → disconnect → delete → list**.
+  The runtime exposed one ephemeral local forwarding port while connected,
+  reused it across cached/uncached reads, cleared it on disconnect, and the
+  final list was empty. The remote capability never appeared in response JSON.
+
+Not yet claimed:
+
+- This proves the transport against a real loopback SSH server and production
+  daemons. A user-visible Queue Home click-through against a separate SSH host
+  remains part of each complete Phase-3 browser/Electron pass.

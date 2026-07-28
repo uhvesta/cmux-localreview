@@ -7,6 +7,7 @@ package daemon
 // browser. The interfaces below make that process hermetic in tests.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,7 +15,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -43,6 +46,7 @@ type sshFederationDialer struct{}
 type sshFederationTunnel struct {
 	endpoint federation.TunnelEndpoint
 	command  *exec.Cmd
+	done     <-chan error
 	once     sync.Once
 }
 
@@ -53,7 +57,7 @@ func (t *sshFederationTunnel) Close() error {
 		if t.command.Process != nil {
 			_ = t.command.Process.Kill()
 		}
-		result = t.command.Wait()
+		result = <-t.done
 		if result != nil && !strings.Contains(result.Error(), "signal: killed") {
 			return
 		}
@@ -71,7 +75,7 @@ func unusedLoopbackPort() (int, error) {
 	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
-func waitForLoopback(ctx context.Context, endpoint federation.TunnelEndpoint, cmd *exec.Cmd) error {
+func waitForLoopback(ctx context.Context, endpoint federation.TunnelEndpoint, exited <-chan error, stderr *bytes.Buffer) error {
 	deadline := time.NewTimer(5 * time.Second)
 	defer deadline.Stop()
 	tick := time.NewTicker(30 * time.Millisecond)
@@ -88,11 +92,48 @@ func waitForLoopback(ctx context.Context, endpoint federation.TunnelEndpoint, cm
 		case <-deadline.C:
 			return fmt.Errorf("SSH tunnel did not open %s:%d", endpoint.Host, endpoint.Port)
 		case <-tick.C:
-			if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
+			select {
+			case err := <-exited:
+				detail := strings.TrimSpace(stderr.String())
+				if detail != "" {
+					return fmt.Errorf("SSH tunnel exited before opening: %s", detail)
+				}
+				if err != nil {
+					return fmt.Errorf("SSH tunnel exited before opening: %w", err)
+				}
 				return errors.New("SSH tunnel exited before opening")
+			default:
 			}
 		}
 	}
+}
+
+// federationSSHConfigArgs permits a self-hosted deployment to select an
+// explicit OpenSSH config without changing a user's global ~/.ssh/config.
+// This is particularly useful for a service account, nonstandard SSH port, or
+// a bastion Host alias. The config is an operator-owned transport input, never
+// browser input; reject group/world-writable files so a local unrelated user
+// cannot alter the daemon's SSH routing through an inherited environment.
+func federationSSHConfigArgs() ([]string, error) {
+	raw := strings.TrimSpace(os.Getenv("CMUX_LOCALREVIEW_SSH_CONFIG"))
+	if raw == "" {
+		return nil, nil
+	}
+	path, err := filepath.Abs(raw)
+	if err != nil {
+		return nil, fmt.Errorf("resolve CMUX_LOCALREVIEW_SSH_CONFIG: %w", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("read CMUX_LOCALREVIEW_SSH_CONFIG: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errors.New("CMUX_LOCALREVIEW_SSH_CONFIG must name a regular file")
+	}
+	if info.Mode().Perm()&0o022 != 0 {
+		return nil, errors.New("CMUX_LOCALREVIEW_SSH_CONFIG must not be group- or world-writable")
+	}
+	return []string{"-F", path}, nil
 }
 
 func (sshFederationDialer) Dial(ctx context.Context, node federation.Node) (FederationTunnel, error) {
@@ -107,19 +148,42 @@ func (sshFederationDialer) Dial(ctx context.Context, node federation.Node) (Fede
 	// No shell interpolation: target and forward specification are individual
 	// argv values. BatchMode prevents any hidden password prompt from hanging a
 	// browser request, and ExitOnForwardFailure rejects a half-open tunnel.
+	// Do not set ClearAllForwardings=yes: OpenSSH applies it after parsing -L,
+	// which silently removes the very loopback forward we are establishing.
 	forward := fmt.Sprintf("127.0.0.1:%d:127.0.0.1:%d", endpoint.Port, node.RemotePort)
-	cmd := exec.CommandContext(ctx, "ssh", "-N", "-T", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-o", "ClearAllForwardings=yes", "-L", forward, node.SSHTarget)
+	configArgs, err := federationSSHConfigArgs()
+	if err != nil {
+		return nil, err
+	}
+	args := []string{"-N", "-T", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes"}
+	args = append(args, configArgs...)
+	args = append(args, "-L", forward, node.SSHTarget)
+	// A tunnel remains live across several browser/API requests. Do not bind
+	// the SSH process itself to this request context: net/http cancels it when
+	// a successful Connect response is written, which would immediately tear
+	// down a just-created forward. waitForLoopback still observes ctx while
+	// startup is in progress, and federationTransport.Close/disconnect owns the
+	// live process lifecycle afterward.
+	cmd := exec.Command("ssh", args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start SSH tunnel: %w", err)
 	}
-	if err := waitForLoopback(ctx, endpoint, cmd); err != nil {
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	if err := waitForLoopback(ctx, endpoint, done, &stderr); err != nil {
 		if cmd.Process != nil {
 			_ = cmd.Process.Kill()
 		}
-		_ = cmd.Wait()
+		select {
+		case <-done:
+		default:
+			<-done
+		}
 		return nil, err
 	}
-	return &sshFederationTunnel{endpoint: endpoint, command: cmd}, nil
+	return &sshFederationTunnel{endpoint: endpoint, command: cmd, done: done}, nil
 }
 
 type federationCachedResponse struct {

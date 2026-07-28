@@ -584,7 +584,7 @@ func remoteCommand(args []string) error {
 
 func federationCommand(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: localreview federation <add|list|connect|disconnect|queue|workspaces> [options]")
+		return errors.New("usage: localreview federation <add|list|connect|disconnect|delete|queue|workspaces> [options]")
 	}
 	switch args[0] {
 	case "add":
@@ -619,6 +619,11 @@ func federationCommand(args []string) error {
 			return fmt.Errorf("usage: localreview federation %s <node-id>", args[0])
 		}
 		return printDaemonJSON(http.MethodPost, "/federation/nodes/"+url.PathEscape(args[1])+"/"+args[0], nil)
+	case "delete":
+		if len(args) != 2 {
+			return errors.New("usage: localreview federation delete <node-id>")
+		}
+		return printDaemonJSON(http.MethodDelete, "/federation/nodes/"+url.PathEscape(args[1]), nil)
 	case "queue", "workspaces":
 		flags := flag.NewFlagSet("federation "+args[0], flag.ContinueOnError)
 		refresh := flags.Bool("refresh", false, "bypass 15-second cache")
@@ -637,7 +642,7 @@ func federationCommand(args []string) error {
 		}
 		return printDaemonJSON(http.MethodGet, path, nil)
 	default:
-		return errors.New("usage: localreview federation <add|list|connect|disconnect|queue|workspaces> [options]")
+		return errors.New("usage: localreview federation <add|list|connect|disconnect|delete|queue|workspaces> [options]")
 	}
 }
 func submit(args []string) error {

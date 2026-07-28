@@ -343,6 +343,8 @@ printf '%s\n' "$REMOTE_DAEMON_DISCOVERY_TOKEN" | localreview federation add \
   --port 57140 --token-stdin
 localreview federation connect work-lab
 localreview federation queue --refresh
+# Permanently remove local metadata, secure-store capability, cache, and tunnel.
+localreview federation delete work-lab
 ```
 
 Each fetch uses `ssh -N -T -o BatchMode=yes -o ExitOnForwardFailure=yes -L
@@ -357,6 +359,14 @@ Use SSH keys or your platform's SSH agent. `BatchMode=yes` means password or
 host-key prompts fail visibly rather than hanging the browser; first verify
 `ssh user@host true` in a terminal. No historical Bun tunnel helper or ACP
 session forwarding is required or supported.
+
+For a service account, a nonstandard SSH port, or a bastion, configure a normal
+OpenSSH `Host` alias and use that alias as `--ssh`. To keep a daemon independent
+of the account's global `~/.ssh/config`, set
+`CMUX_LOCALREVIEW_SSH_CONFIG=/absolute/path/to/ssh_config` before starting it.
+The config must be a regular file that is not group- or world-writable; the
+daemon passes it as OpenSSH's `-F` argument. This controls SSH routing only:
+the remote daemon capability remains in the local OS secret store.
 
 ## Validation checklist
 

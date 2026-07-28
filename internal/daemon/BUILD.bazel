@@ -51,6 +51,7 @@ go_test(
 		"daemon_test.go",
 		"export_test.go",
 		"federation_api_test.go",
+		"federation_transport_test.go",
 		"parity_corpus_test.go",
 		"parity_matrix_test.go",
 		"queue_delivery_test.go",
