@@ -11,6 +11,10 @@ interface OpenWorkspaceResponse {
   reviewUrl: string;
 }
 
+interface OpenReadOnlyPullRequestResponse extends OpenWorkspaceResponse {
+  pullRequest: { url: string; number: number; title: string; headSha: string; baseSha: string };
+}
+
 async function main(): Promise<void> {
   const program = new Command();
   program
@@ -18,11 +22,12 @@ async function main(): Promise<void> {
     .description("Register a workspace with the review daemon and open its browser UI")
     .argument("[workspace]", "workspace directory", ".")
     .option("--base <ref>", "intended Git base ref for the review")
+    .option("--pr <url>", "open a PR for local question-only review; no queue item or browser bearer token")
     .option("--home", "open Queue Home instead of a workspace review")
     .option("--open", "open the browser UI", true)
     .option("--no-open", "do not launch a browser")
     .option("--json", "write the daemon response as JSON")
-    .action(async (workspace: string, options: { base?: string; home?: boolean; open: boolean; json?: boolean }) => {
+    .action(async (workspace: string, options: { base?: string; pr?: string; home?: boolean; open: boolean; json?: boolean }) => {
       const workspacePath = resolve(workspace);
       const daemon = await connectDaemon();
       if (options.home) {
@@ -35,6 +40,25 @@ async function main(): Promise<void> {
           return;
         }
         console.log(`Queue Home: ${reviewUrl}`);
+        return;
+      }
+      if (options.pr) {
+        const result = await daemon.request<OpenReadOnlyPullRequestResponse>("/api/local-review/pr", {
+          method: "POST",
+          body: JSON.stringify({ remoteUrl: options.pr }),
+        });
+        // Unlike normal queue/workspace review, this URL intentionally has no
+        // daemon token. It supports diffs and /ask only; formal submission
+        // remains behind the authenticated control plane.
+        const reviewUrl = new URL(result.reviewUrl, `${daemon.baseUrl}/`).toString();
+        if (options.open) await open(reviewUrl);
+        if (options.json) {
+          console.log(JSON.stringify({ ...result, reviewUrl, localQuestionOnly: true }, null, 2));
+          return;
+        }
+        console.log(`Opened PR #${result.pullRequest.number} for local questions: ${result.pullRequest.title}`);
+        console.log(`Review UI (no bearer token): ${reviewUrl}`);
+        console.log("Use /ask for side-chat or inline questions. This review was not added to the queue and cannot publish feedback.");
         return;
       }
       await daemon.request<{ workspacePath: string }>("/api/workspaces", {

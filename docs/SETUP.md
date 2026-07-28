@@ -133,6 +133,23 @@ and cache worktree, and pins review to that head. Use **Refresh remote PRs**
 after a push; a stale head cannot receive an approval or change request. Use
 the remote clean-up controls only for cache-owned worktrees and mirrors.
 
+### Ask Copilot about a PR without entering the review queue
+
+Use this when you want a local, question-only inspection: it resolves the PR,
+creates an isolated cached worktree, and opens the diff with `/ask` available.
+It does **not** create a queue item or snapshot, attach an ACP agent, or make
+GitHub review submission controls available in the browser.
+
+```sh
+copilot login  # once per machine, for the /ask model picker
+bun src/localreview-open.ts --pr https://github.com/OWNER/REPOSITORY/pull/NUMBER
+```
+
+The resulting reviewer URL has no daemon bearer token and is accepted only on
+`127.0.0.1`. Open `/ask`, choose a model, and ask a side-chat or inline code
+question. GitHub CLI authentication is still needed to resolve and clone a
+private PR; no GitHub write operation occurs in this mode.
+
 ## Remote daemon and SSH forwarding
 
 Set up the checkout and skills on the remote worker as above. Start the remote

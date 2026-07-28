@@ -45,6 +45,16 @@ function safeWorkspace(input: unknown): string {
 
 function bodyString(value: unknown): string | undefined { return typeof value === "string" ? value : undefined; }
 
+/**
+ * A token-free PR review is intentionally available only to a browser on the
+ * same machine. It still creates a cached Git worktree, so never expose this
+ * convenience endpoint on a network listener.
+ */
+function isLoopbackRequest(req: Request): boolean {
+  const address = req.socket.remoteAddress ?? "";
+  return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
+}
+
 function requireAuth(token: string) {
   return (req: Request, res: Response, next: () => void) => {
     if (req.path === "/health") return next();
@@ -266,6 +276,26 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
     });
   };
 
+  /**
+   * Opens a PR in an isolated, cached worktree without adding a queue item,
+   * snapshot, agent route, ACP endpoint, or GitHub review capability. This is
+   * deliberately separate from `queueRemotePullRequest`: it is for local
+   * investigation and /ask, not formal review submission.
+   */
+  const openReadOnlyPullRequest = async (remoteUrl: string) => {
+    const pr = await resolveRemotePullRequest(remoteUrl);
+    const remoteWorkspace = await prepareRemoteWorkspace(pr);
+    const review = await activate(remoteWorkspace.workspacePath, pr.baseSha);
+    return {
+      pullRequest: pr,
+      workspacePath: remoteWorkspace.workspacePath,
+      repos: review.workspace.repos.map((repo) => ({ id: repo.repoId, path: repo.repo.workspaceRelativePath })),
+      // No daemon token is included. `localOnly=1` hides formal review
+      // controls; the remaining diff and /ask routes are workspace-local.
+      reviewUrl: "/review?localOnly=1",
+    };
+  };
+
   const activate = async (workspacePath: string, base?: string, defaultTerminalAgentId?: string) => {
     if (active?.rootPath === workspacePath) return active;
     if (active) await active.stop();
@@ -318,6 +348,18 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
       // is an explicit destination so opening the daemon never silently drops
       // a reviewer into whichever workspace happened to be active.
       res.json({ workspacePath: rootPath, repos: review.workspace.repos.map((repo) => ({ id: repo.repoId, path: repo.repo.workspaceRelativePath })), reviewUrl: "/review" });
+    } catch (error) { res.status(400).json({ error: String(error) }); }
+  });
+
+  // Token-free by design, but only usable from loopback. This is the API form
+  // of `localreview-open --pr`; it must never create a queue record or grant
+  // a browser the formal feedback/publish controls.
+  api.post("/local-review/pr", async (req, res) => {
+    if (!isLoopbackRequest(req)) { res.status(403).json({ error: "Local question-only PR review is available only from loopback." }); return; }
+    try {
+      const remoteUrl = bodyString(req.body?.remoteUrl);
+      if (!remoteUrl) throw new Error("remoteUrl is required");
+      res.json(await openReadOnlyPullRequest(remoteUrl));
     } catch (error) { res.status(400).json({ error: String(error) }); }
   });
 
@@ -667,6 +709,21 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
   // shared SPA shell from the daemon itself, then delegate only API traffic
   // to the currently active workspace application.
   const clientDist = join(dirname(fileURLToPath(import.meta.url)), "..", "vendor", "difit", "dist", "client");
+  // A shareable local URL is useful when all the reviewer wants is to inspect
+  // a PR and ask Copilot questions. The PR URL is consumed server-side and is
+  // removed before serving the client, so it is neither retained in browser
+  // history nor confused with a formal queue submission.
+  app.get("/review", async (req, res, next) => {
+    const remoteUrl = bodyString(req.query.pr);
+    if (!remoteUrl) { next(); return; }
+    if (!isLoopbackRequest(req)) { res.status(403).type("text/plain").send("Local question-only PR review is available only from loopback."); return; }
+    try {
+      const opened = await openReadOnlyPullRequest(remoteUrl);
+      res.redirect(303, opened.reviewUrl);
+    } catch (error) {
+      res.status(400).type("text/plain").send(`Unable to open PR for local questions: ${String(error)}`);
+    }
+  });
   app.use(express.static(clientDist));
   app.get(/^(?!\/api\/).*/, (_req, res) => res.sendFile(join(clientDist, "index.html")));
   // Only review API traffic reaches this dispatcher. Control endpoints above

@@ -69,6 +69,7 @@ async function fetchRepos(): Promise<WorkspaceSummary> {
  * automatically namespaced to that repo's `/api/repos/<id>` routes.
  */
 export function WorkspaceShell() {
+  const localQuestionOnly = new URLSearchParams(window.location.search).get('localOnly') === '1';
   const [initialUiState] = useState(getStoredWorkspaceUiState);
   const uiStateRevisionRef = useRef(0);
   const [uiStateReady, setUiStateReady] = useState(false);
@@ -286,7 +287,10 @@ export function WorkspaceShell() {
       >
         {!sidebarCollapsed && (
           <>
-            <div
+            {localQuestionOnly && <div role="status" style={{ margin: '0 10px 8px', padding: '7px 8px', border: '1px solid rgba(88,166,255,0.55)', borderRadius: 4, fontSize: 11, color: '#79c0ff' }}>
+              Local PR questions only — use /ask. This PR is not in the queue and cannot send feedback or publish a GitHub review.
+            </div>}
+            {!localQuestionOnly && <div
               style={{
                 display: 'flex',
                 justifyContent: 'space-between',
@@ -310,7 +314,7 @@ export function WorkspaceShell() {
               >
                 flat
               </button>
-            </div>
+            </div>}
             {!flatMode ? (
               <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
                 {repos.map((repo) => (
@@ -405,7 +409,7 @@ export function WorkspaceShell() {
                 ))}
               </div>
             )}
-            <div
+            {!localQuestionOnly && <div
               style={{
                 marginTop: 'auto',
                 borderTop: '1px solid rgba(127,127,127,0.3)',
@@ -479,7 +483,7 @@ export function WorkspaceShell() {
               {exportStatus === 'copied' && <div style={{ fontSize: 11, color: '#2ea043' }}>Copied.</div>}
               {exportStatus === 'sent' && <div style={{ fontSize: 11, color: '#2ea043' }}>Sent to cmux.</div>}
               {exportStatus === 'error' && <div style={{ fontSize: 11, color: '#c0392b' }}>Export failed.</div>}
-            </div>
+            </div>}
           </>
         )}
       </aside>
@@ -520,21 +524,21 @@ export function WorkspaceShell() {
         )}
         {selectedRepoId && <App key={`${selectedRepoId}-${reloadNonce}`} />}
       </div>
-      <BtwPanel
+      {!localQuestionOnly && <BtwPanel
         selectedRepoId={selectedRepoId}
         refreshNonce={btwRefreshNonce}
         collapsed={btwPanelCollapsed}
         onToggleCollapsed={() => setBtwPanelCollapsed((v) => !v)}
-      />
+      />}
       <AskPanel
         collapsed={askPanelCollapsed}
         onToggleCollapsed={() => setAskPanelCollapsed((v) => !v)}
       />
-      <ReviewControlPanel
+      {!localQuestionOnly && <ReviewControlPanel
         collapsed={reviewControlsCollapsed}
         onToggleCollapsed={() => setReviewControlsCollapsed((v) => !v)}
         refreshNonce={btwRefreshNonce}
-      />
+      />}
     </div>
   );
 }
