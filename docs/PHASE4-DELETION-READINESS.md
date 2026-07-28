@@ -47,6 +47,11 @@ The desktop artifact job must stage the same Vite output embedded in the Go
 sidecar before it builds that binary. A healthy sidecar alone does not prove
 the renderer is current: compare a clean-profile packaged window's visible
 Queue Home copy/controls with the current UI before recording an Electron pass.
+The credential-free minimum smoke is Queue Home local submission → queued card
+→ **Open workspace** → actual changed-file diff. Run it against an isolated
+Electron user-data directory and daemon data directory; it proves no queue or
+OAuth state leaked from a developer's normal desktop profile, but it is not a
+replacement for the authenticated `/ask` and GitHub-review Phase-3 cases.
 
 ## Frozen TypeScript dependencies to remove
 

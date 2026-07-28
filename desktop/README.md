@@ -43,6 +43,26 @@ that differ from `vendor/difit`, run `bash scripts/stage-ui-assets.sh`, rebuild
 `//cmd/localreviewd:localreviewd`, then package again; never certify the older
 artifact based only on its sidecar health.
 
+## Isolated renderer acceptance smoke
+
+Use a disposable Git workspace and a separate Electron user-data directory
+when manually exercising the packaged renderer. This prevents a smoke run from
+sharing the user's queue, daemon SQLite database, GitHub credentials, or
+single-instance lock. In the isolated window, verify this minimum local flow:
+
+1. On Queue Home, enter the disposable workspace path, title, and topic; click
+   **Submit local**.
+2. Confirm the queued card shows the supplied title and path, then click
+   **Open workspace**.
+3. Confirm `/review?queueItem=…` opens, the repository/file tree is present,
+   and the changed file renders its actual diff in Split or Unified mode.
+
+This smoke covers current packaged renderer loading, Queue Home mutation,
+snapshot submission, queue-to-review navigation, and diff rendering without
+GitHub or Copilot credentials. It does **not** cover authenticated `/ask`,
+GitHub publishing, or a complete review decision lifecycle; those remain
+separate Phase-3 acceptance cases.
+
 It deliberately does not claim a full GUI acceptance pass. Follow it with the
 Phase-3 Electron checklist in [CLI workflows](../docs/CLI-WORKFLOWS.md#desktop-shell-optional):
 open the packaged app, complete one durable review action, quit, relaunch, and
