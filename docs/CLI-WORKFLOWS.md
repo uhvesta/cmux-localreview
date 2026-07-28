@@ -360,6 +360,36 @@ not replace the clean-profile browser OAuth, live Copilot, or packaged Electron
 passes in the migration checklist. The fixture never contacts GitHub/Copilot
 and cannot create credentials or resend a real prompt.
 
+### Clean-profile Phase 3 computer-use session
+
+The manual web and packaged-Electron checks have a repeatable session runner.
+It builds the exact artifacts, creates an isolated workspace with two modified
+nested repositories (including staged, unstaged, and untracked changes), and
+gives the browser and Electron independent empty data directories. It does not
+copy a credential, invoke OAuth, or contact Copilot:
+
+```sh
+scripts/phase3-acceptance.sh prepare --output /tmp/localreview-phase3-run-1
+/tmp/localreview-phase3-run-1/launch-web.sh
+# In a separate fresh desktop run:
+/tmp/localreview-phase3-run-1/launch-electron.sh
+```
+
+Drive the seven items in `CHECKLIST.md` with computer-use. After each observed
+interaction, append—not overwrite—its evidence:
+
+```sh
+scripts/phase3-acceptance.sh record \
+  --session /tmp/localreview-phase3-run-1 --surface web --item 1 --result pass \
+  --note 'Opened both nested repositories; verified tree, split/unified/full views and context expansion.'
+scripts/phase3-acceptance.sh status --session /tmp/localreview-phase3-run-1
+```
+
+The ledger intentionally cannot certify Phase 3 by itself: real OAuth/Copilot
+results must be observed in the UI and two full clean sessions still need to be
+reviewed and recorded in `MIGRATION_LOG.md`. Keeping this boundary prevents a
+fixture or a reopened session from being mistaken for an authenticated pass.
+
 ## File-change reload workflow
 
 When an opened workspace changes, the daemon fingerprints both Git status and
