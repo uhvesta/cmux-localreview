@@ -317,3 +317,40 @@ Not yet claimed:
   either replayed or accepted as documented migration substitutions in the
   final Phase-4 absence audit. Real authenticated service flows and the two
   clean click-driven Phase-3 passes remain required before deletion/tagging.
+
+## 2026-07-28 — Copilot fixture browser regression pass
+
+Done:
+
+- Corrected durable `/ask` SSE URL resolution after a reviewer selects a
+  repository. Global daemon streams no longer inherit the repo-scoped API base.
+- Made early cancellation terminal and visible: the stream connection wait is
+  released immediately, partial text is preserved, and the transcript records
+  that Copilot was cancelled rather than looking like it silently stopped.
+- Reset an idle SDK session when the reviewer changes model, thinking, or
+  context settings, so the next turn actually uses the displayed choice.
+- Switched GitHub App authorization to device OAuth by default. The optional
+  browser flow now uses only the documented, stable
+  `http://127.0.0.1:8787/oauth/callback` registration and never assumes that
+  GitHub accepts an arbitrary loopback port.
+
+Validated:
+
+- Fresh browser fixture daemon: Queue Home rendered the global local/remote
+  queues and the dedicated GitHub App device-flow selector; a local immutable
+  snapshot was submitted and shown as a queue item.
+- Browser fixture review: chose Claude Sonnet 4.6, observed an explicit
+  `thinking…` streaming state, then received an answer identifying
+  `claude-sonnet-4.6`; cancelled a second live turn and observed the durable
+  cancelled marker. A fresh browser page restored the transcript, selected
+  model, and cancelled turn without resending either prompt.
+- `go test ./internal/askruntime ./internal/daemon ./internal/githubauth
+  ./cmd/localreview`, TypeScript checking, focused UI tests, the isolated
+  Copilot fixture acceptance gate, and the fixture Bazel build passed.
+
+Not yet claimed:
+
+- The fixture validates deterministic SDK protocol behavior, not a real
+  GitHub/Copilot authorization grant. Actual device authorization, real SDK
+  model enumeration, `/btw`, inline question click-through, Electron renderer
+  click-through, and a second clean full Phase-3 run remain release gates.
