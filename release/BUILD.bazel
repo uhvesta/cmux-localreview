@@ -1,0 +1,106 @@
+load("@rules_go//go:def.bzl", "go_cross_binary")
+load(":archives.bzl", "archive")
+
+# Release platforms deliberately cover only the v1 promise: darwin/linux on
+# arm64/amd64. Windows is intentionally not an archive target yet.
+platform(
+    name = "darwin_arm64",
+    constraint_values = ["@platforms//os:osx", "@platforms//cpu:arm64"],
+)
+
+platform(
+    name = "darwin_amd64",
+    constraint_values = ["@platforms//os:osx", "@platforms//cpu:x86_64"],
+)
+
+platform(
+    name = "linux_arm64",
+    constraint_values = ["@platforms//os:linux", "@platforms//cpu:arm64"],
+)
+
+platform(
+    name = "linux_amd64",
+    constraint_values = ["@platforms//os:linux", "@platforms//cpu:x86_64"],
+)
+
+go_cross_binary(
+    name = "localreview_darwin_arm64",
+    compilation_mode = "opt",
+    platform = ":darwin_arm64",
+    target = "//cmd/localreview:localreview",
+)
+
+go_cross_binary(
+    name = "localreviewd_darwin_arm64",
+    compilation_mode = "opt",
+    platform = ":darwin_arm64",
+    target = "//cmd/localreviewd:localreviewd",
+)
+
+go_cross_binary(
+    name = "localreview_darwin_amd64",
+    compilation_mode = "opt",
+    platform = ":darwin_amd64",
+    target = "//cmd/localreview:localreview",
+)
+
+go_cross_binary(
+    name = "localreviewd_darwin_amd64",
+    compilation_mode = "opt",
+    platform = ":darwin_amd64",
+    target = "//cmd/localreviewd:localreviewd",
+)
+
+go_cross_binary(
+    name = "localreview_linux_arm64",
+    compilation_mode = "opt",
+    platform = ":linux_arm64",
+    target = "//cmd/localreview:localreview",
+)
+
+go_cross_binary(
+    name = "localreviewd_linux_arm64",
+    compilation_mode = "opt",
+    platform = ":linux_arm64",
+    target = "//cmd/localreviewd:localreviewd",
+)
+
+go_cross_binary(
+    name = "localreview_linux_amd64",
+    compilation_mode = "opt",
+    platform = ":linux_amd64",
+    target = "//cmd/localreview:localreview",
+)
+
+go_cross_binary(
+    name = "localreviewd_linux_amd64",
+    compilation_mode = "opt",
+    platform = ":linux_amd64",
+    target = "//cmd/localreviewd:localreviewd",
+)
+
+archive("darwin_arm64_archive", ":localreview_darwin_arm64", ":localreviewd_darwin_arm64", "darwin_arm64")
+archive("darwin_amd64_archive", ":localreview_darwin_amd64", ":localreviewd_darwin_amd64", "darwin_amd64")
+archive("linux_arm64_archive", ":localreview_linux_arm64", ":localreviewd_linux_arm64", "linux_arm64")
+archive("linux_amd64_archive", ":localreview_linux_amd64", ":localreviewd_linux_amd64", "linux_amd64")
+
+filegroup(
+    name = "archives",
+    srcs = [
+        ":darwin_arm64_archive",
+        ":darwin_amd64_archive",
+        ":linux_arm64_archive",
+        ":linux_amd64_archive",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# Publish this alongside every archive. install.sh refuses an archive that is
+# not listed here or whose SHA-256 differs.
+genrule(
+    name = "checksums",
+    srcs = [":archives"],
+    outs = ["checksums.txt"],
+    cmd = "set -euo pipefail; : > $@; for file in $(locations :archives); do hash=$$(shasum -a 256 \"$$file\" | awk '{print $$1}'); printf '%s  %s\\n' \"$$hash\" \"$$(basename \"$$file\")\" >> $@; done",
+    visibility = ["//visibility:public"],
+)

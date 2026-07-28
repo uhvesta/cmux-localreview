@@ -20,6 +20,7 @@ import (
 	"syscall"
 
 	"github.com/uhvesta/cmux-localreview/internal/daemon"
+	copilotsetup "github.com/uhvesta/cmux-localreview/internal/setup"
 	"github.com/uhvesta/cmux-localreview/internal/snapshot"
 )
 
@@ -143,6 +144,43 @@ func reproduce(args []string) error {
 	return nil
 }
 
+// setupCopilot installs only cmux-localreview-managed Copilot instructions and
+// skills. Existing user-owned files are preserved, and --dry-run has no write
+// side effects so it is safe for remote/bootstrap automation.
+func setupCopilot(args []string) error {
+	flags := flag.NewFlagSet("setup", flag.ContinueOnError)
+	personal := flags.Bool("personal", false, "also install skills in ~/.copilot/skills")
+	noProject := flags.Bool("no-project", false, "do not install project-local .github skills")
+	dryRun := flags.Bool("dry-run", false, "show planned changes without writing")
+	jsonOutput := flags.Bool("json", false, "print machine-readable changes")
+	command := flags.String("command", "", "submission command written into installed skills")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() > 1 {
+		return errors.New("usage: localreview setup [--personal] [--no-project] [--dry-run] [workspace]")
+	}
+	workspace := "."
+	if flags.NArg() == 1 {
+		workspace = flags.Arg(0)
+	}
+	changes, err := copilotsetup.Install(copilotsetup.Options{Workspace: workspace, Project: !*noProject, Personal: *personal, DryRun: *dryRun, Command: *command})
+	if err != nil {
+		return err
+	}
+	if *jsonOutput {
+		return json.NewEncoder(os.Stdout).Encode(map[string]any{"workspace": workspace, "dryRun": *dryRun, "changes": changes})
+	}
+	for _, change := range changes {
+		if change.Reason == "" {
+			fmt.Printf("%-9s %s\n", change.Action, change.Path)
+		} else {
+			fmt.Printf("%-9s %s — %s\n", change.Action, change.Path, change.Reason)
+		}
+	}
+	return nil
+}
+
 // openHome creates the one-time browser capability URL. The daemon token is
 // deliberately kept in the URL fragment: browsers never transmit fragments
 // to the HTTP server, and the React client exchanges it immediately for an
@@ -202,7 +240,7 @@ func openHome(args []string) error {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: localreview <daemon|open|queue-submit|reproduce> [options]")
+		fmt.Fprintln(os.Stderr, "usage: localreview <daemon|open|queue-submit|reproduce|setup> [options]")
 		os.Exit(2)
 	}
 	switch os.Args[1] {
@@ -221,13 +259,18 @@ func main() {
 			fmt.Fprintln(os.Stderr, "localreview:", err)
 			os.Exit(1)
 		}
+	case "setup":
+		if err := setupCopilot(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "localreview:", err)
+			os.Exit(1)
+		}
 	case "open":
 		if err := openHome(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "localreview:", err)
 			os.Exit(1)
 		}
 	default:
-		fmt.Fprintln(os.Stderr, "usage: localreview <daemon|open|queue-submit|reproduce> [options]")
+		fmt.Fprintln(os.Stderr, "usage: localreview <daemon|open|queue-submit|reproduce|setup> [options]")
 		os.Exit(2)
 	}
 }

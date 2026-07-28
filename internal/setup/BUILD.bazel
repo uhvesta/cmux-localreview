@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "setup",
+    srcs = ["setup.go"],
+    embedsrcs = glob(["templates/**"]),
+    importpath = "github.com/uhvesta/cmux-localreview/internal/setup",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "setup_test",
+    srcs = ["setup_test.go"],
+    embed = [":setup"],
+)
