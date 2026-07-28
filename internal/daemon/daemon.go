@@ -422,6 +422,90 @@ func fullFileGates(chunks []gitdiff.Chunk, side string) []map[string]any {
 	return gates
 }
 
+type storedCommentMessage struct {
+	Body   string `json:"body"`
+	Author string `json:"author"`
+}
+
+type exportThread struct {
+	File, Body, Code string
+	Start, End       int64
+	Messages         []storedCommentMessage
+}
+
+func formatThreadPrompt(thread exportThread) string {
+	line := fmt.Sprintf("L%d", thread.Start)
+	if thread.End != thread.Start {
+		line = fmt.Sprintf("L%d-L%d", thread.Start, thread.End)
+	}
+	sections := []string{thread.File + ":" + line}
+	for index, message := range thread.Messages {
+		if strings.TrimSpace(message.Body) == "" {
+			continue
+		}
+		if index > 0 {
+			author := strings.TrimSpace(message.Author)
+			if author == "" {
+				author = "Unknown"
+			}
+			sections = append(sections, fmt.Sprintf("Reply %d (%s)", index, author))
+		}
+		sections = append(sections, message.Body)
+	}
+	if len(sections) == 1 && thread.Body != "" {
+		sections = append(sections, thread.Body)
+	}
+	return strings.Join(sections, "\n")
+}
+
+func (d *Daemon) exportThreads(sessionID int64) ([]exportThread, string, error) {
+	d.mu.Lock()
+	review := d.review
+	d.mu.Unlock()
+	if review == nil {
+		return nil, "", nil
+	}
+	rows, err := d.db.Query(`SELECT r.workspace_relative_path,c.file_path,c.start_line,c.end_line,c.body,c.messages_json,c.anchor_content FROM comments c JOIN repos r ON r.id=c.repo_id WHERE c.session_id=? AND c.channel='formal' ORDER BY r.workspace_relative_path,c.file_path,c.start_line,c.created_at`, sessionID)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+	threads := []exportThread{}
+	for rows.Next() {
+		var root, file, body string
+		var start, end int64
+		var messages, code sql.NullString
+		if err := rows.Scan(&root, &file, &start, &end, &body, &messages, &code); err != nil {
+			return nil, "", err
+		}
+		path := file
+		if root != "" && root != "." {
+			path = filepath.ToSlash(filepath.Join(root, file))
+		}
+		thread := exportThread{File: path, Body: body, Start: start, End: end}
+		if code.Valid {
+			thread.Code = code.String
+		}
+		if messages.Valid {
+			_ = json.Unmarshal([]byte(messages.String), &thread.Messages)
+		}
+		threads = append(threads, thread)
+	}
+	return threads, review.Root, rows.Err()
+}
+
+func (d *Daemon) exportPrompt(sessionID int64) (string, error) {
+	threads, root, err := d.exportThreads(sessionID)
+	if err != nil || len(threads) == 0 {
+		return "", err
+	}
+	formatted := make([]string, 0, len(threads))
+	for _, thread := range threads {
+		formatted = append(formatted, formatThreadPrompt(thread))
+	}
+	return "Review feedback\nWorkspace root: " + root + "\nFile paths below are relative to this workspace root (not a repository root).\n\n" + strings.Join(formatted, "\n=====\n"), nil
+}
+
 func dereference(value *string) string {
 	if value == nil {
 		return ""
@@ -641,6 +725,29 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"key": input.Key, "revision": next})
 		return
 	}
+	if path == "/export/prompt" && r.Method == http.MethodGet {
+		d.mu.Lock()
+		review := d.review
+		d.mu.Unlock()
+		if review == nil {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			return
+		}
+		sessionID := review.SessionID
+		if raw := r.URL.Query().Get("sessionId"); raw != "" {
+			if parsed, err := strconv.ParseInt(raw, 10, 64); err == nil && parsed > 0 {
+				sessionID = parsed
+			}
+		}
+		prompt, err := d.exportPrompt(sessionID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte(prompt))
+		return
+	}
 	if path == "/sessions/new" && r.Method == http.MethodPost {
 		d.mu.Lock()
 		review := d.review
@@ -764,6 +871,12 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 	// sibling routes (comments/blobs/revisions) are ported independently.
 	if strings.HasPrefix(path, "/repos/") {
 		parts := strings.Split(strings.Trim(path, "/"), "/")
+		if len(parts) == 4 && parts[0] == "repos" && parts[2] == "api" && parts[3] == "comments-output" && r.Method == http.MethodGet {
+			// difit's compatibility endpoint intentionally remains empty; formal
+			// feedback is exported only through the explicit workspace-level API.
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			return
+		}
 		if len(parts) >= 5 && parts[0] == "repos" && parts[2] == "api" && parts[3] == "line-count" && r.Method == http.MethodGet {
 			repo, ok := d.reviewRepo(parts[1])
 			if !ok {

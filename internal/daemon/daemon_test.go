@@ -366,6 +366,22 @@ func TestWorkspaceActivationDiscoversNestedRepositories(t *testing.T) {
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("comment write status=%d body=%s", response.StatusCode, body)
 	}
+	for _, expectation := range []struct{ path, contains string }{
+		{"/api/export/prompt", "tools/child/review.txt:L1\nPlease clarify"},
+		{"/api/repos/" + childID + "/api/comments-output", ""},
+	} {
+		req, _ = http.NewRequest(http.MethodGet, base+expectation.path, nil)
+		req.Header.Set("Authorization", "Bearer "+discovered.Token)
+		response, err = http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ = io.ReadAll(response.Body)
+		response.Body.Close()
+		if response.StatusCode != http.StatusOK || !strings.Contains(string(body), expectation.contains) {
+			t.Fatalf("%s status=%d body=%s", expectation.path, response.StatusCode, body)
+		}
+	}
 	req, _ = http.NewRequest(http.MethodGet, base+"/api/repos/"+childID+"/api/comments-json", nil)
 	req.Header.Set("Authorization", "Bearer "+discovered.Token)
 	response, err = http.DefaultClient.Do(req)
