@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "ask",
+    srcs = ["store.go"],
+    importpath = "github.com/uhvesta/cmux-localreview/internal/ask",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "ask_test",
+    srcs = ["store_test.go"],
+    embed = [":ask"],
+    deps = ["//internal/store"],
+)
