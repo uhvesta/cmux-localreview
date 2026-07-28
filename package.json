@@ -4,24 +4,24 @@
   "private": true,
   "type": "module",
   "bin": {
-    "cmux-localreview": "./src/cli.ts",
-    "global-daemon": "./src/global-daemon.ts",
-    "queue-submit": "./src/queue-submit.ts",
-    "localreview-submit": "./src/queue-submit.ts",
-    "localreview-reproduce": "./src/localreview-reproduce.ts",
-    "localreview-reproduce-copilot": "./src/localreview-reproduce-copilot.ts",
-    "localreview-open": "./src/localreview-open.ts",
-    "localreview-demo": "./src/localreview-demo.ts",
-    "localreview-setup": "./src/localreview-setup.ts",
-    "localreview-github-app": "./src/localreview-github-app.ts",
-    "localreview-remote": "./src/localreview-remote.ts",
-    "localreview-remote-daemon": "./src/localreview-remote-daemon.ts"
+    "cmux-localreview": "./scripts/legacy-bin.mjs",
+    "global-daemon": "./scripts/legacy-bin.mjs",
+    "queue-submit": "./scripts/legacy-bin.mjs",
+    "localreview-submit": "./scripts/legacy-bin.mjs",
+    "localreview-reproduce": "./scripts/legacy-bin.mjs",
+    "localreview-reproduce-copilot": "./scripts/legacy-bin.mjs",
+    "localreview-open": "./scripts/legacy-bin.mjs",
+    "localreview-demo": "./scripts/legacy-bin.mjs",
+    "localreview-setup": "./scripts/legacy-bin.mjs",
+    "localreview-github-app": "./scripts/legacy-bin.mjs",
+    "localreview-remote": "./scripts/legacy-bin.mjs",
+    "localreview-remote-daemon": "./scripts/legacy-bin.mjs"
   },
   "scripts": {
     "vendor-difit-build": "cd vendor/difit && tsc --project tsconfig.cli.json && vite build",
     "vendor-difit-server": "bun vendor/difit/dist/cli/index.js",
     "build": "bun run vendor-difit-build",
-    "test": "bun test --path-ignore-patterns='**/vendor/**'",
+    "test": "bun test --path-ignore-patterns='**/vendor/**' && node --test scripts/legacy-bin.test.mjs",
     "typecheck": "tsc --project tsconfig.json && tsc --project vendor/difit/tsconfig.cli.json --noEmit && tsc --project vendor/difit/tsconfig.json --noEmit"
   },
   "dependencies": {

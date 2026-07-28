@@ -3,7 +3,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { daemonFetch } from '../services/daemonAuth';
 
 type QueueStatus = 'queued' | 'in_review' | 'changes_requested' | 'approved' | 'completed';
-type AcpState = 'unavailable' | 'connecting' | 'idle' | 'busy' | 'error';
 
 interface QueueItem {
   id: string;
@@ -17,12 +16,6 @@ interface QueueItem {
   agentId: string | null;
   agentProvider: string | null;
   copilotSessionId: string | null;
-  acpHost: string | null;
-  acpPort: number | null;
-  acpSessionId: string | null;
-  agentKind: string | null;
-  acpState: AcpState;
-  acpLastError: string | null;
   snapshotManifestPath: string | null;
   snapshotManifest: Record<string, unknown> | null;
   feedbackTarget: string | null;
@@ -59,9 +52,8 @@ interface QueueDetail { item: QueueItem; feedback: Feedback[]; decisions: Decisi
 
 interface ReproductionPlan {
   snapshot: { id: string; manifestPath: string; repositories: number } | null;
-  existingAcp: { host: string; port: number; sessionId: string; state: AcpState; error: string | null; canAttemptResume: boolean } | null;
   copilotSessionId: string | null;
-  commands: { reproduceSnapshot: string; reproduceCopilot: string; freshAcp: string } | null;
+  commands: Record<string, string> | null;
   notes: string[];
 }
 
@@ -111,11 +103,7 @@ const cardStyle = { border: '1px solid rgba(127,127,127,0.28)', borderRadius: 5,
 
 function readable(value: string | null | undefined) { return value || '—'; }
 function time(value: number | null | undefined) { return value ? new Date(value).toLocaleString() : '—'; }
-function acpLabel(item: QueueItem) {
-  return item.acpHost && item.acpPort && item.acpSessionId
-    ? `${item.acpState} · ${item.acpHost}:${item.acpPort} · ${item.acpSessionId}`
-    : 'unavailable';
-}
+function copilotLabel(item: QueueItem) { return item.copilotSessionId ? `saved session hint: ${item.copilotSessionId}` : 'starts a durable SDK session when feedback is sent'; }
 
 export function ReviewControlPanel({ collapsed, onToggleCollapsed, refreshNonce }: ReviewControlPanelProps) {
   const boundQueueItemId = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('queueItem');
@@ -208,10 +196,10 @@ export function ReviewControlPanel({ collapsed, onToggleCollapsed, refreshNonce 
   }, []);
 
   const openNext = useCallback(() => run('open-next', () => daemonFetch('/api/queue/open-next', { method: 'POST' }), 'Opened the next queued review.'), [run]);
-  const decide = useCallback((item: QueueItem, decision: Extract<QueueStatus, 'approved' | 'changes_requested' | 'completed'>, publishGitHub = false) =>
+  const decide = useCallback((item: QueueItem, decision: Extract<QueueStatus, 'approved' | 'changes_requested' | 'completed'>) =>
     run(`decision:${item.id}`, () => daemonFetch(`/api/queue/${encodeURIComponent(item.id)}/decision`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision, publishGitHub }),
-    }), publishGitHub ? `Published ${decision.replace('_', ' ')} to GitHub.` : `Marked ${decision.replace('_', ' ')} locally.`), [run]);
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision }),
+    }), `Marked ${decision.replace('_', ' ')} locally.`), [run]);
   const requeue = useCallback((item: QueueItem) => run(`requeue:${item.id}`, () => daemonFetch(`/api/queue/${encodeURIComponent(item.id)}/requeue`, { method: 'POST' }), 'Requeued at the end of the queue.'), [run]);
   const remove = useCallback((item: QueueItem) => {
     if (!window.confirm(`Remove “${item.title}” without reviewing it? You can submit the same topic again later as a fresh review round.`)) return;
@@ -221,10 +209,6 @@ export function ReviewControlPanel({ collapsed, onToggleCollapsed, refreshNonce 
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ position }),
   }), `Moved to position ${position}.`), [run]);
   const refreshRemote = useCallback((item: QueueItem) => run(`refresh:${item.id}`, () => daemonFetch(`/api/queue/${encodeURIComponent(item.id)}/refresh`, { method: 'POST' }), 'Remote PR refreshed.'), [run]);
-  const publishComment = useCallback((item: QueueItem) => run(`publish-comment:${item.id}`, () => daemonFetch(`/api/queue/${encodeURIComponent(item.id)}/publish-comment`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ body: feedbackBody.trim() || 'Reviewed with cmux-localreview.' }),
-  }), 'Published a non-blocking GitHub review comment.'), [feedbackBody, run]);
   const cleanupRemote = useCallback((item: QueueItem) => run(`cleanup:${item.id}`, () => daemonFetch(`/api/queue/${encodeURIComponent(item.id)}/cleanup`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ removeMirror: false }),
   }), 'Managed remote worktree removed; the mirror cache was retained.'), [run]);
@@ -242,13 +226,6 @@ export function ReviewControlPanel({ collapsed, onToggleCollapsed, refreshNonce 
   const deliverFeedback = useCallback((item: QueueItem) => run(`deliver:${item.id}`, () => daemonFetch(`/api/queue/${encodeURIComponent(item.id)}/deliver-feedback`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ policy: deliveryPolicy }),
   }), `Sent undelivered feedback through ACP using the ${deliveryPolicy} policy.`), [deliveryPolicy, run]);
-  const exportPackage = useCallback((item: QueueItem) => {
-    const destination = window.prompt('Export review package to this new or existing directory:');
-    if (!destination) return;
-    void run(`export:${item.id}`, () => daemonFetch(`/api/queue/${encodeURIComponent(item.id)}/export`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ destination }),
-    }), 'Portable review package exported.');
-  }, [run]);
   const reconnectAgent = useCallback((agent: Agent) => run(`reconnect:${agent.id}`, () => daemonFetch(`/api/agents/${encodeURIComponent(agent.id)}/reconnect`, { method: 'POST' }), `Reconnect requested for ${agent.provider}.`), [run]);
 
   if (collapsed) return <button onClick={onToggleCollapsed} title="Open review queue and agents" style={{ ...buttonStyle, position: 'fixed', left: 12, bottom: 12, zIndex: 60, borderRadius: 20 }}>Review{queue.length ? ` (${queue.filter((item) => item.status === 'queued').length})` : ''}</button>;
@@ -301,21 +278,19 @@ export function ReviewControlPanel({ collapsed, onToggleCollapsed, refreshNonce 
               {!selected.removedAt && <button onClick={() => remove(selected)} style={{ ...buttonStyle, color: '#e5534b' }} disabled={disabled}>Remove</button>}
               <button onClick={() => void reorder(selected, Math.max(1, selected.position - 1))} style={buttonStyle} disabled={disabled || selected.position <= 1}>Move up</button>
               <button onClick={() => void reorder(selected, selected.position + 1)} style={buttonStyle} disabled={disabled}>Move down</button>
-              {selected.kind === 'remote' && <><button onClick={() => void refreshRemote(selected)} style={buttonStyle} disabled={disabled}>Refresh PR</button><button onClick={() => { if (window.confirm('Publish an approval to GitHub now? This is an external action.')) void decide(selected, 'approved', true); }} style={buttonStyle} disabled={disabled}>Publish approval</button><button onClick={() => { if (window.confirm('Publish a request for changes to GitHub now? This is an external action.')) void decide(selected, 'changes_requested', true); }} style={buttonStyle} disabled={disabled}>Publish request changes</button><button onClick={() => void publishComment(selected)} style={buttonStyle} disabled={disabled}>Publish comment</button><button onClick={() => void cleanupRemote(selected)} style={buttonStyle} disabled={disabled}>Clean worktree</button></>}
-              <button onClick={() => void exportPackage(selected)} style={buttonStyle} disabled={disabled || !selected.snapshotManifestPath}>Export</button>
+              {selected.kind === 'remote' && <><button onClick={() => void refreshRemote(selected)} style={buttonStyle} disabled={disabled}>Refresh PR</button><button onClick={() => void cleanupRemote(selected)} style={buttonStyle} disabled={disabled}>Clean worktree</button></>}
             </div>
             <hr style={{ borderColor: 'rgba(127,127,127,0.25)', margin: '10px 0' }} />
-            <strong style={{ fontSize: 11 }}>Feedback delivery</strong>
-            <div style={{ ...muted, marginTop: 4 }}>ACP: {acpLabel(selected)}{selected.acpLastError ? ` — ${selected.acpLastError}` : ''}</div>
+            <strong style={{ fontSize: 11 }}>Copilot feedback delivery</strong>
+            <div style={{ ...muted, marginTop: 4 }}>Copilot SDK: {copilotLabel(selected)}. Sending creates/reuses this queue item's durable SDK conversation; it never targets a terminal or ACP session.</div>
             <textarea value={feedbackBody} onChange={(event) => setFeedbackBody(event.target.value)} placeholder="Add formal review feedback (kept separate from /ask)…" aria-label="Formal feedback" rows={3} style={{ width: '100%', boxSizing: 'border-box', marginTop: 6, font: 'inherit', resize: 'vertical' }} disabled={disabled} />
             <div style={{ display: 'flex', gap: 5, alignItems: 'center', flexWrap: 'wrap', marginTop: 6 }}>
               <button onClick={() => addFeedback(selected)} style={buttonStyle} disabled={disabled || !feedbackBody.trim()}>Add feedback</button>
               <button onClick={() => void copyFeedbackPrompt(selected)} style={buttonStyle} disabled={disabled}>{working === `copy:${selected.id}` ? 'Copying…' : 'Copy feedback prompt'}</button>
-              <select value={deliveryPolicy} onChange={(event) => setDeliveryPolicy(event.target.value as 'queue' | 'interrupt')} aria-label="ACP delivery policy" disabled={disabled || selected.acpState === 'unavailable' || selected.acpState === 'error'} style={{ fontSize: 11 }}><option value="queue">Queue when idle</option><option value="interrupt">Interrupt current turn</option></select>
-              <button onClick={() => void deliverFeedback(selected)} style={buttonStyle} disabled={disabled || !undelivered || selected.acpState === 'unavailable' || selected.acpState === 'error' || (selected.acpState === 'busy' && deliveryPolicy !== 'interrupt')}>{working === `deliver:${selected.id}` ? 'Sending…' : selected.acpState === 'busy' ? `Interrupt & send (${undelivered})` : `Send through ACP (${undelivered})`}</button>
+              <select value={deliveryPolicy} onChange={(event) => setDeliveryPolicy(event.target.value as 'queue' | 'interrupt')} aria-label="Copilot feedback delivery policy" disabled={disabled} style={{ fontSize: 11 }}><option value="queue">Send when idle</option><option value="interrupt">Interrupt current turn</option></select>
+              <button onClick={() => void deliverFeedback(selected)} style={buttonStyle} disabled={disabled || !undelivered}>{working === `deliver:${selected.id}` ? 'Sending…' : `Send through Copilot (${undelivered})`}</button>
             </div>
-            {selected.acpState === 'busy' && <div style={{ ...muted, marginTop: 5 }}>{deliveryPolicy === 'interrupt' ? 'The agent is busy. Sending will cancel its current turn, then deliver this batch once; repeated clicks remain disabled.' : 'The agent is busy. Choose “Interrupt current turn” to redirect it now, or wait for idle.'}</div>}
-            {selected.acpState === 'unavailable' && <div style={{ ...muted, marginTop: 5 }}>No live ACP session was submitted. Copy the prompt or reproduce a fresh Copilot session below.</div>}
+            <div style={{ ...muted, marginTop: 5 }}>“Send” marks the batch dispatched only after the SDK accepts it. If the session is busy, choose interrupt or wait; repeated clicks are guarded against duplicate delivery.</div>
             {!!detail?.feedback.length && <details style={{ marginTop: 8 }}><summary>Formal feedback ({detail.feedback.length}; {undelivered} undelivered)</summary>{detail.feedback.map((entry) => <div key={entry.id} style={{ ...muted, marginTop: 4 }}><strong>{entry.path ? `${entry.path}${entry.line ? `:${entry.line}` : ''}: ` : ''}</strong>{entry.body} <em>({entry.deliveredAt ? `delivered ${time(entry.deliveredAt)}` : 'not delivered'})</em></div>)}</details>}
             <details style={{ marginTop: 8 }}><summary>Snapshot, provenance &amp; reproduction</summary>
               <dl style={{ ...muted, display: 'grid', gridTemplateColumns: '110px 1fr', gap: '3px 6px', margin: '7px 0' }}>
@@ -329,7 +304,7 @@ export function ReviewControlPanel({ collapsed, onToggleCollapsed, refreshNonce 
                 <dt>Origin agent</dt><dd style={{ margin: 0 }}>{readable(selected.agentProvider)} · {readable(selected.agentId)}</dd>
                 <dt>cmux surface</dt><dd style={{ margin: 0 }}>{typeof selected.provenance?.surfaceId === 'string' ? selected.provenance.surfaceId : '—'}</dd>
                 <dt>Copilot session</dt><dd style={{ margin: 0 }}>{readable(selected.copilotSessionId)}</dd>
-                <dt>ACP session</dt><dd style={{ margin: 0 }}>{acpLabel(selected)}</dd>
+                <dt>Copilot route</dt><dd style={{ margin: 0 }}>{copilotLabel(selected)}</dd>
                 {selected.remoteUrl && <><dt>Remote PR</dt><dd style={{ margin: 0, overflowWrap: 'anywhere' }}>{selected.remoteUrl}</dd></>}
                 {selected.supersedesId && <><dt>Supersedes</dt><dd style={{ margin: 0 }}>{selected.supersedesId}</dd></>}
               </dl>

@@ -225,6 +225,23 @@ func GetConversation(ctx context.Context, db *sql.DB, id string) (*Conversation,
 	return conversation, err
 }
 
+// FindActiveConversationForQueueItem returns the one durable SDK-native
+// feedback conversation associated with a queue item.  Queue feedback is not
+// an /ask transcript: it gets its own conversation so an export or review
+// decision can never accidentally include conversational questions.
+func FindActiveConversationForQueueItem(ctx context.Context, db *sql.DB, queueItemID string) (*Conversation, error) {
+	queueItemID = strings.TrimSpace(queueItemID)
+	if queueItemID == "" {
+		return nil, errors.New("queue item ID is required")
+	}
+	row := db.QueryRowContext(ctx, `SELECT id,queue_item_id,review_session_id,archived_at,model,reasoning_effort,context_tier,copilot_session_id,context_json,created_at,updated_at FROM ask_conversations WHERE queue_item_id=? AND archived_at IS NULL ORDER BY updated_at DESC LIMIT 1`, queueItemID)
+	conversation, err := scanConversation(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return conversation, err
+}
+
 func ListConversations(ctx context.Context, db *sql.DB, reviewSessionID *int64, includeArchived bool) ([]Conversation, error) {
 	where, args := "", []any{}
 	if reviewSessionID != nil {

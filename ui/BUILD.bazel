@@ -1,0 +1,28 @@
+# The UI is a build-time artifact only.  This target intentionally emits a
+# tarball rather than trying to make a Node toolchain part of localreviewd's
+# runtime: the daemon embeds staged static files with go:embed.
+#
+# `local = True` is deliberate. Vite and Bun are pinned by bun.lock today but
+# are not yet represented as a hermetic rules_js toolchain. The action locates
+# the physical checkout from a declared source file, so it can use the normal
+# local node_modules cache without putting that cache into a release archive.
+genrule(
+    name = "dist",
+    srcs = [
+        "//:ui_sources",
+        "//:package.json",
+        "//:bun.lock",
+        "//scripts:stage-ui-assets.sh",
+    ],
+    outs = ["cmux-localreview-ui.tar.gz"],
+    local = True,
+    tags = ["manual", "no-sandbox"],
+    cmd = """
+set -euo pipefail
+command -v bun >/dev/null || { echo 'bun is required to build //ui:dist' >&2; exit 1; }
+repo=$$(dirname "$$(realpath $(location //:package.json))")
+BUILD_WORKSPACE_DIRECTORY="$$repo" bash $(location //scripts:stage-ui-assets.sh) \\
+  --output "$(@D)/ui-dist" --archive "$@"
+""",
+    visibility = ["//visibility:public"],
+)

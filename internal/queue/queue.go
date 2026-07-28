@@ -172,9 +172,12 @@ func Get(db *sql.DB, itemID string) (*Item, error) {
 	return scan(db.QueryRow(`SELECT `+columns+` FROM queue_items WHERE id=?`, itemID))
 }
 func List(db *sql.DB, includeHistory bool) ([]Item, error) {
-	where := "removed_at IS NULL"
+	// History includes deliberate removals as well as terminal decisions. The
+	// active queue never does, so a removed item cannot accidentally be opened
+	// or delivered to merely because a reviewer toggled history on.
+	where := "1=1"
 	if !includeHistory {
-		where += " AND status IN ('queued','in_review')"
+		where = "removed_at IS NULL AND status IN ('queued','in_review')"
 	}
 	rows, err := db.Query(`SELECT ` + columns + ` FROM queue_items WHERE ` + where + ` ORDER BY position,created_at`)
 	if err != nil {
@@ -523,7 +526,7 @@ func FeedbackPrompt(item Item, feedback []Feedback, decisionBody string) string 
 	for _, entry := range feedback {
 		prefix := ""
 		if entry.Path != nil {
-			prefix = *entry.Path
+			prefix = workspaceRelativeFeedbackPath(item.WorkspacePath, *entry.Path)
 			if entry.Line != nil {
 				prefix += fmt.Sprintf(":%d", *entry.Line)
 			}
@@ -539,6 +542,23 @@ func FeedbackPrompt(item Item, feedback []Feedback, decisionBody string) string 
 		sections = append(sections, "Comments:\n"+strings.Join(lines, "\n"))
 	}
 	return strings.Join(sections, "\n\n")
+}
+
+// workspaceRelativeFeedbackPath keeps copied/delivered feedback portable
+// across a workspace with nested repositories. Relative comment paths already
+// mean workspace-relative paths; absolute paths inside the review workspace
+// are converted, while paths outside it remain explicit instead of being
+// silently rewritten to a misleading ../ traversal.
+func workspaceRelativeFeedbackPath(workspace, path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" || !filepath.IsAbs(path) || strings.TrimSpace(workspace) == "" {
+		return filepath.ToSlash(path)
+	}
+	rel, err := filepath.Rel(workspace, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return filepath.ToSlash(path)
+	}
+	return filepath.ToSlash(rel)
 }
 func nullable(value string) any {
 	if value == "" {

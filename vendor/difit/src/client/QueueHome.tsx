@@ -17,6 +17,8 @@ interface QueueItem {
   acpLastError: string | null;
   identityKey?: string | null;
   reviewTopic?: string | null;
+  removedAt?: number | null;
+  removedReason?: string | null;
 }
 
 interface FederationRuntime {
@@ -80,7 +82,7 @@ function QueueCard({ item, remoteNode, onOpenWorkspace, onRemove }: { item: Queu
   return <article style={{ border: '1px solid rgba(127,127,127,0.3)', borderRadius: 8, padding: 14, background: 'rgba(127,127,127,0.04)' }}>
     <div style={{ display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}>
       <strong style={{ fontSize: 14 }}>{item.title}</strong>
-      <span style={{ color: statusColor(item.status), fontSize: 11, fontWeight: 600 }}>{item.status.replace('_', ' ')}</span>
+      <span style={{ color: item.removedAt ? '#8b949e' : statusColor(item.status), fontSize: 11, fontWeight: 600 }}>{item.removedAt ? 'removed' : item.status.replace('_', ' ')}</span>
       <span style={{ fontSize: 11, opacity: 0.72 }}>{item.kind === 'remote' ? 'GitHub PR' : 'local snapshot'}</span>
     </div>
     {item.body && <details style={{ marginTop: 7, fontSize: 12, opacity: 0.8 }}><summary style={{ cursor: 'pointer' }}>Description</summary><p style={{ margin: '6px 0 0', whiteSpace: 'pre-wrap', maxHeight: 180, overflowY: 'auto' }}>{item.body}</p></details>}
@@ -89,9 +91,10 @@ function QueueCard({ item, remoteNode, onOpenWorkspace, onRemove }: { item: Queu
       <span>Copilot feedback: {item.acpState === 'unavailable' ? 'not connected' : item.acpState}</span>{item.agentProvider && <span>originating agent: {item.agentProvider}</span>}{remoteNode && <span>node: {remoteNode.label || remoteNode.sshTarget}</span>}
     </div>
     {item.acpLastError && <div style={{ marginTop: 6, color: '#f85149', fontSize: 11 }}>{item.acpLastError}</div>}
+    {item.removedAt && <div style={{ marginTop: 6, color: '#8b949e', fontSize: 11 }}>Removed from the active queue{item.removedReason ? `: ${item.removedReason}` : '.'}</div>}
     {(onOpenWorkspace || onRemove) && <div style={{ display: 'flex', gap: 7, marginTop: 12 }}>
-      {onOpenWorkspace && <button onClick={() => onOpenWorkspace(item)} style={buttonStyle}>Open workspace</button>}
-      {onRemove && <button onClick={() => onRemove(item)} style={{ ...buttonStyle, color: '#f85149' }}>Remove</button>}
+      {onOpenWorkspace && !item.removedAt && <button onClick={() => onOpenWorkspace(item)} style={buttonStyle}>Open workspace</button>}
+      {onRemove && !item.removedAt && <button onClick={() => onRemove(item)} style={{ ...buttonStyle, color: '#f85149' }}>Remove</button>}
     </div>}
   </article>;
 }

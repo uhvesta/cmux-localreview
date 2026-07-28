@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
 import { daemonFetch } from '../services/daemonAuth';
+import { resolveEventSourceUrl } from '../utils/eventSourceUrl';
 
 export interface InlineAskLocation {
   repoId?: string;
@@ -56,6 +57,8 @@ export function InlineAskForm({ location, initialPrompt, onInitialPromptSent, on
   const [error, setError] = useState<string | null>(null);
   const [convertingId, setConvertingId] = useState<number | null>(null);
   const sentInitialPrompts = useRef(new Set<string>());
+  const eventSourceRef = useRef<EventSource | null>(null);
+  const abortStreamRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -79,7 +82,7 @@ export function InlineAskForm({ location, initialPrompt, onInitialPromptSent, on
       }
     };
     void open();
-    return () => { active = false; };
+    return () => { active = false; abortStreamRef.current?.(); };
   }, [location.filePath, location.side, location.startLine, location.endLine]);
 
   const send = async (promptOverride?: string) => {
@@ -90,32 +93,52 @@ export function InlineAskForm({ location, initialPrompt, onInitialPromptSent, on
     setMessages((current) => [...current, optimisticUser, optimisticAssistant]);
     setPrompt(''); setStatus('sending'); setActivity('Copilot is reading this code and the earlier conversation…'); setError(null);
     try {
-      const response = await daemonFetch(`/api/ask/conversations/${encodeURIComponent(conversationId)}/messages`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt: text, location }),
-      });
-      if (!response.ok || !response.body) throw new Error(`Copilot is unavailable (${response.status}).`);
-      const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = '';
-      const apply = (block: string) => {
-        const event = block.split(/\r?\n/).find((line) => line.startsWith('event:'))?.slice(6).trim();
-        const raw = block.split(/\r?\n/).filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trim()).join('\n');
-        if (!raw) return;
-        const payload = JSON.parse(raw) as { delta?: string; content?: string; error?: string };
-        if (event === 'started') setActivity('Copilot is preparing a response…');
-        if (event === 'delta' && payload.delta) {
-          setActivity('Copilot is responding live…');
-          setMessages((current) => current.map((message) => message.id === optimisticAssistant.id ? { ...message, body: message.body + payload.delta } : message));
-        }
-        if (event === 'done') setMessages((current) => current.map((message) => message.id === optimisticAssistant.id ? { ...message, body: payload.content ?? message.body, pending: false } : message));
-        if (event === 'error') throw new Error(payload.error ?? 'The /ask agent reported an error.');
+      // POST accepts the explicit turn, while the native daemon publishes the
+      // durable response over a separate SSE channel. Connect first: no first
+      // token may disappear between accepting a turn and rendering it.
+      const source = new EventSource(resolveEventSourceUrl(`/api/ask/conversations/${encodeURIComponent(conversationId)}/events`));
+      eventSourceRef.current = source;
+      let closed = false;
+      const close = (reason?: Error, resolve?: () => void, reject?: (error: Error) => void) => {
+        if (closed) return;
+        closed = true; source.close();
+        if (eventSourceRef.current === source) eventSourceRef.current = null;
+        if (reason) reject?.(reason); else resolve?.();
       };
-      while (true) {
-        const next = await reader.read();
-        buffer += decoder.decode(next.value ?? new Uint8Array(), { stream: !next.done });
-        const blocks = buffer.split(/\r?\n\r?\n/); buffer = blocks.pop() ?? '';
-        blocks.forEach(apply);
-        if (next.done) break;
-      }
-      if (buffer) apply(buffer);
+      const ready = new Promise<void>((resolve, reject) => {
+        const timeout = window.setTimeout(() => reject(new Error('Timed out while opening Copilot streaming.')), 10_000);
+        source.addEventListener('status', () => { window.clearTimeout(timeout); resolve(); }, { once: true });
+        source.onerror = () => { window.clearTimeout(timeout); reject(new Error('Copilot stream disconnected before the question started.')); };
+      });
+      let finishStream: (() => void) | null = null;
+      const streamed = new Promise<void>((resolve, reject) => {
+        finishStream = () => close(undefined, resolve, reject);
+        abortStreamRef.current = () => close(new DOMException('The /ask response was cancelled.', 'AbortError'), resolve, reject);
+        source.addEventListener('delta', (event) => {
+          try {
+            const payload = JSON.parse((event as MessageEvent).data) as { text?: string };
+            if (payload.text) {
+              setActivity('Copilot is responding live…');
+              setMessages((current) => current.map((message) => message.id === optimisticAssistant.id ? { ...message, body: message.body + payload.text } : message));
+            }
+          } catch { /* durable transcript still preserves the response */ }
+        });
+        source.addEventListener('done', () => {
+          setMessages((current) => current.map((message) => message.id === optimisticAssistant.id ? { ...message, pending: false } : message));
+          finishStream?.();
+        });
+        source.addEventListener('error', (event) => {
+          const data = (event as MessageEvent).data;
+          if (typeof data !== 'string' || !data) return;
+          try { close(new Error((JSON.parse(data) as { error?: string }).error ?? 'Copilot could not complete this response.'), resolve, reject); } catch { /* transport-level reconnect */ }
+        });
+      });
+      await ready;
+      const response = await daemonFetch(`/api/ask/conversations/${encodeURIComponent(conversationId)}/messages`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body: text, location }),
+      });
+      if (!response.ok) throw new Error(`Copilot is unavailable (${response.status}).`);
+      await streamed;
       const transcript = await daemonFetch(`/api/ask/conversations/${encodeURIComponent(conversationId)}`);
       if (transcript.ok) {
         const body = await transcript.json() as { messages?: AskMessage[] };
@@ -124,7 +147,8 @@ export function InlineAskForm({ location, initialPrompt, onInitialPromptSent, on
       window.dispatchEvent(new CustomEvent('cmux-localreview:ask-updated', { detail: { conversationId } }));
       setStatus('idle'); setActivity('');
     } catch (err) {
-      setMessages((current) => current.map((message) => message.id === optimisticAssistant.id ? { ...message, pending: false } : message));
+      eventSourceRef.current?.close(); eventSourceRef.current = null; abortStreamRef.current = null;
+      setMessages((current) => current.map((message) => message.id === optimisticAssistant.id ? { ...message, pending: false, body: message.body || 'Copilot did not complete this response.' } : message));
       setError(err instanceof Error ? err.message : 'Inline /ask failed.'); setStatus('error'); setActivity('Copilot stopped before completing the response.');
     }
   };
@@ -133,6 +157,7 @@ export function InlineAskForm({ location, initialPrompt, onInitialPromptSent, on
     if (!conversationId || (status !== 'sending' && status !== 'cancelling')) return;
     setStatus('cancelling'); setActivity('Stopping Copilot’s response…');
     try {
+      abortStreamRef.current?.(); abortStreamRef.current = null;
       const response = await daemonFetch(`/api/ask/conversations/${encodeURIComponent(conversationId)}/cancel`, { method: 'POST' });
       const result = await response.json() as { cancelled?: boolean; error?: string };
       if (!response.ok) throw new Error(result.error ?? 'Could not stop Copilot.');
@@ -167,7 +192,14 @@ export function InlineAskForm({ location, initialPrompt, onInitialPromptSent, on
   };
 
   const busy = status === 'sending' || status === 'cancelling';
-  const visibleMessages = messages.filter((message) => isThisInlineThread(message, location));
+  // Assistant rows intentionally have no line anchor in the durable schema:
+  // their anchor is the immediately preceding user turn. Preserve that
+  // relationship when restoring a page so replies do not vanish after reload.
+  let precedingUserIsHere = false;
+  const visibleMessages = messages.filter((message) => {
+    if (message.role === 'user') precedingUserIsHere = isThisInlineThread(message, location);
+    return message.role === 'user' ? precedingUserIsHere : message.role === 'assistant' && precedingUserIsHere;
+  });
   const openFullChat = () => {
     // Refresh the persistent transcript before showing the side panel. The
     // native events deliberately cross the independent diff and panel React

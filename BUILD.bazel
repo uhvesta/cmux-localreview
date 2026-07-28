@@ -1,1 +1,16 @@
-exports_files(["go.mod", "go.sum"])
+exports_files(["bun.lock", "go.mod", "go.sum", "package.json"])
+
+# The Vite source tree is an explicit input to //ui:dist.  Keep generated
+# bundles and vendored package-manager state out of this group: those files
+# are outputs/cache, not UI source.
+filegroup(
+    name = "ui_sources",
+    srcs = glob(
+        ["vendor/difit/**"],
+        exclude = [
+            "vendor/difit/dist/**",
+            "vendor/difit/node_modules/**",
+        ],
+    ),
+    visibility = ["//visibility:public"],
+)

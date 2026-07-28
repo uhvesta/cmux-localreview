@@ -4,8 +4,8 @@
 target runtime architecture is deliberately split:
 
 - **Go** owns the loopback daemon, CLI, SQLite state, Git snapshots and
-  worktrees, GitHub App device flow, system secrets, ACP, SSH federation, and
-  static asset serving.
+  worktrees, GitHub App device flow, system secrets, Copilot-SDK-backed
+  `/ask` and `/btw`, SSH federation, and static asset serving.
 - **The web app remains TypeScript/React/Vite.** It is a normal independently
   buildable frontend; production does not need Node or Bun to serve it.
 
@@ -13,7 +13,7 @@ The migration must preserve existing on-disk state and browser/API behavior.
 It is not a schema reset and it must not run the legacy and Go daemons against
 the same SQLite database at the same time.
 
-## Current compatibility spike
+## Current native cutover state
 
 The repository now contains a Bazel-built `//cmd/localreviewd` Go binary. It
 already proves the non-negotiable runtime boundary:
@@ -57,11 +57,25 @@ plain `go run` choose Go vendor mode even though it does not contain Go
 dependencies. Release and user installation should use Bazel instead; it is
 unaffected by that Go toolchain behavior.
 
-During the transition, the TypeScript daemon remains the production default.
-The Go binary intentionally returns `501` for unported API routes; it must not
-be selected as the default until every compatibility gate below is green. The
-ported queue routes never proxy into Node/Bun: they use the same on-disk schema
-directly and are covered by Go HTTP tests.
+The Go daemon is the active local control plane. The remaining TypeScript
+server is frozen exclusively as a Phase-0 parity oracle and fixture harness;
+it is not a supported runtime. `package.json` now routes every historical npm
+bin to a small migration error before any `src/` module can load. The error
+names the native `localreview` replacement. Phase 4 deletes both that temporary
+guard and `src/` after the full cutover checklist is proven.
+
+The frontend has an explicit Bazel build artifact:
+
+```sh
+bazel build //ui:dist
+# Inspect the portable Vite bundle archive:
+tar -tzf bazel-bin/ui/cmux-localreview-ui.tar.gz | head
+```
+
+`//ui:dist` is intentionally host-local until a pinned `rules_js` toolchain is
+introduced. It uses `bun.lock`, produces an archive only, and never becomes a
+daemon runtime requirement. `scripts/stage-ui-assets.sh` remains the explicit
+step that stages the same bundle into `internal/webassets/dist` for `go:embed`.
 
 ## Copilot SDK parity
 
@@ -89,7 +103,7 @@ timestamps, then compare:
   readability;
 - browser capability/CSRF behavior;
 - immutable multi-repository snapshot materialization and diffs;
-- ACP queue/interrupt/no-duplicate delivery and permission rejection;
+- SDK feedback queue/interrupt/no-duplicate delivery and permission rejection;
 - stale GitHub PR protection, explicit publication, and remote mirrors;
 - lazy SSH federation connection/cache/disconnect;
 - Queue Home → exact queue item → browser diff, including reopen with zero
@@ -134,8 +148,8 @@ starts Node/Bun to serve the UI.
 
 The migration includes—not merely documents—the following user-facing work:
 
-- bootstrap and register multiple local Copilot ACP sessions without manually
-  copying host/port/session IDs;
+- create and resume multiple local Copilot SDK conversations without manually
+  copying connection or session IDs;
 - explicit feedback target selection or confirmed multi-target broadcast, with
   per-target delivery/deduplication history;
 - remote node actions (open, feedback, delivery, requeue, decision) rather

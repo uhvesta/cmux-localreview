@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 
@@ -180,6 +181,42 @@ func (d *Daemon) publishAskEvent(event askruntime.Delta) {
 	}
 }
 
+// streamAskEvents writes the one-turn event stream consumed by the reviewer
+// shell. It terminates after the terminal event so a fetch() caller does not
+// hold a socket forever. The separately exposed /events route uses the same
+// helper and stays open only until the next terminal event.
+func (d *Daemon) streamAskEvents(w http.ResponseWriter, r *http.Request, conversationID string, watcher <-chan askruntime.Delta) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		askError(w, errors.New("streaming is unavailable on this HTTP writer"))
+		return
+	}
+	if err := WriteAskSSE(w, askruntime.Delta{Event: askruntime.EventStatus, ConversationID: conversationID, Text: "connected"}); err != nil {
+		return
+	}
+	flusher.Flush()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case event, open := <-watcher:
+			if !open {
+				return
+			}
+			if err := WriteAskSSE(w, event); err != nil {
+				return
+			}
+			flusher.Flush()
+			if event.Event == askruntime.EventDone || event.Event == askruntime.EventError {
+				return
+			}
+		}
+	}
+}
+
 func (d *Daemon) persistAskEvent(conversationID string, assistantID int64, event askruntime.Delta) {
 	ctx := context.Background()
 	event.ConversationID = conversationID
@@ -209,7 +246,10 @@ func (d *Daemon) persistAskEvent(conversationID string, assistantID int64, event
 	}
 }
 
-func (d *Daemon) startAskTurn(conversation *ask.Conversation, user *ask.Message, assistant *ask.Message) error {
+// startCopilotTurn starts one explicit SDK-native turn. Queue delivery uses
+// the same durable transport as /ask but supplies a different envelope, so
+// formal feedback never leaks into /ask exports or question transcripts.
+func (d *Daemon) startCopilotTurn(conversation *ask.Conversation, user *ask.Message, assistant *ask.Message, prompt string, interrupt bool) error {
 	workingDirectory, err := d.askWorkingDirectory()
 	if err != nil {
 		return err
@@ -218,18 +258,29 @@ func (d *Daemon) startAskTurn(conversation *ask.Conversation, user *ask.Message,
 	if err != nil {
 		return err
 	}
-	prompt := askPrompt(user.Body, user.Location, conversation.Context)
+	if runtime.IsBusy(conversation.ID) {
+		if !interrupt {
+			return askruntime.ErrTurnInProgress
+		}
+		if _, err := runtime.Cancel(context.Background(), conversation.ID); err != nil {
+			return fmt.Errorf("interrupt current Copilot turn: %w", err)
+		}
+	}
 	config, err := d.askTurnConfig(conversation, workingDirectory)
 	if err != nil {
 		return err
 	}
-	go func() {
-		_, sendErr := runtime.Send(context.Background(), conversation.ID, config, prompt, func(event askruntime.Delta) {
-			d.persistAskEvent(conversation.ID, assistant.ID, event)
-		})
-		if sendErr != nil {
-			d.persistAskEvent(conversation.ID, assistant.ID, askruntime.Delta{Event: askruntime.EventError, Error: sendErr.Error()})
-		}
-	}()
-	return nil
+	// Send returns once the SDK has admitted (or rejected) this exact turn.
+	// The callbacks continue to stream output afterward. Keeping admission
+	// synchronous is what lets queue feedback safely mark a batch dispatched
+	// only after Copilot accepted it, rather than merely after a goroutine was
+	// scheduled.
+	_, err = runtime.Send(context.Background(), conversation.ID, config, prompt, func(event askruntime.Delta) {
+		d.persistAskEvent(conversation.ID, assistant.ID, event)
+	})
+	return err
+}
+
+func (d *Daemon) startAskTurn(conversation *ask.Conversation, user *ask.Message, assistant *ask.Message) error {
+	return d.startCopilotTurn(conversation, user, assistant, askPrompt(user.Body, user.Location, conversation.Context), false)
 }

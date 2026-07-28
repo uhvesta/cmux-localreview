@@ -1,6 +1,7 @@
 #!/usr/bin/env sh
-# Run this locally to print a safe copy/paste SSH local-forward command.
+# The native federation transport is not cut over yet. Refuse before loading
+# the historical TypeScript tunnel helper so this script cannot start a Bun
+# control plane by accident.
 set -eu
-command -v bun >/dev/null 2>&1 || { echo "Bun is required. Install Bun, then rerun this command." >&2; exit 127; }
-script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
-exec bun "$script_dir/../src/localreview-remote.ts" tunnel "$@"
+echo "SSH tunnel setup is not available in the native CLI yet. Use localreview remote status for configured nodes; the legacy Bun tunnel helper is retired." >&2
+exit 64

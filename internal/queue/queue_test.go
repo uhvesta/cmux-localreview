@@ -90,6 +90,14 @@ func TestDeletedItemCannotReopenRequeueReorderOrAcceptFeedback(t *testing.T) {
 	if err != nil || len(decisions) != 1 || decisions[0].Status != string(Completed) {
 		t.Fatalf("decisions=%#v err=%v", decisions, err)
 	}
+	history, err := List(db, true)
+	if err != nil || len(history) != 1 || history[0].ID != item.ID || history[0].RemovedAt == nil {
+		t.Fatalf("removed history=%#v err=%v", history, err)
+	}
+	active, err := List(db, false)
+	if err != nil || len(active) != 0 {
+		t.Fatalf("removed active=%#v err=%v", active, err)
+	}
 }
 
 func TestQueueDetailLifecycleFeedbackAndReproductionFields(t *testing.T) {
@@ -127,6 +135,10 @@ func TestQueueDetailLifecycleFeedbackAndReproductionFields(t *testing.T) {
 	prompt := FeedbackPrompt(*second, feedback, "Please revise")
 	if want := "packages/parser/a.go:8: Handle edge case."; !strings.Contains(prompt, want) {
 		t.Fatalf("prompt %q missing %q", prompt, want)
+	}
+	absPath := filepath.Join(second.WorkspacePath, "apps", "parser", "b.go")
+	if got := FeedbackPrompt(*second, []Feedback{{Body: "absolute", Path: &absPath, Line: intPointer(3)}}, ""); !strings.Contains(got, "apps/parser/b.go:3: absolute") || strings.Contains(got, second.WorkspacePath+"/apps") {
+		t.Fatalf("workspace-relative prompt=%q", got)
 	}
 	if err = MarkFeedbackDelivered(db, second.ID, []int64{feedback[0].ID}); err != nil {
 		t.Fatal(err)

@@ -60,28 +60,30 @@ type discovery struct {
 }
 
 type Daemon struct {
-	listener     net.Listener
-	server       *http.Server
-	dataDir      string
-	token        string
-	mu           sync.Mutex
-	sessions     map[string]time.Time
-	db           *sql.DB
-	review       *workspaceReview
-	github       *githubauth.ServiceClient
-	ws           *wshub.Hub
-	watchStop    context.CancelFunc
-	watchMu      sync.Mutex
-	watches      map[chan string]struct{}
-	queueWatchMu sync.Mutex
-	queueWatches map[string]context.CancelFunc
-	authMu       sync.Mutex
-	authFlows    map[githubauth.Capability]*githubauth.LoopbackFlow
-	askMu        sync.Mutex
-	askRuntime   *askruntime.Runtime
-	askClose     func() error
-	askFactory   *AskRuntimeFactory
-	askWatchers  map[string]map[chan askruntime.Delta]struct{}
+	listener        net.Listener
+	server          *http.Server
+	dataDir         string
+	token           string
+	mu              sync.Mutex
+	sessions        map[string]time.Time
+	db              *sql.DB
+	review          *workspaceReview
+	github          *githubauth.ServiceClient
+	ws              *wshub.Hub
+	watchStop       context.CancelFunc
+	watchMu         sync.Mutex
+	watches         map[chan string]struct{}
+	queueWatchMu    sync.Mutex
+	queueWatches    map[string]context.CancelFunc
+	authMu          sync.Mutex
+	authFlows       map[githubauth.Capability]*githubauth.LoopbackFlow
+	askMu           sync.Mutex
+	askRuntime      *askruntime.Runtime
+	askClose        func() error
+	askFactory      *AskRuntimeFactory
+	askWatchers     map[string]map[chan askruntime.Delta]struct{}
+	queueDeliveryMu sync.Mutex
+	queueDeliveries map[string]struct{}
 }
 
 func browserOpener(rawURL string) error {
@@ -1780,6 +1782,10 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusCreated, map[string]any{"feedback": feedback})
 		return
 	}
+	if len(parts) == 3 && parts[0] == "queue" && r.Method == http.MethodPost && parts[2] == "deliver-feedback" {
+		d.handleQueueFeedbackDelivery(w, r, parts[1])
+		return
+	}
 	if len(parts) == 4 && parts[0] == "queue" && parts[2] == "feedback" && parts[3] == "prompt" && r.Method == http.MethodGet {
 		item, err := queueStore.Get(d.db, parts[1])
 		if err != nil {
@@ -1947,7 +1953,7 @@ func Start(ctx context.Context, options Options) (*Daemon, error) {
 		}
 		github = githubauth.New(secrets, githubauth.NewFileConfigStore(filepath.Join(dir, "github-apps.json")), http.DefaultClient, browserOpener)
 	}
-	d := &Daemon{listener: listener, dataDir: dir, token: token, sessions: make(map[string]time.Time), watches: make(map[chan string]struct{}), queueWatches: make(map[string]context.CancelFunc), authFlows: make(map[githubauth.Capability]*githubauth.LoopbackFlow), askRuntime: options.AskRuntime, askFactory: options.AskRuntimeFactory, askWatchers: make(map[string]map[chan askruntime.Delta]struct{}), db: db, github: github, ws: wshub.New(wshub.Options{Path: "/ws"})}
+	d := &Daemon{listener: listener, dataDir: dir, token: token, sessions: make(map[string]time.Time), watches: make(map[chan string]struct{}), queueWatches: make(map[string]context.CancelFunc), authFlows: make(map[githubauth.Capability]*githubauth.LoopbackFlow), askRuntime: options.AskRuntime, askFactory: options.AskRuntimeFactory, askWatchers: make(map[string]map[chan askruntime.Delta]struct{}), queueDeliveries: make(map[string]struct{}), db: db, github: github, ws: wshub.New(wshub.Options{Path: "/ws"})}
 	if err := d.restoreActiveWorkspace(); err != nil {
 		// Persisted active workspace state is best-effort at startup. An absent
 		// worktree must not prevent Queue Home from recovering it or opening a

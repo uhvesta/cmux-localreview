@@ -1,0 +1,5 @@
+# //ui:dist and //desktop:app are intentionally host-local packaging actions
+# until their JavaScript toolchains move to rules_js. Propagating PATH lets
+# those explicit targets find the Bun/Node installation selected by the
+# developer or release runner; Go compilation remains fully declared.
+build --action_env=PATH

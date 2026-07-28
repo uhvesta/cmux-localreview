@@ -11,6 +11,7 @@ go_library(
         "daemon.go",
         "federation_api.go",
         "queue_watcher.go",
+		"queue_delivery.go",
         "remote_pr.go",
     ],
     importpath = "github.com/uhvesta/cmux-localreview/internal/daemon",
@@ -41,6 +42,7 @@ go_test(
         "btw_test.go",
         "daemon_test.go",
         "federation_api_test.go",
+		"queue_delivery_test.go",
     ],
     embed = [":daemon"],
     deps = [

@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
 import { daemonFetch } from '../services/daemonAuth';
+import { resolveEventSourceUrl } from '../utils/eventSourceUrl';
 
 type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
 type ContextTier = 'default' | 'long_context';
@@ -13,7 +14,7 @@ interface AskModel {
   supportedReasoningEfforts?: ReasoningEffort[];
   defaultReasoningEffort?: ReasoningEffort;
 }
-interface AskMessage { id: string; role: 'user' | 'assistant' | 'system'; body: string; pending: boolean; createdAt: number; location?: { filePath?: string; startLine?: number } | null; }
+interface AskMessage { id: string | number; role: 'user' | 'assistant' | 'system'; body: string; pending: boolean; createdAt: number; location?: { filePath?: string; startLine?: number } | null; }
 interface AskConversation { id: string; model?: string | null; reasoningEffort?: ReasoningEffort | null; contextTier?: ContextTier | null; context?: { filePath?: string } | null; reviewSessionId?: number | null; archivedAt?: number | null; updatedAt?: number; }
 interface QuestionSet { id: string; name: string; questions: { body: string }[]; }
 
@@ -55,6 +56,8 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
   const [modelStatus, setModelStatus] = useState<'loading' | 'available' | 'unavailable'>('loading');
   const [editingQuestionSet, setEditingQuestionSet] = useState(false);
   const activeResponseRef = useRef<AbortController | null>(null);
+  const activeEventSourceRef = useRef<EventSource | null>(null);
+  const abortEventStreamRef = useRef<(() => void) | null>(null);
   // Several entry points can restore a transcript at once (panel refresh,
   // finished inline turn, and “Open full /ask chat”). Only the newest result
   // may update the panel; otherwise an earlier response can hide a just-made
@@ -79,7 +82,7 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
     try {
       const [modelsResult, conversationsResult] = await Promise.allSettled([
         daemonFetch('/api/ask/models'),
-        daemonFetch('/api/ask/conversations?history=1'),
+        daemonFetch('/api/ask/conversations?includeArchived=true'),
       ]);
       const modelsResponse = modelsResult.status === 'fulfilled' ? modelsResult.value : null;
       const conversationsResponse = conversationsResult.status === 'fulfilled' ? conversationsResult.value : null;
@@ -150,7 +153,7 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
   useEffect(() => {
     try { window.localStorage.setItem(ASK_DRAFT_STORAGE_KEY, prompt); } catch { /* best effort */ }
   }, [prompt]);
-  useEffect(() => () => activeResponseRef.current?.abort(), []);
+  useEffect(() => () => { activeResponseRef.current?.abort(); abortEventStreamRef.current?.(); }, []);
 
   const createConversation = useCallback(async (): Promise<string> => {
     const response = await daemonFetch('/api/ask/conversations/fresh', {
@@ -195,48 +198,85 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
     } catch (err) { setError(err instanceof Error ? err.message : 'Unable to update Copilot settings.'); }
   }, [contextTier, conversationId, model, reasoningEffort]);
 
+  const sendPrompt = useCallback(async (text: string) => {
+    const id = conversationId ?? await createConversation();
+    const optimisticId = `stream-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setMessages((current) => [...current, { id: `user-${Date.now()}`, role: 'user', body: text, pending: false, createdAt: Date.now() }, { id: optimisticId, role: 'assistant', body: '', pending: true, createdAt: Date.now() }]);
+    const controller = new AbortController();
+    activeResponseRef.current = controller;
+
+    // The native daemon deliberately returns 202 from POST /messages and
+    // streams the actual response from this durable per-conversation SSE
+    // endpoint. Subscribe before posting so the first Copilot delta cannot be
+    // lost between accepting the turn and opening the live view.
+    const source = new EventSource(resolveEventSourceUrl(`/api/ask/conversations/${encodeURIComponent(id)}/events`));
+    activeEventSourceRef.current = source;
+    let settled = false;
+    const ready = new Promise<void>((resolve, reject) => {
+      const timeout = window.setTimeout(() => reject(new Error('Timed out while connecting to the Copilot stream.')), 10_000);
+      source.addEventListener('status', () => { window.clearTimeout(timeout); resolve(); }, { once: true });
+      source.onerror = () => { window.clearTimeout(timeout); reject(new Error('Copilot stream disconnected before the question started.')); };
+    });
+    const streamed = new Promise<void>((resolve, reject) => {
+      const close = (error?: Error) => {
+        if (settled) return;
+        settled = true;
+        source.close();
+        if (activeEventSourceRef.current === source) activeEventSourceRef.current = null;
+        error ? reject(error) : resolve();
+      };
+      abortEventStreamRef.current = () => close(new DOMException('The /ask response was cancelled.', 'AbortError'));
+      source.addEventListener('delta', (event) => {
+        try {
+          const payload = JSON.parse((event as MessageEvent).data) as { text?: string };
+          if (payload.text) setMessages((current) => current.map((message) => message.id === optimisticId ? { ...message, body: message.body + payload.text } : message));
+        } catch { /* a malformed transport event is ignored; durable history remains authoritative */ }
+      });
+      source.addEventListener('done', () => {
+        setMessages((current) => current.map((message) => message.id === optimisticId ? { ...message, pending: false } : message));
+        close();
+      });
+      source.addEventListener('error', (event) => {
+        const data = (event as MessageEvent).data;
+        if (typeof data === 'string' && data) {
+          try { close(new Error((JSON.parse(data) as { error?: string }).error ?? 'Copilot could not complete this response.')); return; } catch { /* fall through */ }
+        }
+        // Browser EventSource uses `error` for transient connection errors as
+        // well. Keep the durable turn pending until the daemon settles it.
+      });
+    });
+    try {
+      await ready;
+      const response = await daemonFetch(`/api/ask/conversations/${encodeURIComponent(id)}/messages`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body: text }), signal: controller.signal,
+      });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(detail.error ?? 'The /ask request could not be started.');
+      }
+      await streamed;
+      await loadConversation(id);
+    } catch (err) {
+      source.close();
+      if (activeEventSourceRef.current === source) activeEventSourceRef.current = null;
+      if (abortEventStreamRef.current) abortEventStreamRef.current = null;
+      setMessages((current) => current.map((message) => message.id === optimisticId ? { ...message, pending: false, body: message.body || 'Copilot did not complete this response.' } : message));
+      throw err;
+    } finally { activeResponseRef.current = null; }
+  }, [conversationId, createConversation, loadConversation]);
+
   const send = useCallback(async () => {
     const text = prompt.trim();
     if (!text || sending) return;
     setSending(true); setError(null); setPrompt('');
-    try {
-      const id = conversationId ?? await createConversation();
-      const optimisticId = `stream-${Date.now()}`;
-      setMessages((current) => [...current, { id: `user-${Date.now()}`, role: 'user', body: text, pending: false, createdAt: Date.now() }, { id: optimisticId, role: 'assistant', body: '', pending: true, createdAt: Date.now() }]);
-      const controller = new AbortController();
-      activeResponseRef.current = controller;
-      const response = await daemonFetch(`/api/ask/conversations/${encodeURIComponent(id)}/messages`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt: text }), signal: controller.signal,
-      });
-      if (!response.ok || !response.body) throw new Error('The /ask request could not be started.');
-      const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = '';
-      const applyEvent = (block: string) => {
-        const event = block.split('\n').find((line) => line.startsWith('event:'))?.slice(6).trim();
-        const raw = block.split('\n').filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trim()).join('\n');
-        if (!raw) return;
-        try {
-          const payload = JSON.parse(raw) as { delta?: string; content?: string; error?: string };
-          if (event === 'delta' && payload.delta) setMessages((current) => current.map((message) => message.id === optimisticId ? { ...message, body: message.body + payload.delta } : message));
-          if (event === 'done') setMessages((current) => current.map((message) => message.id === optimisticId ? { ...message, body: payload.content ?? message.body, pending: false } : message));
-          if (event === 'error') throw new Error(payload.error ?? 'The /ask agent reported an error.');
-        } catch (err) { if (err instanceof Error) setError(err.message); }
-      };
-      while (true) {
-        const result = await reader.read();
-        buffer += decoder.decode(result.value ?? new Uint8Array(), { stream: !result.done });
-        const events = buffer.split(/\r?\n\r?\n/); buffer = events.pop() ?? '';
-        events.forEach(applyEvent);
-        if (result.done) break;
-      }
-      if (buffer) applyEvent(buffer);
-      await loadConversation(id);
-    } catch (err) {
-      if ((err as { name?: string }).name !== 'AbortError') setError(err instanceof Error ? err.message : 'Failed to send /ask message.');
-    } finally { activeResponseRef.current = null; setSending(false); }
-  }, [conversationId, createConversation, loadConversation, prompt, sending]);
+    try { await sendPrompt(text); }
+    catch (err) { if ((err as { name?: string }).name !== 'AbortError') setError(err instanceof Error ? err.message : 'Failed to send /ask message.'); }
+    finally { setSending(false); }
+  }, [prompt, sendPrompt, sending]);
 
   const cancel = useCallback(async () => {
     activeResponseRef.current?.abort();
+    abortEventStreamRef.current?.(); abortEventStreamRef.current = null;
     if (conversationId) await daemonFetch(`/api/ask/conversations/${encodeURIComponent(conversationId)}/cancel`, { method: 'POST' });
     setSending(false);
     setMessages((current) => current.map((message) => message.pending ? { ...message, pending: false } : message));
@@ -259,6 +299,23 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
     setQuestionSetId(id); setQuestionSetName(selected?.name ?? '');
     setQuestionSetDraft((selected?.questions ?? []).map((question) => question.body).join('\n\n'));
   }, [questionSets]);
+
+  const startNewQuestionSet = useCallback((draft = '') => {
+    // Clear the selected ID as well as the fields. Otherwise “Save as set”
+    // would silently overwrite the currently selected named set.
+    setQuestionSetId(''); setQuestionSetName(''); setQuestionSetDraft(draft);
+    setEditingQuestionSet(true);
+  }, []);
+
+  const moveQuestion = useCallback((index: number, direction: -1 | 1) => {
+    const questions = questionSetDraft.split(/\n\s*\n/).map((item) => item.trim()).filter(Boolean);
+    const target = index + direction;
+    if (target < 0 || target >= questions.length) return;
+    const moved = questions[index]; const displaced = questions[target];
+    if (moved === undefined || displaced === undefined) return;
+    questions[index] = displaced; questions[target] = moved;
+    setQuestionSetDraft(questions.join('\n\n'));
+  }, [questionSetDraft]);
 
   const updateQuestionSet = useCallback(async () => {
     if (!questionSetId) return;
@@ -287,15 +344,19 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
   const sendQuestionSet = useCallback(async (mode: 'combined' | 'sequential') => {
     if (!questionSetId) { setError('Choose a question set first.'); return; }
     try {
-      const id = conversationId ?? await createConversation();
+      const selected = questionSets.find((set) => set.id === questionSetId);
+      const questions = selected?.questions.map((question) => question.body.trim()).filter(Boolean) ?? [];
+      if (!questions.length) throw new Error('This question set has no questions.');
       setSending(true);
-      const response = await daemonFetch(`/api/ask/question-sets/${encodeURIComponent(questionSetId)}/send`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ conversationId: id, mode }) });
-      if (!response.ok) throw new Error('Could not start question set.');
-      await response.text(); // Consume the SSE stream; transcript is persisted server-side.
-      await loadConversation(id);
+      setError(null);
+      if (mode === 'combined') {
+        await sendPrompt(`Please answer these review questions in order. Keep each answer clearly numbered.\n\n${questions.map((question, index) => `${index + 1}. ${question}`).join('\n')}`);
+      } else {
+        for (const question of questions) await sendPrompt(question);
+      }
     } catch (err) { setError(err instanceof Error ? err.message : 'Could not send question set.'); }
     finally { setSending(false); }
-  }, [conversationId, createConversation, loadConversation, questionSetId]);
+  }, [questionSetId, questionSets, sendPrompt]);
 
   const selectedModel = models.find((candidate) => candidate.id === model);
   const supportedEfforts = selectedModel?.supportedReasoningEfforts ?? [];
@@ -323,6 +384,7 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
         {models.map((item) => <option key={item.id} value={item.id}>{item.name ?? item.id}</option>)}
       </select>
       {questionSets.length > 0 && <select aria-label="Question set" value={questionSetId} onChange={(event) => selectQuestionSet(event.target.value)} style={{ maxWidth: 120, fontSize: 11, background: 'transparent', color: 'inherit' }}>{questionSets.map((set) => <option key={set.id} value={set.id}>{set.name}</option>)}</select>}
+      <button onClick={() => startNewQuestionSet()} disabled={historicalConversation} style={panelButton}>New set</button>
       <button onClick={() => void createConversation()} style={panelButton}>Start fresh</button>
       <button onClick={onToggleCollapsed} style={panelButton}>✕</button>
     </div>
@@ -339,6 +401,7 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
       <label style={{ fontSize: 10, opacity: 0.7 }}>Named question set — separate questions with a blank line; order is preserved.</label>
       <input aria-label="Question set name" value={questionSetName} onChange={(event) => setQuestionSetName(event.target.value)} style={{ fontSize: 12, padding: 5, background: 'transparent', color: 'inherit', border: '1px solid rgba(127,127,127,0.4)' }} />
       <textarea aria-label="Questions" value={questionSetDraft} onChange={(event) => setQuestionSetDraft(event.target.value)} rows={4} style={{ fontSize: 11, padding: 5, background: 'transparent', color: 'inherit', border: '1px solid rgba(127,127,127,0.4)' }} />
+      {questionSetDraft.split(/\n\s*\n/).map((item) => item.trim()).filter(Boolean).map((question, index, all) => <div key={`${index}-${question}`} aria-label={`Question ${index + 1}`} style={{ display: 'flex', gap: 4, alignItems: 'center', fontSize: 10 }}><span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{index + 1}. {question}</span><button aria-label={`Move question ${index + 1} up`} disabled={index === 0} onClick={() => moveQuestion(index, -1)} style={panelButton}>↑</button><button aria-label={`Move question ${index + 1} down`} disabled={index === all.length - 1} onClick={() => moveQuestion(index, 1)} style={panelButton}>↓</button></div>)}
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 5 }}><button onClick={() => void (questionSetId ? updateQuestionSet() : saveQuestionSet())} style={panelButton}>Save set</button>{questionSetId && <button onClick={() => void deleteSelectedQuestionSet()} style={panelButton}>Delete</button>}<button onClick={() => setEditingQuestionSet(false)} style={panelButton}>Done</button></div>
     </div>}
     <div style={{ flex: 1, overflowY: 'auto', padding: 11, display: 'flex', flexDirection: 'column', gap: 9 }}>
@@ -348,7 +411,7 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
     <div style={{ padding: 10, borderTop: '1px solid rgba(127,127,127,0.3)' }}>
       <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') void send(); }} rows={3} placeholder={historicalConversation ? 'Resume this previous Ask session or start fresh to continue…' : 'Ask about this review…'} disabled={sending || historicalConversation} style={{ width: '100%', resize: 'vertical', fontSize: 12, padding: 6, background: 'transparent', border: '1px solid rgba(127,127,127,0.4)', borderRadius: 4, color: 'inherit' }} />
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
-        <button onClick={() => { setQuestionSetName(''); setQuestionSetDraft(prompt); setEditingQuestionSet(true); }} disabled={!prompt.trim() || historicalConversation} style={panelButton}>Save as set</button>
+        <button onClick={() => startNewQuestionSet(prompt)} disabled={!prompt.trim() || historicalConversation} style={panelButton}>Save as set</button>
         {questionSetId && <button onClick={() => setEditingQuestionSet((value) => !value)} style={panelButton}>{editingQuestionSet ? 'Hide set' : 'Edit set'}</button>}
         {questionSetId && <><button onClick={() => void sendQuestionSet('combined')} disabled={sending || historicalConversation} style={panelButton}>Ask set</button><button onClick={() => void sendQuestionSet('sequential')} disabled={sending || historicalConversation} style={panelButton}>Ask one-by-one</button></>}
         {sending && <button onClick={() => void cancel()} style={panelButton}>Cancel</button>}<button onClick={() => void send()} disabled={sending || historicalConversation || !prompt.trim()} style={panelButton}>{sending ? 'Asking…' : 'Ask'}</button></div>

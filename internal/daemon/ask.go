@@ -237,10 +237,22 @@ func (d *Daemon) handleAsk(w http.ResponseWriter, r *http.Request, path string) 
 		id, action := parts[2], parts[3]
 		if action == "messages" && r.Method == http.MethodPost {
 			var in struct {
+				// Body is the durable public API. Prompt is accepted for the
+				// reviewer UI shipped with older builds, which posts prompt and
+				// expects a same-request SSE response. Keeping both forms avoids
+				// a reload or an upgraded static bundle silently dropping a turn.
 				Body     string        `json:"body"`
+				Prompt   string        `json:"prompt"`
 				Location *ask.Location `json:"location"`
 			}
-			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil || strings.TrimSpace(in.Body) == "" {
+			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil {
+				askError(w, errors.New("an /ask message body is required"))
+				return true
+			}
+			if strings.TrimSpace(in.Body) == "" {
+				in.Body = in.Prompt
+			}
+			if strings.TrimSpace(in.Body) == "" {
 				askError(w, errors.New("an /ask message body is required"))
 				return true
 			}
@@ -264,6 +276,20 @@ func (d *Daemon) handleAsk(w http.ResponseWriter, r *http.Request, path string) 
 			conversation, err := ask.GetConversation(ctx, d.db, id)
 			if err != nil {
 				askError(w, err)
+				return true
+			}
+			// The current reviewer bundle uses prompt and consumes this request
+			// as an SSE stream. Register the watcher before starting the runtime
+			// so its first status/delta cannot race the browser connection.
+			if strings.TrimSpace(in.Prompt) != "" {
+				watcher, remove := d.addAskWatcher(id)
+				defer remove()
+				if err := d.startAskTurn(conversation, user, assistant); err != nil {
+					d.persistAskEvent(id, assistant.ID, askruntime.Delta{Event: askruntime.EventError, Error: err.Error()})
+					askError(w, err)
+					return true
+				}
+				d.streamAskEvents(w, r, id, watcher)
 				return true
 			}
 			if err := d.startAskTurn(conversation, user, assistant); err != nil {
@@ -341,32 +367,8 @@ func (d *Daemon) handleAsk(w http.ResponseWriter, r *http.Request, path string) 
 		}
 		watcher, remove := d.addAskWatcher(parts[2])
 		defer remove()
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("X-Accel-Buffering", "no")
-		flusher, ok := w.(http.Flusher)
-		if !ok {
-			askError(w, errors.New("streaming is unavailable on this HTTP writer"))
-			return true
-		}
-		if err := WriteAskSSE(w, askruntime.Delta{Event: askruntime.EventStatus, ConversationID: parts[2], Text: "connected"}); err != nil {
-			return true
-		}
-		flusher.Flush()
-		for {
-			select {
-			case <-r.Context().Done():
-				return true
-			case event, open := <-watcher:
-				if !open {
-					return true
-				}
-				if err := WriteAskSSE(w, event); err != nil {
-					return true
-				}
-				flusher.Flush()
-			}
-		}
+		d.streamAskEvents(w, r, parts[2], watcher)
+		return true
 	}
 	if len(parts) == 3 && parts[0] == "ask" && parts[1] == "conversations" && r.Method == http.MethodGet {
 		conversation, err := ask.GetConversation(ctx, d.db, parts[2])
