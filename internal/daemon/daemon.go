@@ -717,18 +717,25 @@ func (d *Daemon) startDiffWatcher(repos []reviewRepo) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				for _, repo := range repos {
-					value, err := repoFingerprint(repo.AbsolutePath)
-					if err != nil || value == fingerprints[repo.ID] {
-						continue
-					}
-					fingerprints[repo.ID] = value
-					d.ws.BroadcastDiffUpdated(repo.ID)
-					d.broadcastWatch("reload")
-				}
+				d.pollDiffWatcher(repos, fingerprints)
 			}
 		}
 	}()
+}
+
+// pollDiffWatcher performs one source-of-truth Git comparison. It is shared
+// by the production ticker and the frozen WebSocket parity replay, avoiding a
+// timing-dependent test that merely waits for the next second boundary.
+func (d *Daemon) pollDiffWatcher(repos []reviewRepo, fingerprints map[string]string) {
+	for _, repo := range repos {
+		value, err := repoFingerprint(repo.AbsolutePath)
+		if err != nil || value == fingerprints[repo.ID] {
+			continue
+		}
+		fingerprints[repo.ID] = value
+		d.ws.BroadcastDiffUpdated(repo.ID)
+		d.broadcastWatch("reload")
+	}
 }
 
 // repoFingerprint includes the diff payload, not only porcelain status. A

@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	copilotsdk "github.com/github/copilot-sdk/go"
 	"github.com/uhvesta/cmux-localreview/internal/ask"
 	"github.com/uhvesta/cmux-localreview/internal/askruntime"
@@ -57,6 +58,7 @@ type parityDisposition struct {
 	NativeQueueWatch          bool
 	NativeQuestionSetDelivery bool
 	NativeQueueReproduction   bool
+	NativeWebsocketDiff       bool
 }
 
 var parityMatrix = map[string]parityDisposition{
@@ -106,7 +108,7 @@ var parityMatrix = map[string]parityDisposition{
 	"review_history":         {Execute: true, ForceDaemonCapability: true, Reason: "Replayed with the daemon capability: native reviewer reads are capability-protected."},
 	"btw_threads_empty":      {Reason: "Native /btw uses the SDK conversation store rather than the retired ACP thread projection."},
 	"btw_ask_validation":     {Reason: "Native /btw validation is tested directly against explicit target routing; frozen ACP prompt shape is intentionally retired."},
-	"websocket_diff_updated": {Reason: "WebSocket frame byte parity is validated in internal/wshub; the fixture needs a deterministic watcher clock before direct replay."},
+	"websocket_diff_updated": {Execute: true, NativeWebsocketDiff: true, Reason: "Replayed through the daemon's real Git polling watcher and mounted WebSocket endpoint."},
 	// A new review session must expose an empty durable comment collection and
 	// retain the old empty comments-output compatibility endpoint. The fixtures
 	// assert those lifecycle edges without treating the old projection as the
@@ -205,7 +207,7 @@ func TestFrozenTypeScriptParityMatrix(t *testing.T) {
 		"health", "unauthenticated_queue", "browser_session_exchange",
 		"github_auth_status", "github_auth_configure", "github_auth_device_start", "github_auth_device_poll", "github_auth_authenticated_status", "github_auth_disconnect",
 		"local_pr_requires_read_auth", "workspaces_empty", "queue_empty", "federation_nodes_empty", "open_workspace", "repos",
-		"repo_diff", "repo_diff_ignore_whitespace", "repo_revisions", "repo_line_count", "repo_blob", "repo_generated_status", "repo_fullfile", "repo_comments_empty", "create_comment", "repo_comments_saved", "comment_import",
+		"repo_diff", "repo_diff_ignore_whitespace", "repo_revisions", "websocket_diff_updated", "repo_line_count", "repo_blob", "repo_generated_status", "repo_fullfile", "repo_comments_empty", "create_comment", "repo_comments_saved", "comment_import",
 		"sessions", "review_history", "ui_state_empty", "ui_state_put", "export_prompt", "new_session", "comments_json", "comments_output",
 		"ask_models", "ask_conversations_empty", "ask_question_set_create", "ask_question_sets", "ask_question_set_get", "ask_question_set_update", "ask_question_set_delete", "ask_conversation_create", "ask_conversation_get", "ask_inline_conversation_reuses_context", "ask_conversation_model", "ask_conversation_settings", "ask_conversation_cancel_idle", "ask_question_set_for_send", "ask_question_set_combined_sse", "ask_question_set_sequential_sse", "ask_conversation_fresh", "ask_conversation_history",
 		"queue_create_local", "queue_list_with_item", "queue_detail", "queue_reorder", "queue_add_feedback", "queue_feedback_prompt", "queue_reproduce", "queue_export", "queue_open", "queue_complete", "queue_requeue", "queue_delete", "queue_history", "queue_watch_enable", "queue_watch_disable",
@@ -214,7 +216,9 @@ func TestFrozenTypeScriptParityMatrix(t *testing.T) {
 		fixture := byName[name]
 		disposition := parityMatrix[name]
 		response := replayFrozenFixture(t, d, fixture, disposition, state)
-		if disposition.NativeAskSettings {
+		if disposition.NativeWebsocketDiff {
+			assertNativeWebsocketDiffFixture(t, d, fixture, state)
+		} else if disposition.NativeAskSettings {
 			assertNativeAskSettingsFixture(t, fixture, response)
 		} else if disposition.NativeCommentCollection {
 			assertNativeCommentCollectionFixture(t, fixture, response)
@@ -389,6 +393,75 @@ func replayFrozenFixture(t *testing.T, d *Daemon, fixture frozenParityFixture, d
 	result := httptest.NewRecorder()
 	d.server.Handler.ServeHTTP(result, req)
 	return result
+}
+
+// assertNativeWebsocketDiffFixture exercises the same observable chain as a
+// reviewer: an actual WebSocket upgrade to the mounted daemon endpoint,
+// followed by a Git source mutation and the daemon's polling invalidation.
+// Calling Hub.Broadcast directly would only prove the hub; this proves that
+// workspace activation started the watcher and that its emitted frame reaches
+// a real client with the frozen wire shape.
+func assertNativeWebsocketDiffFixture(t *testing.T, d *Daemon, fixture frozenParityFixture, state map[string]string) {
+	t.Helper()
+	if fixture.Request.Method != "WEBSOCKET" {
+		t.Fatalf("%s: expected websocket fixture", fixture.Name)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	endpoint := fmt.Sprintf("ws://127.0.0.1:%d%s", d.Port(), fixture.Request.Path)
+	connection, response, err := websocket.Dial(ctx, endpoint, nil)
+	if err != nil {
+		t.Fatalf("%s: websocket dial %s: %v", fixture.Name, endpoint, err)
+	}
+	defer connection.CloseNow()
+	if response == nil || response.StatusCode != fixture.Response.Status {
+		status := 0
+		if response != nil {
+			status = response.StatusCode
+		}
+		t.Fatalf("%s: upgrade status got=%d want=%d", fixture.Name, status, fixture.Response.Status)
+	}
+	for d.ws.ClientCount() != 1 {
+		if ctx.Err() != nil {
+			t.Fatalf("%s: websocket client did not register", fixture.Name)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	d.mu.Lock()
+	review := d.review
+	repos := []reviewRepo(nil)
+	if review != nil {
+		repos = append(repos, review.Repos...)
+	}
+	d.mu.Unlock()
+	if review == nil || len(repos) == 0 {
+		t.Fatalf("%s: no active watched repositories", fixture.Name)
+	}
+	fingerprints := make(map[string]string, len(repos))
+	for _, repo := range repos {
+		value, err := repoFingerprint(repo.AbsolutePath)
+		if err != nil {
+			t.Fatalf("%s: baseline fingerprint %s: %v", fixture.Name, repo.AbsolutePath, err)
+		}
+		fingerprints[repo.ID] = value
+	}
+	workspace := state["<fixture-root>/workspace"]
+	if err := os.WriteFile(filepath.Join(workspace, "root.ts"), []byte("export const root = 4;\n"), 0o600); err != nil {
+		t.Fatalf("%s: mutate watched fixture: %v", fixture.Name, err)
+	}
+	// Invoke the same one-tick production watcher operation immediately. The
+	// production goroutine remains exercised elsewhere; this keeps the frozen
+	// wire replay deterministic instead of sleeping for its ticker.
+	d.pollDiffWatcher(repos, fingerprints)
+	_, payload, err := connection.Read(ctx)
+	if err != nil {
+		t.Fatalf("%s: read watcher frame: %v", fixture.Name, err)
+	}
+	var got any
+	if err := json.Unmarshal(payload, &got); err != nil {
+		t.Fatalf("%s: decode watcher frame %q: %v", fixture.Name, payload, err)
+	}
+	assertJSONShape(t, fixture.Name, fixture.Response.Body, got)
 }
 
 func replaceFrozenValues(value string, state map[string]string) string {

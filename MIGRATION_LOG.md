@@ -554,3 +554,26 @@ Not yet claimed:
 - This validates build payload structure, not platform execution. GitHub
   Actions still has to install/smoke the matching archive on each OS, and the
   tagged GitHub Release remains an exit-condition gate.
+
+## 2026-07-28 — Frozen WebSocket diff-invalidation replay
+
+Done:
+
+- Made the frozen `websocket_diff_updated` contract executable through a real
+  daemon WebSocket upgrade, a real Git source mutation, and the same
+  single-poll watcher operation used by production. The replay asserts the
+  mounted `/ws` endpoint returns the frozen `diff-updated`/`repoId` frame
+  rather than treating the isolated hub unit test as end-to-end evidence.
+- Extracted `pollDiffWatcher` from the production ticker so its source-of-
+  truth fingerprint comparison is directly testable without waiting on a
+  wall-clock second boundary.
+
+Validated:
+
+- `go test ./internal/daemon -run '^TestFrozenTypeScriptParityMatrix$' -count=1`
+  passed with the real WebSocket replay.
+
+Not yet claimed:
+
+- This closes the frozen wire contract; browser reload UI remains part of the
+  two required complete Phase-3 computer-use passes.

@@ -20,8 +20,9 @@ go_library(
     ],
     importpath = "github.com/uhvesta/cmux-localreview/internal/daemon",
     visibility = ["//visibility:public"],
-    deps = [
-        "//internal/agent",
+	deps = [
+		"@com_github_coder_websocket//:websocket",
+		"//internal/agent",
         "//internal/ask",
         "//internal/askruntime",
         "//internal/copilot",
