@@ -26,6 +26,7 @@ async function main(): Promise<void> {
     .description("Snapshot a workspace and submit it to the local review queue")
     .argument("[workspace]", "workspace directory or GitHub pull-request URL", ".")
     .option("--title <title>", "review title")
+    .option("--topic <topic>", "stable local review topic (path + topic identify one review stream)")
     .option("--body <body>", "review description")
     .option("--base <ref>", "intended Git base ref for the review")
     .option("--idempotent-key <key>", "return an existing queue item with this key")
@@ -40,7 +41,7 @@ async function main(): Promise<void> {
     .option("--watch", "continue to auto-queue when this Git worktree changes")
     .option("--poll-interval <ms>", "git auto-queue polling interval in milliseconds")
     .option("--json", "write the daemon response as JSON")
-    .action(async (workspace: string, options: { title?: string; body?: string; base?: string; idempotentKey?: string; agentId?: string; agentProvider?: string; agentKind?: string; copilotSessionId?: string; acpHost?: string; acpPort?: string; acpSessionId?: string; feedbackTarget?: string; watch?: boolean; pollInterval?: string; json?: boolean }) => {
+    .action(async (workspace: string, options: { title?: string; topic?: string; body?: string; base?: string; idempotentKey?: string; agentId?: string; agentProvider?: string; agentKind?: string; copilotSessionId?: string; acpHost?: string; acpPort?: string; acpSessionId?: string; feedbackTarget?: string; watch?: boolean; pollInterval?: string; json?: boolean }) => {
       const remoteUrl = isRemotePullRequest(workspace) ? workspace : undefined;
       const workspacePath = remoteUrl ? undefined : resolve(workspace);
       const title = options.title ?? (remoteUrl ? `Review ${remoteUrl}` : `Review ${workspacePath}`);
@@ -58,7 +59,7 @@ async function main(): Promise<void> {
       }) : undefined;
       const result = await daemon.request<QueueResponse>("/api/queue", {
         method: "POST",
-        body: JSON.stringify({ title, body: options.body, base: options.base, idempotentKey: options.idempotentKey, workspacePath, remoteUrl, agentId: options.agentId, agentProvider: options.agentProvider, agentKind: options.agentKind, copilotSessionId: options.copilotSessionId, acpHost: options.acpHost, acpPort, acpSessionId: options.acpSessionId, feedbackTarget: options.feedbackTarget, provenance }),
+        body: JSON.stringify({ title, topic: options.topic, body: options.body, base: options.base, idempotentKey: options.idempotentKey, workspacePath, remoteUrl, agentId: options.agentId, agentProvider: options.agentProvider, agentKind: options.agentKind, copilotSessionId: options.copilotSessionId, acpHost: options.acpHost, acpPort, acpSessionId: options.acpSessionId, feedbackTarget: options.feedbackTarget, provenance }),
       });
       let watch: unknown;
       if (options.watch) {

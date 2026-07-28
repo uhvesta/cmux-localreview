@@ -30,6 +30,10 @@ interface QueueItem {
   provenance: Record<string, unknown> | null;
   sourceFingerprint: string | null;
   supersedesId: string | null;
+  identityKey: string | null;
+  reviewTopic: string | null;
+  removedAt: number | null;
+  removedReason: string | null;
   decisionBody: string | null;
   createdAt: number;
   updatedAt: number;
@@ -132,7 +136,7 @@ export function ReviewControlPanel({ collapsed, onToggleCollapsed, refreshNonce 
     setLoading(true);
     setError(null);
     try {
-      const [queueResponse, agentsResponse] = await Promise.all([daemonFetch('/api/queue'), daemonFetch('/api/agents')]);
+      const [queueResponse, agentsResponse] = await Promise.all([daemonFetch('/api/queue?history=true'), daemonFetch('/api/agents')]);
       if (!queueResponse.ok || !agentsResponse.ok) {
         throw new Error(queueResponse.status === 401 || agentsResponse.status === 401
           ? 'Open this review with localreview-open to connect the daemon controls.'
@@ -206,6 +210,10 @@ export function ReviewControlPanel({ collapsed, onToggleCollapsed, refreshNonce 
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision }),
     }), `Marked ${decision.replace('_', ' ')}.`), [run]);
   const requeue = useCallback((item: QueueItem) => run(`requeue:${item.id}`, () => daemonFetch(`/api/queue/${encodeURIComponent(item.id)}/requeue`, { method: 'POST' }), 'Requeued at the end of the queue.'), [run]);
+  const remove = useCallback((item: QueueItem) => {
+    if (!window.confirm(`Remove “${item.title}” without reviewing it? You can submit the same topic again later as a fresh review round.`)) return;
+    void run(`remove:${item.id}`, () => daemonFetch(`/api/queue/${encodeURIComponent(item.id)}`, { method: 'DELETE' }), 'Removed from the active queue.');
+  }, [run]);
   const reorder = useCallback((item: QueueItem, position: number) => run(`reorder:${item.id}`, () => daemonFetch(`/api/queue/${encodeURIComponent(item.id)}/reorder`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ position }),
   }), `Moved to position ${position}.`), [run]);
@@ -287,6 +295,7 @@ export function ReviewControlPanel({ collapsed, onToggleCollapsed, refreshNonce 
                 <button onClick={() => void decide(selected, 'completed')} style={buttonStyle} disabled={disabled}>Complete</button>
               </>}
               {selected.status !== 'in_review' && <button onClick={() => void requeue(selected)} style={buttonStyle} disabled={disabled}>Requeue</button>}
+              {!selected.removedAt && <button onClick={() => remove(selected)} style={{ ...buttonStyle, color: '#e5534b' }} disabled={disabled}>Remove</button>}
               <button onClick={() => void reorder(selected, Math.max(1, selected.position - 1))} style={buttonStyle} disabled={disabled || selected.position <= 1}>Move up</button>
               <button onClick={() => void reorder(selected, selected.position + 1)} style={buttonStyle} disabled={disabled}>Move down</button>
               {selected.kind === 'remote' && <><button onClick={() => void refreshRemote(selected)} style={buttonStyle} disabled={disabled}>Refresh PR</button><button onClick={() => void publishComment(selected)} style={buttonStyle} disabled={disabled}>Publish comment</button><button onClick={() => void cleanupRemote(selected)} style={buttonStyle} disabled={disabled}>Clean worktree</button></>}
@@ -312,6 +321,8 @@ export function ReviewControlPanel({ collapsed, onToggleCollapsed, refreshNonce 
                 <dt>Snapshot</dt><dd style={{ margin: 0, overflowWrap: 'anywhere' }}>{readable(selected.snapshotManifestPath)}</dd>
                 <dt>Snapshot ID</dt><dd style={{ margin: 0 }}>{typeof selected.snapshotManifest?.id === 'string' ? selected.snapshotManifest.id : '—'}</dd>
                 <dt>Source SHA</dt><dd style={{ margin: 0 }}>{readable(selected.sourceFingerprint)}</dd>
+                <dt>Review stream</dt><dd style={{ margin: 0, overflowWrap: 'anywhere' }}>{readable(selected.identityKey)}</dd>
+                <dt>Topic</dt><dd style={{ margin: 0 }}>{readable(selected.reviewTopic)}</dd>
                 <dt>Origin agent</dt><dd style={{ margin: 0 }}>{readable(selected.agentProvider)} · {readable(selected.agentId)}</dd>
                 <dt>cmux surface</dt><dd style={{ margin: 0 }}>{typeof selected.provenance?.surfaceId === 'string' ? selected.provenance.surfaceId : '—'}</dd>
                 <dt>Copilot session</dt><dd style={{ margin: 0 }}>{readable(selected.copilotSessionId)}</dd>

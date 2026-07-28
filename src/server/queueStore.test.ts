@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
 import { runMigrations } from "./db.ts";
-import { decisionHistoryForItem, decideQueueItem, enqueue, requeueQueueItem } from "./queueStore.ts";
+import { decisionHistoryForItem, decideQueueItem, enqueue, refreshRemoteQueue, requeueQueueItem } from "./queueStore.ts";
 
 describe("queue provenance", () => {
   test("persists source fingerprint and supersession link", () => {
@@ -32,5 +32,23 @@ describe("queue provenance", () => {
       ["changes_requested", "Please handle the edge case."],
       ["requeued", "Requeued by reviewer."],
     ]);
+  });
+
+  test("uses a sticky PR identity but creates a fresh immutable round after a terminal review", () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const input = {
+      title: "PR 9", workspacePath: "/tmp/pr-9", remoteUrl: "https://github.com/example/repo/pull/9",
+      snapshotManifest: { remotePullRequest: { headSha: "head-one" } }, sourceFingerprint: "head-one",
+    };
+    const first = refreshRemoteQueue(db, input).item;
+    decideQueueItem(db, first.id, "approved", "Looks good.");
+    const second = refreshRemoteQueue(db, input);
+    expect(second.created).toBe(true);
+    expect(second.headChanged).toBe(false);
+    expect(second.item.id).not.toBe(first.id);
+    expect(second.item.supersedesId).toBe(first.id);
+    expect(second.item.identityKey).toBe(first.identityKey);
+    expect(second.item.status).toBe("queued");
   });
 });

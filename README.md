@@ -171,8 +171,8 @@ flow, not a copied-token workflow.
 Remote PR submission requires an authenticated `gh` CLI. The daemon resolves
 the PR's repository plus base/head SHAs before cloning, then checks out that
 exact head in a managed cache worktree. Re-submitting the same PR URL refreshes
-the review stream; when its head changes, the existing item returns to the
-queue instead of creating a duplicate. `POST /api/queue/:id/refresh` performs
+the review stream; when its head changes, a new immutable review round linked
+to the prior item returns to the queue. `POST /api/queue/:id/refresh` performs
 the same refresh explicitly, while `POST /api/queue/:id/cleanup` removes the
 managed worktree (pass `{ "removeMirror": true }` only when its reusable
 mirror should be discarded too).
@@ -263,6 +263,7 @@ discovery file (the browser receives it through a URL fragment).
 | Inspect one review | `GET /api/queue/:id` | Includes comments, ACP delivery timestamps, and decision history. |
 | Reproduce | `GET /api/queue/:id/reproduce` or `localreview-reproduce-copilot <id> <empty-dir>` | The endpoint prints safe command templates; the CLI materializes only into a new/empty directory. |
 | Requeue | `POST /api/queue/:id/requeue` | Returns the same immutable snapshot to the end of the queue. |
+| Remove without review | `DELETE /api/queue/:id` | Hides the item from the active queue and retains its audit record. Resubmit its path + topic or PR URL for a new round. |
 | Remote cache state | `GET /api/queue/:id/remote-status` | Refresh for a new head; cleanup removes only cache-owned paths; submit the URL again to re-add. |
 | Agent routing | `GET /api/agents`, `POST /api/agents/:id/heartbeat`, `POST /api/agents/:id/reconnect` | Register workspace, cmux `surfaceId`, and live ACP/session data; terminal `/btw` rejects missing, stale, or disconnected targets. |
 | Federation | `GET /api/federation/nodes/:id/status`, `POST .../connect`, `POST .../disconnect` | Verify remote loopback daemon/token/port and SSH batch authentication, then retry. |

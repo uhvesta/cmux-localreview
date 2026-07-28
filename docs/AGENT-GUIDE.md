@@ -13,6 +13,13 @@ uses a managed mirror/worktree pinned to the resolved head. The queue item is
 therefore the thing a reviewer acts on, rather than a mutable directory on an
 agent's machine.
 
+A **review stream** is the durable identity across those immutable items. A
+local stream is the absolute workspace path plus a stable topic; a remote
+stream is the canonical GitHub PR URL. Use `--topic` whenever a workspace has
+more than one independently reviewable change. A new submission with the same
+stream identity links back to the prior item as a new review round rather than
+overwriting its snapshot.
+
 There are two intentionally separate conversation channels:
 
 | Channel | Purpose | Can change review outcome? |
@@ -69,7 +76,7 @@ directly. A local submission captures a snapshot before the queue request.
 
 ```sh
 bun src/queue-submit.ts /path/to/repository \
-  --title "Review parser change" --base origin/main
+  --title "Review parser change" --topic parser-boundaries --base origin/main
 ```
 
 When an already-running Copilot ACP session should receive feedback later,
@@ -116,6 +123,15 @@ From Queue Home, select an item and choose **Open workspace**. In the reviewer:
 If ACP shows busy, error, or unavailable, do not keep retrying blindly. The
 queue keeps undelivered feedback so it can be retried or copied without
 silently duplicating delivery.
+
+### 3a. Finish, remove, or start a new review round
+
+Approve, request changes, and complete are terminal decisions: the item leaves
+the **active** queue immediately and remains in history for provenance. Use
+**Remove** on Queue Home to dismiss an item without claiming it was reviewed;
+this also removes it from the active queue but retains a small audit record.
+Neither action deletes the snapshot from disk. Re-submit the same path + topic
+(or PR URL) to create a fresh immutable round linked to the earlier item.
 
 ### 4. Ask code questions without changing the review
 

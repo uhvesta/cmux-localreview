@@ -15,6 +15,8 @@ interface QueueItem {
   agentProvider: string | null;
   acpState: 'unavailable' | 'connecting' | 'idle' | 'busy' | 'error';
   acpLastError: string | null;
+  identityKey?: string | null;
+  reviewTopic?: string | null;
 }
 
 interface FederationRuntime {
@@ -55,7 +57,7 @@ function statusColor(status: QueueStatus): string {
   return '#58a6ff';
 }
 
-function QueueCard({ item, remoteNode, onOpenWorkspace }: { item: QueueItem; remoteNode?: FederationNode; onOpenWorkspace?: (item: QueueItem) => void }) {
+function QueueCard({ item, remoteNode, onOpenWorkspace, onRemove }: { item: QueueItem; remoteNode?: FederationNode; onOpenWorkspace?: (item: QueueItem) => void; onRemove?: (item: QueueItem) => void }) {
   return <article style={{ border: '1px solid rgba(127,127,127,0.3)', borderRadius: 8, padding: 14, background: 'rgba(127,127,127,0.04)' }}>
     <div style={{ display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}>
       <strong style={{ fontSize: 14 }}>{item.title}</strong>
@@ -68,7 +70,10 @@ function QueueCard({ item, remoteNode, onOpenWorkspace }: { item: QueueItem; rem
       <span>ACP: {item.acpState}</span>{item.agentProvider && <span>agent: {item.agentProvider}</span>}{remoteNode && <span>node: {remoteNode.label || remoteNode.sshTarget}</span>}
     </div>
     {item.acpLastError && <div style={{ marginTop: 6, color: '#f85149', fontSize: 11 }}>{item.acpLastError}</div>}
-    {onOpenWorkspace && <div style={{ display: 'flex', gap: 7, marginTop: 12 }}><button onClick={() => onOpenWorkspace(item)} style={buttonStyle}>Open workspace</button></div>}
+    {(onOpenWorkspace || onRemove) && <div style={{ display: 'flex', gap: 7, marginTop: 12 }}>
+      {onOpenWorkspace && <button onClick={() => onOpenWorkspace(item)} style={buttonStyle}>Open workspace</button>}
+      {onRemove && <button onClick={() => onRemove(item)} style={{ ...buttonStyle, color: '#f85149' }}>Remove</button>}
+    </div>}
   </article>;
 }
 
@@ -92,6 +97,7 @@ export function QueueHome() {
   const [submittingRemote, setSubmittingRemote] = useState(false);
   const [localPath, setLocalPath] = useState('');
   const [localTitle, setLocalTitle] = useState('');
+  const [localTopic, setLocalTopic] = useState('');
   const [submittingLocal, setSubmittingLocal] = useState(false);
   const [nodes, setNodes] = useState<FederationNodeWithRuntime[]>([]);
   const [nodeLabel, setNodeLabel] = useState('');
@@ -213,14 +219,25 @@ export function QueueHome() {
     try {
       const response = await daemonFetch('/api/queue', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workspacePath, title: localTitle.trim() || undefined }),
+        body: JSON.stringify({ workspacePath, title: localTitle.trim() || undefined, topic: localTopic.trim() || undefined }),
       });
       const body = (await response.json().catch(() => null)) as { error?: string } | null;
       if (!response.ok) throw new Error(body?.error ?? 'Could not snapshot and queue that workspace.');
-      setLocalTitle(''); await refresh();
+      setLocalTitle(''); setLocalTopic(''); await refresh();
     } catch (err) { setError(err instanceof Error ? err.message : 'Could not snapshot and queue that workspace.'); }
     finally { setSubmittingLocal(false); }
-  }, [localPath, localTitle, refresh]);
+  }, [localPath, localTitle, localTopic, refresh]);
+
+  const removeQueueItem = useCallback(async (item: QueueItem) => {
+    if (!window.confirm(`Remove “${item.title}” from the active queue? Its snapshot and decision history stay available only in queue history; resubmitting this topic creates a new review round.`)) return;
+    setError(null);
+    try {
+      const response = await daemonFetch(`/api/queue/${encodeURIComponent(item.id)}`, { method: 'DELETE' });
+      const body = (await response.json().catch(() => null)) as { error?: string } | null;
+      if (!response.ok) throw new Error(body?.error ?? 'Could not remove this queue item.');
+      await refresh();
+    } catch (err) { setError(err instanceof Error ? err.message : 'Could not remove this queue item.'); }
+  }, [refresh]);
 
   const addNode = useCallback(async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -287,13 +304,14 @@ export function QueueHome() {
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 22, alignItems: 'start' }}>
       <section aria-label="Local review queue">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10 }}><h2 style={{ fontSize: 16, margin: 0 }}>Local</h2><span style={{ fontSize: 12, opacity: 0.62 }}>{localItems.length} snapshot{localItems.length === 1 ? '' : 's'}</span></div>
-        <form onSubmit={submitLocal} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(100px, 0.45fr) auto', gap: 7, marginBottom: 10 }} aria-label="Submit local workspace">
+        <form onSubmit={submitLocal} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(100px, 0.45fr) minmax(100px, 0.35fr) auto', gap: 7, marginBottom: 10 }} aria-label="Submit local workspace">
           <input value={localPath} onChange={(event) => setLocalPath(event.target.value)} placeholder="/absolute/path/to/workspace" aria-label="Local workspace path" required style={{ minWidth: 0, padding: '7px 8px', borderRadius: 5, border: '1px solid rgba(127,127,127,0.45)', background: 'transparent', color: 'inherit' }} />
           <input value={localTitle} onChange={(event) => setLocalTitle(event.target.value)} placeholder="Review title (optional)" aria-label="Review title" style={{ minWidth: 0, padding: '7px 8px', borderRadius: 5, border: '1px solid rgba(127,127,127,0.45)', background: 'transparent', color: 'inherit' }} />
+          <input value={localTopic} onChange={(event) => setLocalTopic(event.target.value)} placeholder="Stable topic (optional)" aria-label="Stable review topic" style={{ minWidth: 0, padding: '7px 8px', borderRadius: 5, border: '1px solid rgba(127,127,127,0.45)', background: 'transparent', color: 'inherit' }} />
           <button type="submit" disabled={submittingLocal || !localPath.trim()} style={{ ...buttonStyle, whiteSpace: 'nowrap' }}>{submittingLocal ? 'Snapshotting…' : 'Submit local'}</button>
         </form>
-        <p style={{ margin: '0 0 10px', fontSize: 12, opacity: 0.68 }}>Immutable snapshots submitted from this machine.</p>
-        {loading ? <p style={{ opacity: 0.65 }}>Loading queue…</p> : localItems.length === 0 ? <div style={{ padding: 14, border: '1px dashed rgba(127,127,127,0.45)', borderRadius: 8, opacity: 0.76 }}>Nothing local is queued. Submit a path above, or run <code>localreview-submit &lt;path&gt;</code> to capture cmux and Copilot metadata atomically.</div> : <div style={{ display: 'grid', gap: 10 }}>{localItems.map((item) => <QueueCard key={item.id} item={item} onOpenWorkspace={openWorkspace} />)}</div>}
+        <p style={{ margin: '0 0 10px', fontSize: 12, opacity: 0.68 }}>Immutable snapshots submitted from this machine. Use a stable topic when one workspace carries more than one review stream.</p>
+        {loading ? <p style={{ opacity: 0.65 }}>Loading queue…</p> : localItems.length === 0 ? <div style={{ padding: 14, border: '1px dashed rgba(127,127,127,0.45)', borderRadius: 8, opacity: 0.76 }}>Nothing local is queued. Submit a path above, or run <code>localreview-submit &lt;path&gt; --topic &lt;name&gt;</code> to capture cmux and Copilot metadata atomically.</div> : <div style={{ display: 'grid', gap: 10 }}>{localItems.map((item) => <QueueCard key={item.id} item={item} onOpenWorkspace={openWorkspace} onRemove={removeQueueItem} />)}</div>}
       </section>
       <section aria-label="Remote pull-request queue">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10 }}><h2 style={{ fontSize: 16, margin: 0 }}>Remote</h2><span style={{ fontSize: 12, opacity: 0.62 }}>{remoteItems.length} pull request{remoteItems.length === 1 ? '' : 's'}</span></div>
@@ -304,7 +322,7 @@ export function QueueHome() {
         </form>
         <p style={{ margin: '0 0 10px', fontSize: 12, opacity: 0.68 }}>Add a PR here or run <code>queue-submit &lt;PR URL&gt;</code> from the CLI.</p>
         {!loading && remoteItems.length === 0 && <div style={{ padding: 14, border: '1px dashed rgba(127,127,127,0.45)', borderRadius: 8, opacity: 0.76 }}>No remote pull requests are queued on this daemon.</div>}
-        <div style={{ display: 'grid', gap: 10 }}>{remoteItems.map((item) => <QueueCard key={item.id} item={item} onOpenWorkspace={openWorkspace} />)}</div>
+        <div style={{ display: 'grid', gap: 10 }}>{remoteItems.map((item) => <QueueCard key={item.id} item={item} onOpenWorkspace={openWorkspace} onRemove={removeQueueItem} />)}</div>
         <section style={{ marginTop: 16, display: 'grid', gap: 10 }} aria-label="Remote daemon nodes">
           <div><h3 style={{ margin: 0, fontSize: 13 }}>Remote daemon nodes</h3><p style={{ margin: '4px 0 0', fontSize: 11, opacity: 0.65 }}>Connections stay loopback-only: Queue Home opens an SSH tunnel only when it needs a remote queue.</p></div>
           <form onSubmit={addNode} style={{ display: 'grid', gridTemplateColumns: 'minmax(100px, 1fr) minmax(120px, 1fr) 72px minmax(120px, 1fr) auto', gap: 6 }} aria-label="Add remote daemon">

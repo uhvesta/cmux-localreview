@@ -380,6 +380,20 @@ const MIGRATIONS: Migration[] = [
       db.run(`CREATE INDEX idx_ask_conversations_session_state ON ask_conversations(review_session_id, archived_at, updated_at DESC)`);
     },
   },
+  {
+    // A queue entry is a revision of a review stream, not merely a display
+    // title.  The identity key lets a stable local topic or a GitHub PR keep
+    // its history while each re-submission remains an immutable snapshot.
+    version: 17,
+    up: (db) => {
+      db.run(`ALTER TABLE queue_items ADD COLUMN identity_key TEXT`);
+      db.run(`ALTER TABLE queue_items ADD COLUMN review_topic TEXT`);
+      db.run(`ALTER TABLE queue_items ADD COLUMN removed_at INTEGER`);
+      db.run(`ALTER TABLE queue_items ADD COLUMN removed_reason TEXT`);
+      db.run(`CREATE INDEX idx_queue_items_identity_created ON queue_items(identity_key, created_at DESC)`);
+      db.run(`CREATE INDEX idx_queue_items_active_position ON queue_items(removed_at, status, position)`);
+    },
+  },
 ];
 
 export function runMigrations(db: Database): void {

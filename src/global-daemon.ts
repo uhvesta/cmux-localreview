@@ -9,7 +9,7 @@ import express, { type Express, type Request, type Response } from "express";
 import { openDb } from "./server/db.ts";
 import { daemonDbPath, ensureDaemonDirectories, localreviewDataDir, newDaemonToken, writeDiscovery } from "./server/daemonPaths.ts";
 import { createWorkspaceSnapshot } from "./server/snapshots.ts";
-import { addFeedback, decideQueueItem, decisionHistoryForItem, enqueue, feedbackForItem, getQueueItem, listQueue, markFeedbackDelivered, openNext, refreshRemoteQueue, requeueQueueItem, reorderQueue, updateAcpState, type QueueFeedback, type QueueStatus } from "./server/queueStore.ts";
+import { addFeedback, decideQueueItem, decisionHistoryForItem, enqueue, feedbackForItem, getQueueItem, listQueue, markFeedbackDelivered, openNext, refreshRemoteQueue, removeQueueItem, requeueQueueItem, reorderQueue, updateAcpState, type QueueFeedback, type QueueStatus } from "./server/queueStore.ts";
 import { buildWorkspaceApp, type WorkspaceApp } from "./server/app.ts";
 import { WsHub } from "./server/wsHub.ts";
 import { exportReviewPackage, materializeReviewPackage } from "./server/reviewPackage.ts";
@@ -284,7 +284,10 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
       title: input.title ?? `Review #${pr.number}: ${pr.title}`,
       body: input.body ?? pr.body,
       workspacePath: remoteWorkspace.workspacePath,
-      kind: "remote", remoteUrl: pr.url, idempotentKey: `github-pr:${pr.url}`,
+      // PR identity is handled by refreshRemoteQueue. A static idempotency key
+      // would incorrectly suppress a new immutable snapshot when its head SHA
+      // changes.
+      kind: "remote", remoteUrl: pr.url,
       agentId: input.agentId, agentProvider: input.agentProvider, copilotSessionId: input.copilotSessionId,
       acpHost: input.acpHost, acpPort: input.acpPort, acpSessionId: input.acpSessionId, agentKind: input.agentKind,
       feedbackTarget: input.feedbackTarget, baseRef, provenance, sourceFingerprint: pr.headSha,
@@ -379,7 +382,13 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
     } catch (error) { res.status(400).json({ error: String(error) }); }
   });
 
-  api.get("/queue", (req, res) => res.json({ items: listQueue(db, bodyString(req.query.status) as QueueStatus | undefined) }));
+  // The default is deliberately the actionable queue.  History is opt-in so
+  // completed/requested reviews no longer crowd the next review round.
+  api.get("/queue", (req, res) => res.json({ items: listQueue(
+    db,
+    bodyString(req.query.status) as QueueStatus | undefined,
+    { includeHistory: req.query.history === "true", includeRemoved: req.query.removed === "true" },
+  ) }));
   api.post("/queue", async (req, res) => {
     try {
       const acp = queueAcpEndpoint(req.body);
@@ -407,7 +416,7 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
         snapshotManifestPath = snapshot.manifestPath;
         snapshotManifest = snapshot.manifest;
       }
-      const result = enqueue(db, { title, body: bodyString(req.body?.body), workspacePath: resolvedWorkspace, kind, remoteUrl, idempotentKey: bodyString(req.body?.idempotentKey), agentId: bodyString(req.body?.agentId), agentProvider: bodyString(req.body?.agentProvider), copilotSessionId: bodyString(req.body?.copilotSessionId), acpHost: acp.host, acpPort: acp.port, acpSessionId: acp.sessionId, agentKind: bodyString(req.body?.agentKind), snapshotManifestPath, snapshotManifest, feedbackTarget: bodyString(req.body?.feedbackTarget), baseRef: bodyString(req.body?.base), provenance, sourceFingerprint });
+      const result = enqueue(db, { title, body: bodyString(req.body?.body), workspacePath: resolvedWorkspace, kind, remoteUrl, idempotentKey: bodyString(req.body?.idempotentKey), agentId: bodyString(req.body?.agentId), agentProvider: bodyString(req.body?.agentProvider), copilotSessionId: bodyString(req.body?.copilotSessionId), acpHost: acp.host, acpPort: acp.port, acpSessionId: acp.sessionId, agentKind: bodyString(req.body?.agentKind), snapshotManifestPath, snapshotManifest, feedbackTarget: bodyString(req.body?.feedbackTarget), baseRef: bodyString(req.body?.base), provenance, sourceFingerprint, reviewTopic: bodyString(req.body?.topic), identityKey: bodyString(req.body?.identityKey) });
       res.status(result.created ? 201 : 200).json(result);
     } catch (error) { res.status(400).json({ error: String(error) }); }
   });
@@ -465,6 +474,10 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
   api.post("/queue/:id/requeue", (req, res) => {
     const item = requeueQueueItem(db, req.params.id);
     item ? res.json({ item, decisions: decisionHistoryForItem(db, item.id) }) : res.status(404).json({ error: "Unknown queue item" });
+  });
+  api.delete("/queue/:id", (req, res) => {
+    const item = removeQueueItem(db, req.params.id, bodyString(req.body?.reason) ?? "Removed from queue without review.");
+    item ? res.json({ item }) : res.status(404).json({ error: "Unknown queue item" });
   });
   api.post("/queue/:id/refresh", async (req, res) => {
     try {
@@ -784,6 +797,11 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
         ]);
       }
       federation.stopAll();
+      // Closing a retained ACP socket emits its final connection-state event.
+      // Dispose while the database still exists so that event cannot race a
+      // daemon restart and attempt to write to a closed database.
+      for (const live of acpConnections.values()) live.session.dispose();
+      acpConnections.clear();
       hub?.close();
       const closed = new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
       for (const socket of sockets) socket.destroy();

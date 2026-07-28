@@ -62,8 +62,13 @@ and reopen the workspace after refresh.
 ### When should I requeue, complete, or submit again?
 
 - **Requeue**: the same immutable snapshot needs another pass.
-- **Complete**: review of that exact item is finished.
-- **Submit again**: the Git source changed and you need a new immutable item.
+- **Complete**, **Approve**, or **Request changes**: review of that exact item
+  is finished. It leaves the active queue and remains in history.
+- **Remove**: discard an item from the active queue without reviewing it. This
+  is safe to use for duplicates or abandoned work; its audit record remains.
+- **Submit again**: create a new immutable review round. For local work, use
+  the same path and `--topic <stable-name>`; for a remote review, submit the
+  same PR URL. The new item links to the old one rather than overwriting it.
 
 Do not treat requeue as a way to update an item’s source state.
 
