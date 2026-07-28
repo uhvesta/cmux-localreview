@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "config.go",
         "githubauth.go",
+		"loopback_oauth.go",
         "os_secrets.go",
     ],
     importpath = "github.com/uhvesta/cmux-localreview/internal/githubauth",

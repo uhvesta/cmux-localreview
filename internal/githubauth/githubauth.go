@@ -79,14 +79,16 @@ type Status struct {
 }
 
 type ServiceClient struct {
-	Secrets SecretStore
-	Config  ConfigStore
-	HTTP    HTTPDoer
-	Open    Opener
-	Now     func() time.Time
-	pending map[Capability]Pending
-	state   map[Capability]string
-	message map[Capability]string
+	Secrets           SecretStore
+	Config            ConfigStore
+	HTTP              HTTPDoer
+	Open              Opener
+	Now               func() time.Time
+	pending           map[Capability]Pending
+	state             map[Capability]string
+	message           map[Capability]string
+	AuthorizeEndpoint string
+	TokenEndpoint     string
 }
 
 func New(secrets SecretStore, config ConfigStore, httpClient HTTPDoer, open Opener) *ServiceClient {
@@ -96,7 +98,7 @@ func New(secrets SecretStore, config ConfigStore, httpClient HTTPDoer, open Open
 	if open == nil {
 		open = func(string) error { return nil }
 	}
-	return &ServiceClient{Secrets: secrets, Config: config, HTTP: httpClient, Open: open, Now: time.Now, pending: map[Capability]Pending{}, state: map[Capability]string{}, message: map[Capability]string{}}
+	return &ServiceClient{Secrets: secrets, Config: config, HTTP: httpClient, Open: open, Now: time.Now, pending: map[Capability]Pending{}, state: map[Capability]string{}, message: map[Capability]string{}, AuthorizeEndpoint: "https://github.com/login/oauth/authorize", TokenEndpoint: "https://github.com/login/oauth/access_token"}
 }
 
 func account(c Capability) string { return "github.com:" + string(c) }
@@ -223,7 +225,7 @@ func (s *ServiceClient) Poll(ctx context.Context, c Capability) (Status, error) 
 		s.message[c] = "This GitHub authorization code expired. Start again."
 		return s.Status(ctx, c)
 	}
-	body, code, err := s.request(ctx, "https://github.com/login/oauth/access_token", url.Values{"client_id": {p.ClientID}, "device_code": {p.DeviceCode}, "grant_type": {"urn:ietf:params:oauth:grant-type:device_code"}})
+	body, code, err := s.request(ctx, s.tokenEndpoint(), url.Values{"client_id": {p.ClientID}, "device_code": {p.DeviceCode}, "grant_type": {"urn:ietf:params:oauth:grant-type:device_code"}})
 	if err != nil {
 		return Status{}, err
 	}
@@ -319,7 +321,7 @@ func (s *ServiceClient) Token(ctx context.Context, c Capability) (string, error)
 	if t.RefreshToken == "" {
 		return "", fmt.Errorf("the %s GitHub App token expired; connect it again", c)
 	}
-	body, code, err := s.request(ctx, "https://github.com/login/oauth/access_token", url.Values{"client_id": {id}, "grant_type": {"refresh_token"}, "refresh_token": {t.RefreshToken}})
+	body, code, err := s.request(ctx, s.tokenEndpoint(), url.Values{"client_id": {id}, "grant_type": {"refresh_token"}, "refresh_token": {t.RefreshToken}})
 	if err != nil {
 		return "", err
 	}

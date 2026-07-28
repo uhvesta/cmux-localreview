@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -145,6 +147,82 @@ func TestOSSecretStoreFailsClosed(t *testing.T) {
 	}
 	if e := s.Set("s", "a", "token"); e == nil {
 		t.Fatal("unsupported OS must not write fallback")
+	}
+}
+
+func TestLoopbackOAuthStateAndSecretStayDaemonOnly(t *testing.T) {
+	secrets := memSecrets{}
+	cfg := memConfig{Read: "Iv1.loopback"}
+	if err := secrets.Set(Service, clientSecretAccount(Read), "app-secret"); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			_ = r.ParseForm()
+			if r.Form.Get("client_secret") != "app-secret" || r.Form.Get("code") != "code" {
+				t.Fatalf("bad exchange: %v", r.Form)
+			}
+			_, _ = w.Write([]byte(`{"access_token":"loop-token"}`))
+		case "/user":
+			if r.Header.Get("Authorization") != "Bearer loop-token" {
+				t.Fatal("viewer did not use issued token")
+			}
+			_, _ = w.Write([]byte(`{"login":"octo"}`))
+		default:
+			t.Fatal(r.URL)
+		}
+	}))
+	defer server.Close()
+	baseURL, _ := url.Parse(server.URL)
+	client := roundTrip(func(r *http.Request) (*http.Response, error) {
+		clone := r.Clone(r.Context())
+		if clone.URL.Host == "api.github.com" {
+			clone.URL.Scheme = baseURL.Scheme
+			clone.URL.Host = baseURL.Host
+		}
+		return server.Client().Do(clone)
+	})
+	s := New(secrets, cfg, client, nil)
+	s.TokenEndpoint = server.URL + "/token"
+	s.AuthorizeEndpoint = "https://example.invalid/authorize"
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f, err := s.StartLoopback(ctx, Read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := url.Parse(f.AuthorizationURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Query().Get("state") == "" || strings.Contains(f.AuthorizationURL, "app-secret") {
+		t.Fatal("authorization URL leaks state or secret")
+	}
+	bad, err := http.Get(f.RedirectURI + "?code=code&state=wrong")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = bad.Body.Close()
+	if err := f.Wait(context.Background()); err == nil {
+		t.Fatal("state mismatch must fail")
+	}
+	// A new flow proves a valid callback persists a token without exposing it.
+	f, err = s.StartLoopback(ctx, Read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, _ = url.Parse(f.AuthorizationURL)
+	ok, err := http.Get(f.RedirectURI + "?code=code&state=" + url.QueryEscape(u.Query().Get("state")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = ok.Body.Close()
+	if err := f.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Token(context.Background(), Read); err != nil {
+		t.Fatal(err)
 	}
 }
 
