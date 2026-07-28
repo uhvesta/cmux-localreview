@@ -147,6 +147,16 @@ async function main(): Promise<void> {
     });
     return body as Record<string, unknown>;
   };
+  const websocketDiffUpdate = async () => {
+    const socket = new WebSocket(`ws://127.0.0.1:${daemon.discovery.port}/ws`);
+    const message = await new Promise<unknown>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("timed out waiting for diff-updated websocket frame")), 4_000);
+      socket.onopen = () => writeFileSync(join(workspace, "root.ts"), "export const root = 4;\n");
+      socket.onmessage = (event) => { clearTimeout(timeout); resolve(JSON.parse(String(event.data))); socket.close(); };
+      socket.onerror = () => { clearTimeout(timeout); reject(new Error("websocket connection failed")); };
+    });
+    fixtures.push({ name: "websocket_diff_updated", request: { method: "WEBSOCKET", path: "/ws", authenticated: false }, response: { status: 101, contentType: null, body: scrub(message) } });
+  };
 
   try {
     await request("health", "/health", {}, false);
@@ -188,6 +198,7 @@ async function main(): Promise<void> {
     await request("review_history", "/api/review-history/comments", {}, false);
     await request("btw_threads_empty", "/api/btw/threads", {}, false);
     await request("btw_ask_validation", "/api/btw/ask", { method: "POST", body: JSON.stringify({}) }, false);
+    await websocketDiffUpdate();
     await request("ui_state_empty", "/api/ui-state?key=fixture", {}, false);
     await request("ui_state_put", "/api/ui-state", { method: "PUT", body: JSON.stringify({ key: "fixture", revision: 0, value: { selectedRepo: repo.id } }) }, false);
     await request("export_prompt", "/api/export/prompt", {}, false);

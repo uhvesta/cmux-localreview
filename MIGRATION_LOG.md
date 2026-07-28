@@ -35,6 +35,11 @@ Done:
   remote plus synthetic GitHub App/API responses. It covers successful remote
   queueing, retained snapshot metadata, cache/worktree status, opening, and
   safe cleanup without touching GitHub or the user's cache.
+- Captured the WebSocket `diff-updated` frame after a real workspace file
+  mutation. `scripts/verify-parity-fixtures.sh` now runs both local and remote
+  capture programs twice and requires byte-identical output. This completes
+  the Phase 0 frozen-contract baseline; Phase 1 ports must add focused Go
+  fixture tests before claiming each route as complete.
 - Fixed the Go developer build contract by generating a real Go module vendor
   tree alongside the existing `vendor/difit` and `vendor/cmux-hub` UI sources;
   plain `go build ./...` and `go test ./...` now work without a hidden

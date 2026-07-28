@@ -696,6 +696,22 @@
       }
     },
     {
+      "name": "websocket_diff_updated",
+      "request": {
+        "method": "WEBSOCKET",
+        "path": "/ws",
+        "authenticated": false
+      },
+      "response": {
+        "status": 101,
+        "contentType": null,
+        "body": {
+          "type": "diff-updated",
+          "repoId": "<short-id>"
+        }
+      }
+    },
+    {
       "name": "ui_state_empty",
       "request": {
         "method": "GET",
