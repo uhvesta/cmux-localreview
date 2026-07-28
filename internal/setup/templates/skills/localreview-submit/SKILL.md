@@ -9,7 +9,7 @@ user-invocable: true
 From the workspace root, submit the current state with:
 
 ```sh
-localreview queue-submit . --title "<review title>"
+localreview submit --title "<review title>" --topic "<stable-topic>" .
 ```
 
 Do not include credentials or terminal transcripts in the submission.

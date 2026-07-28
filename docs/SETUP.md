@@ -1,269 +1,163 @@
-# Operator setup guide
+# Setup: macOS, Linux, and remote workers
 
-> **Historical guide:** this page describes the TypeScript/ACP deployment.
-> During the Go-daemon migration, use [Go CLI workflows](CLI-WORKFLOWS.md) for
-> supported commands. In particular, do not substitute the `bun src/*`, ACP,
-> or remote-tunnel examples below for the current `localreview` CLI.
+This guide describes the native Go runtime. Do not use historical `bun src/*`,
+`gh`, PAT, or ACP setup instructions: they are not a supported credential or
+feedback path.
 
-This guide is for a person or automation agent preparing a machine to submit
-and review work. Run the command for the machine's role, then verify the
-expected result before moving to the next step.
+## Choose an installation path
 
-## Roles and prerequisites
+### Release archive (no source checkout at runtime)
 
-| Machine role | Required | Optional integrations |
+`install.sh` detects macOS/Linux and `arm64`/`amd64`, downloads the matching
+release archive, verifies its SHA-256 checksum, and installs two binaries into
+`$LOCALREVIEW_INSTALL_PREFIX` (default `~/.local/bin`). It needs `curl`,
+`tar`, and either `shasum` or `sha256sum`.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/uhvesta/cmux-localreview/main/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"  # add through your own shell provisioning
+localreview daemon run --port 0
+```
+
+The script does not install a package manager, change a shell profile, or
+handle credentials.
+
+### Build a checkout (macOS or Linux)
+
+Install Git, Bazel/Bazelisk, and Bun. Bun is used only to build the embedded
+web assets; installed native binaries do not start Node or Bun.
+
+```sh
+git clone https://github.com/uhvesta/cmux-localreview.git
+cd cmux-localreview
+sh scripts/localreview-install.sh /absolute/path/to/project
+export PATH="$HOME/.local/bin:$PATH"
+localreview daemon run --port 0
+```
+
+`scripts/localreview-install.sh` builds `localreview` and `localreviewd`,
+installs them to `~/.local/bin` by default, and runs `localreview setup` for
+the optional project argument. Alternatives:
+
+```sh
+# Show every file/build action without changing anything.
+sh scripts/localreview-install.sh --dry-run /absolute/path/to/project
+
+# Use a user-owned prefix and skip optional project skill installation.
+sh scripts/localreview-install.sh --prefix "$HOME/.local" --no-project-setup
+```
+
+It intentionally does not use `sudo`, edit shell profiles, create a service,
+or write credentials.
+
+## First local review
+
+```sh
+# Terminal 1: keep the loopback daemon running.
+localreview daemon run --port 0
+
+# Terminal 2: capture the current Git state and enqueue it.
+localreview submit --title 'Review parser change' --topic parser-boundaries \
+  /absolute/path/to/project
+
+# Opens Queue Home in the default browser. Add --no-open to print its URL.
+localreview open
+```
+
+At Queue Home choose **Open workspace** for a queue item. The UI shows the
+saved path and snapshot provenance; it does not silently open a mutable source
+directory. Use the exact same path and topic for the next review round.
+
+## Install Copilot skills
+
+The setup command adds only cmux-localreview-owned files:
+
+```sh
+localreview setup /absolute/path/to/project
+localreview setup --dry-run --json /absolute/path/to/project
+localreview setup --personal /absolute/path/to/project
+```
+
+Project skills live under `.github/skills/`; `--personal` also installs them
+under `~/.copilot/skills`. The managed block in
+`.github/copilot-instructions.md` is bounded, and unrelated files are never
+overwritten. Restart Copilot CLI or reload skills after changing them.
+
+The installed skills describe `localreview submit`, formal-feedback export,
+and snapshot reproduction. They do not receive daemon capabilities, OAuth
+tokens, terminal transcripts, or a hidden ACP connection.
+
+## Dedicated GitHub/OAuth capabilities
+
+The native daemon has three separate capabilities:
+
+| Capability | Needed for | Not used for |
 | --- | --- | --- |
-| Local reviewer or submitter | Bun, Git, this checkout, and a system secret store | Copilot CLI runtime, cmux |
-| Remote worker | The same tools plus SSH access from the review machine | A service supervisor |
-| Existing Copilot feedback target | Copilot CLI signed in, ACP listener, session ID | cmux |
+| `read` | resolving/mirroring a GitHub PR for local review | publishing feedback |
+| `write` | future explicit GitHub review publishing | PR read or `/ask` |
+| `copilot` | fresh SDK-native `/ask` and formal delivery | GitHub review publication |
 
-Check the boundaries independently:
-
-```sh
-git --version
-bun --version
-copilot --version
-ssh -V
-```
-
-`/ask` uses the installed Copilot CLI runtime but does **not** use its stored
-login. cmux-localreview passes an explicit daemon-owned GitHub App token with
-all other SDK credential sources disabled. On macOS this requires Keychain;
-on Linux install a libsecret provider that exposes `secret-tool`.
-cmux is optional: without it, snapshots, GitHub PRs, and `/ask` still work,
-but cmux provenance and terminal `/btw` routing do not.
-
-## Create and connect the GitHub Apps
-
-Create three GitHub Apps (personal or organization-owned), enable **Device
-Flow** on each, and retain their public Client IDs. The CLI prints the exact
-registration checklist:
+Create the appropriate GitHub OAuth application registrations and configure
+their public client IDs. Use a secret on stdin only if the registration is
+confidential; never place it in argv or shell history.
 
 ```sh
-bun src/localreview-github-app.ts guide
+localreview github-app guide
+localreview github-app configure --capability read --client-id YOUR_CLIENT_ID
+localreview github-app connect --capability read
+
+# The default is a browser loopback flow; use --device on a headless host.
+localreview github-app connect --capability copilot --device
+localreview auth status
 ```
 
-Use three different Apps and least privilege:
+Tokens and optional client secrets stay in the OS secret store (Keychain on
+macOS; a libsecret-backed `secret-tool` provider on Linux). The browser gets
+neither OAuth tokens nor a persistent readable daemon token. The native daemon
+does not fall back to `gh`, environment tokens, PATs, or an existing Copilot
+CLI login.
 
-| Capability | Repository permissions | Used for |
-| --- | --- | --- |
-| `read` | Metadata read, Contents read, Pull requests read | Resolve, mirror, and locally review PRs |
-| `write` | Metadata read, Pull requests read/write | Explicit GitHub review publication only |
-| `copilot` | The Copilot user-token permission required by your plan; no repo grants by default | Fresh Copilot SDK `/ask` sessions |
+## GitHub pull requests and local questions
 
-Install each App only on the repositories it needs. Then configure and connect
-each one from Queue Home, or on a local/headless host:
+Connect `read`, then queue a PR. The daemon resolves its canonical URL and
+head, creates a managed cache worktree, and pins the review to that head:
 
 ```sh
-bun src/localreview-github-app.ts configure --capability read --client-id Iv1.…
-bun src/localreview-github-app.ts connect --capability read
-bun src/localreview-github-app.ts status
+localreview remote submit --title 'Review owner/repo#123' \
+  https://github.com/OWNER/REPOSITORY/pull/123
+localreview open
 ```
 
-`connect` opens GitHub’s device-flow page and waits locally. It stores tokens
-only under the `cmux-localreview.github-app` system-secret service. It never
-uses `gh`, a PAT, environment token, or Copilot CLI credential fallback.
-The browser never stores a GitHub token. Its one-time loopback daemon
-capability is exchanged for an `HttpOnly; SameSite=Strict` cookie instead of
-localStorage, sessionStorage, IndexedDB, or a readable cookie.
+Opening the remote item lets you inspect the diff and use `/ask`; no `write`
+capability is needed for local investigation. Refresh a remote item after a
+new head before making a local decision. The currently native UI deliberately
+rejects GitHub-review publication rather than pretending it was published;
+save the decision locally until the write adapter ships.
 
-The daemon always binds to `127.0.0.1`. Use SSH local forwarding for a remote
-daemon or ACP listener; do not make either service public.
+## Remote machine role
 
-## Install Copilot skills in a project
-
-From a checkout of this repository, install project-local skills for the
-repository where developers will use them:
+Run the same native binary on a remote host with a separate data directory:
 
 ```sh
-# macOS or Linux: auto-select the platform wrapper
-sh scripts/localreview-setup.sh /absolute/path/to/project
-
-# Inspect the planned writes without changing anything
-sh scripts/localreview-setup.sh --dry-run --json /absolute/path/to/project
-
-# Also install the skills as personal Copilot CLI skills
-sh scripts/localreview-setup.sh --personal /absolute/path/to/project
+# Remote host; remain loopback-only and supervise with your normal tool.
+localreview remote daemon run --port 4311 --data-dir /srv/cmux-localreview
 ```
 
-Setup adds or updates only tool-owned files:
+The daemon never becomes public by changing this command. Federation metadata
+and UI states exist, but end-to-end SSH aggregation remains an operator-managed
+integration during the migration. Establish an explicit SSH local forward and
+validate it in your own environment before adding a remote node; do not copy a
+discovery token through a command line, prompt, or source file.
 
-```text
-.github/skills/localreview-submit/SKILL.md
-.github/skills/localreview-feedback/SKILL.md
-.github/skills/localreview-reproduce/SKILL.md
-.github/copilot-instructions.md  # a bounded managed block only
-```
-
-It never overwrites an existing unmanaged skill. Re-run it after upgrading this
-repository; it is idempotent. Start a new Copilot CLI conversation or run
-`/skills reload` after setup.
-
-| Agent request | Use | Result |
-| --- | --- | --- |
-| “This branch is ready for review” | `/localreview-submit` | Snapshot + queue item, optionally with ACP binding |
-| “Get feedback to the existing agent” | `/localreview-feedback` | Copy-safe feedback or live ACP delivery |
-| “Recreate what was reviewed” | `/localreview-reproduce` | Rebuild snapshot and explain what can resume |
-
-The installer does not place credentials, bearer tokens, or terminal output in
-project instructions.
-
-## Start Queue Home and submit a local review
-
-Always open the UI through `localreview-open`; it starts the loopback daemon if
-needed and places its bearer token in the browser URL fragment.
+## Verify installation
 
 ```sh
-# Global home: local and federated queues
-bun src/localreview-open.ts --home
-
-# Explicit workspace reviewer, using a chosen base ref
-bun src/localreview-open.ts /absolute/path/to/project --base origin/main
-
-# Capture an immutable snapshot from the terminal
-bun src/queue-submit.ts /absolute/path/to/project --title 'Review parser change'
-
-# Continuously queue later Git source revisions
-bun src/queue-submit.ts /absolute/path/to/project --watch --poll-interval 5000
+localreview daemon status
+localreview open --no-open
+go test ./...                 # source checkout only
+bazel test //...              # source checkout only
 ```
 
-The watcher creates a new item only when the Git source state changes. Snapshot
-capture uses a temporary index and does not change the source worktree, index,
-or `HEAD`.
-
-## Copilot: `/ask` versus existing-session ACP feedback
-
-`/ask` is a new persistent Copilot SDK conversation. It has its own model
-picker, transcript, question sets, and inline code anchors. It is deliberately
-separate from formal review feedback unless a reviewer explicitly converts an
-answer into a comment.
-
-For an inline question such as `/ask why could this be risky?`, the retained
-Copilot session receives the workspace root, selected repository root,
-repository-relative/workspace-relative/absolute file paths, diff side, exact
-line or range, and selected source text. This makes follow-ups reliable across
-files and in multi-repository workspaces. The inline card and full `/ask`
-panel are two views of the same saved transcript.
-
-Use **Start fresh** in `/ask` for a clean Copilot context. Older Ask sessions
-remain available through **Show previous Ask sessions** but are read-only, so
-they cannot accidentally affect new review work. **New Review** also starts a
-new Ask round. Older formal comments are hidden by default; **Show previous
-comments** exposes them as explicitly outdated, read-only history.
-
-For feedback to reach an existing Copilot CLI agent, run that agent in ACP TCP
-mode, retain the session ID returned by its ACP client, then submit all ACP
-coordinates together:
-
-```sh
-# Agent terminal
-copilot --acp --port 4123
-
-# Submission terminal
-bun src/queue-submit.ts . --title 'Review feature branch' \
-  --agent-kind copilot-cli --agent-id feature-123 \
-  --copilot-session-id "$COPILOT_SESSION_ID" \
-  --acp-host 127.0.0.1 --acp-port 4123 --acp-session-id "$ACP_SESSION_ID"
-```
-
-`--acp-host`, `--acp-port`, and `--acp-session-id` are all required together.
-Use **Copy feedback prompt** for a portable prompt. Use **Send through ACP**
-only while the original listener/session still exists. The `queue` policy waits
-for an in-flight daemon-issued turn; `interrupt` cancels that turn before
-delivery. Delivered feedback is recorded so retries do not duplicate it.
-
-## Review a GitHub PR
-
-Connect the **PR read** App and use a canonical PR URL:
-
-```sh
-bun src/localreview-github-app.ts status
-bun src/queue-submit.ts https://github.com/OWNER/REPOSITORY/pull/NUMBER
-```
-
-The daemon resolves the repository and base/head SHAs, creates a managed mirror
-and cache worktree, and pins review to that head. Use **Refresh remote PRs**
-after a push; a stale head cannot receive an approval or change request. Use
-the remote clean-up controls only for cache-owned worktrees and mirrors.
-
-### Ask Copilot about a PR without entering the review queue
-
-Use this when you want a local, question-only inspection: it resolves the PR,
-creates an isolated cached worktree, and opens the diff with `/ask` available.
-It does **not** create a queue item or snapshot, attach an ACP agent, or make
-GitHub review submission controls available in the browser.
-
-```sh
-# Connect read + copilot capabilities once, then:
-bun src/localreview-open.ts --pr https://github.com/OWNER/REPOSITORY/pull/NUMBER
-```
-
-The resulting reviewer URL has no daemon bearer token and is accepted only on
-`127.0.0.1`. Open `/ask`, choose a model, and ask a side-chat or inline code
-question. The PR read App is required to resolve and clone a private PR; no
-GitHub write capability is required or used in this mode.
-
-## Remote daemon and SSH forwarding
-
-Set up the checkout and skills on the remote worker as above. Start the remote
-daemon under your normal supervisor:
-
-```sh
-# Remote host
-sh scripts/localreview-remote-daemon.sh --port 4311 --data-dir /srv/localreview
-
-# Local review machine: print a safe local forward, then run it
-sh scripts/localreview-remote-tunnel.sh \
-  --ssh-target reviewer@worker.example --remote-port 4311 --local-port 5311
-```
-
-The generated command uses `ssh -N -L 127.0.0.1:<local>:127.0.0.1:<remote>`,
-`BatchMode=yes`, and `ExitOnForwardFailure=yes`. Add the node in Queue Home
-with its label, SSH target, remote port, and remote discovery token. The token
-comes from the remote owner-only `daemon.json`; transfer it only through an
-approved secret path. Queue Home connects lazily and offers retry/disconnect.
-
-For a remote ACP agent, create a separate SSH local forward to its ACP port and
-submit that *local* forwarded port. Public and LAN ACP hosts are rejected.
-
-## Reproduce a saved review
-
-The queue detail view shows the exact command. The CLI destination must be new
-or empty:
-
-```sh
-bun src/localreview-reproduce-copilot.ts QUEUE_ID /tmp/reproduced-review
-```
-
-This verifies saved bundle checksums and materializes the submitted Git state.
-It can provide a fresh `copilot --acp --port …` launch command, but cannot
-revive a closed Copilot session, disappeared remote host, expired GitHub login,
-or an old cmux surface.
-
-## Security and maintenance
-
-- Keep the owner-only discovery file and remote federation tokens out of source
-  control, browser URLs, tickets, and shell history.
-- Queue records cmux surface metadata, not terminal transcripts; supplied
-  metadata is redacted for credential-like fields.
-- `/ask` never enters exports, queue feedback, ACP delivery, or GitHub review
-  payloads unless a reviewer explicitly converts an answer into a comment.
-- Prune completed queue entries and remote cache worktrees through the UI only
-  after their audit/reproduction value is no longer needed.
-
-## Agent readiness check
-
-Run the relevant checks before claiming a machine is ready:
-
-```sh
-bun test
-bun run typecheck
-bun run build
-bun src/localreview-github-app.ts status
-copilot --version
-```
-
-Finally, open Queue Home using `bun src/localreview-open.ts --home`, submit a
-throwaway local repository, open the explicit workspace reviewer, and confirm
-that a diff is visible. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) if any
-check fails.
+If a command cannot discover the daemon, start it in the same environment
+(especially the same `CMUX_LOCALREVIEW_DATA_DIR`). See
+[Troubleshooting](TROUBLESHOOTING.md) for recovery steps.

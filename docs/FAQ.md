@@ -1,205 +1,109 @@
 # Frequently asked questions
 
-## Getting started
+## Where do I start?
 
-### What is the fastest safe way to try this locally?
-
-From this checkout, configure the repository you want to review, submit it,
-then open Queue Home:
+Start the daemon, submit a local snapshot, then open Queue Home:
 
 ```sh
-sh scripts/localreview-setup.sh /path/to/repository
-bun src/queue-submit.ts /path/to/repository --title "First local review"
-bun src/localreview-open.ts --home
+localreview daemon run --port 0
+localreview submit --title 'First review' --topic first /absolute/path/to/project
+localreview open
 ```
 
-The setup command is additive and idempotent. It adds only the
-cmux-localreview-managed Copilot skill files and instructions it owns.
+Queue Home is global. A reviewer opens only after choosing **Open workspace**
+on an item.
 
-### Why does opening `/queue` directly say “Bearer token required”?
+## Does a workspace support multiple Git repositories?
 
-The browser UI controls a loopback daemon that requires its discovery token.
-Open it with `bun src/localreview-open.ts --home`; the CLI appends the token in
-the URL fragment, which the server never receives. If you are already on Queue
-Home, use its local token-recovery control rather than placing the token in a
-URL query parameter.
+Yes. Queue identity uses the absolute submitted workspace path plus an optional
+topic. Submit each independently reviewable repository/path separately; choose
+distinct topics when one path carries more than one review stream. The reviewer
+shows the actual saved path, rather than a generic “workspace root” label.
 
-### Why is Queue Home separate from the reviewer?
+## What happens when I resubmit?
 
-Queue Home is the global landing page: it aggregates local submissions and
-configured remote nodes. A reviewer is intentionally opened for a selected
-workspace/item, which keeps the active path and review context explicit.
+The snapshot is immutable. Re-submitting an active stream is idempotent;
+resubmitting after a terminal decision or removal creates a new linked round.
+It never replaces old source evidence. **Requeue** reopens the same snapshot;
+it does not pick up new filesystem changes.
 
-## Submission and review
+## Can I remove a queue item without reviewing it?
 
-### What does a local submission contain?
+Yes. Use **Remove** on Queue Home. It leaves the active queue without claiming
+approval or changes requested. Its small history record remains, while the
+saved snapshot is not rewritten.
 
-It contains an immutable Git snapshot, queue metadata, intended base ref,
-captured cwd/branch information, and best-effort cmux and agent provenance.
-It does not capture terminal transcripts. Snapshot creation uses a temporary
-Git index, leaving the source working tree and index unchanged.
+## Will opening a review resend anything to Copilot?
 
-### Can I submit a pull request instead of a local path?
+No. Loading Queue Home, a reviewer, an inline thread, or a saved `/ask`
+conversation performs reads only. A prompt starts only after an explicit
+question submission; formal feedback starts only through the delivery action.
 
-Yes:
+## What does `/ask` retain?
+
+It retains a dedicated conversation, transcript, selected model settings, and
+for inline questions the workspace/repository, file, diff side, line/range,
+and selected code. The inline reply and side-chat are the same conversation.
+Use **Start fresh** for a new context while keeping older sessions readable.
+
+`/ask` does not enter exports, formal feedback, decisions, or GitHub payloads
+unless a reviewer explicitly converts an answer into a formal comment.
+
+## How do model choice and streaming work?
+
+Connect the `copilot` capability, then use the `/ask` picker. The UI shows
+authentication/model availability, turn state, and cancellation. A fallback
+model choice means the daemon could not load a live SDK model catalogue; it is
+not proof that the question was delivered. See [Troubleshooting](TROUBLESHOOTING.md).
+
+## Do I need `gh` or a personal access token?
+
+No. Native authentication uses dedicated OAuth credentials separated into
+`read`, `write`, and `copilot` capabilities, stored only in the OS secret
+store. The browser gets neither OAuth tokens nor a token stored in web storage.
+`gh`, PATs, environment variables, and existing Copilot CLI login are not
+fallbacks.
+
+## Can I inspect a GitHub PR without publishing feedback?
+
+Yes. Connect the `read` capability and queue the PR with:
 
 ```sh
-bun src/queue-submit.ts https://github.com/OWNER/REPOSITORY/pull/123
+localreview remote submit https://github.com/OWNER/REPOSITORY/pull/123
 ```
 
-Connect the dedicated **PR read** GitHub App capability in Queue Home first.
-The daemon resolves the base/head commits, then creates a managed cache
-mirror/worktree. Refresh when the PR head changes before reviewing or
-publishing a decision. No `gh`, personal access token, environment token, or
-Copilot CLI login is used for this flow.
+Then use the local diff and `/ask`. A `write` capability is not needed for
+local review. Native GitHub-review publishing is currently intentionally
+rejected rather than silently saved as a local review; save locally if that is
+the intended outcome.
 
-### Why does a remote PR show no diff or an old diff?
-
-First refresh the item in Queue Home or its detail view. The review is pinned
-to an exact remote head, so a changed PR head is intentionally treated as
-stale rather than silently reviewed as a different revision. When opening the
-reviewer manually, use the base shown on the item (for example `origin/main`)
-and reopen the workspace after refresh.
-
-### When should I requeue, complete, or submit again?
-
-- **Requeue**: the same immutable snapshot needs another pass.
-- **Complete**, **Approve**, or **Request changes**: review of that exact item
-  is finished. It leaves the active queue and remains in history.
-- **Remove**: discard an item from the active queue without reviewing it. This
-  is safe to use for duplicates or abandoned work; its audit record remains.
-- **Submit again**: create a new immutable review round. For local work, use
-  the same path and `--topic <stable-name>`; for a remote review, submit the
-  same PR URL. The new item links to the old one rather than overwriting it.
-
-Do not treat requeue as a way to update an item’s source state.
-
-### Will approve or request changes write to GitHub?
-
-For a remote PR, **Approve locally** and **Request changes locally** are local
-lifecycle actions. The current native daemon does not include a GitHub Reviews
-write adapter: choosing **Publish to GitHub** is rejected clearly, and does not
-record a local decision as a fallback. This is intentional so that a reviewer
-can never mistake a local-only success for a published GitHub review. A future
-write implementation will require the separately connected **PR publish**
-GitHub App capability and a current PR head SHA.
-
-## Copilot, ACP, and `/ask`
-
-### What does the setup script install for Copilot CLI?
-
-It installs project-local skills under `.github/skills/` and a bounded managed
-section in `.github/copilot-instructions.md`:
-
-- `/localreview-submit`
-- `/localreview-feedback`
-- `/localreview-reproduce`
-
-Run `/skills reload` in an already-open Copilot CLI session, or start a new
-one. Use `--personal` only when you also want the skills under
-`~/.copilot/skills`.
-
-### What is the difference between a Copilot session ID and an ACP session ID?
-
-The Copilot session ID is saved for resume guidance. The ACP session ID plus a
-loopback host and port identifies the existing structured-agent session that
-can receive formal review feedback. Supplying a session ID alone cannot prove
-the agent process or tunnel is still alive.
-
-### Why is “Send through ACP” unavailable?
-
-The submission must have included all of `--acp-host`, `--acp-port`, and
-`--acp-session-id`, and the referenced ACP agent must still be reachable. An
-unavailable/busy/error state is a recovery signal, not a request to fall back
-to terminal keystrokes. Copy the feedback prompt or reproduce a fresh setup
-when appropriate.
-
-### What does the ACP delivery policy mean?
-
-`queue` is the default: wait for a daemon-issued turn to become idle. Use
-`interrupt` only when redirecting a daemon-issued in-flight turn is the right
-review decision. Undelivered feedback remains available for retry/copy, which
-prevents accidental duplicate delivery.
-
-### Is `/ask` sent to the agent whose code I am reviewing?
-
-No. `/ask` is a separate Copilot SDK conversation with its own persistent
-transcript, model/session controls, streaming, and cancellation. It does not
-enter exported prompts, ACP delivery, GitHub comments, approvals, or request-
-changes payloads unless a reviewer explicitly converts an answer to a formal
-review comment.
-
-### How do inline `/ask` questions retain context?
-
-Ask from the selected file, line, or range. The conversation stores the repo,
-file, side, line/range, selected code, and its conversation linkage. Follow-up
-questions reuse that conversation rather than re-sending a made-up history.
-
-## Reproduction and remote operation
-
-### Can I recreate a review on another machine?
-
-Yes, into a new or empty destination:
+## How do I reproduce a submitted review?
 
 ```sh
-bun src/localreview-reproduce-copilot.ts <queue-id> /tmp/reproduced-review
+localreview reproduce <manifest.json> /new-or-empty/destination
+localreview reproduce --copilot <queue-id> /new-or-empty/destination
 ```
 
-It verifies/materializes the retained snapshot and prints either still-live
-ACP connection details (if recorded) or a fresh `copilot --acp --port …`
-command. It cannot revive an agent process, SSH forward, or expired login.
+Reproduction verifies bundles and refuses a non-empty destination. A recorded
+Copilot session ID is provenance only: it cannot revive a stopped process,
+expired authentication, or old context.
 
-### How do I prepare a remote worker without exposing its daemon?
+## Can I connect multiple local/remote Copilot CLI ACP sessions?
 
-Install the project and run:
+Not through the native daemon. ACP and cmux keystroke injection are retired
+transport paths. The supported route is one native SDK conversation per
+review/feedback target, created by an explicit `/ask` or feedback-delivery
+action. See [Copilot sessions](COPILOT-ACP-SESSIONS.md) for the boundary and
+remote-worker guidance.
+
+## Can I run a remote daemon?
+
+Yes, loopback-only:
 
 ```sh
-# Remote worker
-sh scripts/localreview-remote-daemon.sh --port 4311 --data-dir /srv/localreview
-
-# Local reviewer: print the SSH forward, inspect it, then run it
-sh scripts/localreview-remote-tunnel.sh \
-  --ssh-target reviewer@worker.example --remote-port 4311 --local-port 5311
+localreview remote daemon run --port 4311 --data-dir /srv/cmux-localreview
 ```
 
-Add the node in Queue Home using the remote discovery token. The implementation
-only forwards `127.0.0.1` endpoints; it does not configure a public listener,
-copy a token over SSH, or install a service manager unit for you.
-
-### What can I safely clean up?
-
-Use the remote item’s **Clean up** control for managed worktrees. Removing a
-reusable mirror is an explicit additional choice. Never use queue cleanup to
-delete a regular developer checkout; resubmit the PR URL later to recreate a
-managed remote review.
-
-## Troubleshooting
-
-### Copilot models show unauthenticated or unavailable
-
-In Queue Home, configure and connect the dedicated **Copilot /ask** GitHub App,
-then retry model selection. The daemon passes that App token explicitly to the
-SDK and disables stored Copilot CLI, `gh`, and environment authentication.
-Confirm Copilot CLI is installed and on `PATH` (or set `COPILOT_CLI_PATH` for
-the daemon environment). A fresh `/ask` conversation is not an ACP feedback
-session.
-
-### GitHub PR submission fails
-
-Connect the **PR read** GitHub App, confirm it is installed on the repository,
-then submit or refresh again. Connect **PR publish** only before publishing a
-formal review. The queue UI should show its remote error/cache state instead
-of hiding it.
-
-### A remote daemon is disconnected
-
-Verify the remote daemon is listening loopback-only, the remote discovery
-token is correct, and local SSH batch authentication works. Retry or reconnect
-the node from Queue Home. Disconnecting a node stops its use locally; it does
-not delete the remote daemon or its queue data.
-
-### I need an agent-friendly status report
-
-Use the handoff template in [Agent guide](AGENT-GUIDE.md#useful-handoff-template).
-Include queue ID, status, path/PR, base/head, snapshot, ACP state, and the next
-action—never credentials or tokens.
+Run it under your normal supervisor. SSH federation UI/transport is still an
+operator-managed migration feature; keep any forward explicit and avoid
+putting the daemon discovery token in source, shell history, or chat.

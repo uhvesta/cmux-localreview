@@ -15,7 +15,7 @@ func TestProjectInstallIsManagedAndIdempotent(t *testing.T) {
 	}
 	path := filepath.Join(workspace, ".github", "skills", "localreview-submit", "SKILL.md")
 	contents, err := os.ReadFile(path)
-	if err != nil || !strings.Contains(string(contents), managed) || !strings.Contains(string(contents), "localreview queue-submit") {
+	if err != nil || !strings.Contains(string(contents), managed) || !strings.Contains(string(contents), "localreview submit") {
 		t.Fatalf("skill not installed correctly: %v %q", err, contents)
 	}
 	changes, err = Install(Options{Workspace: workspace, Project: true})

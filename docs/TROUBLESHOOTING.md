@@ -1,197 +1,144 @@
 # Troubleshooting and recovery
 
-Use the smallest recovery action that fixes the failed boundary. Do not delete
-snapshots, mirrors, or daemon state as a first response.
+Use the smallest recovery action. Do not delete daemon state, snapshots, or
+managed PR caches to resolve a UI issue.
 
-## Fast triage
+## Check the native boundary first
 
 ```sh
-bun --version
+localreview daemon status
+localreview open --no-open
 git --version
-bun test
-bun run typecheck
-./src/localreview-github-app.ts status
-copilot --version
-bun src/localreview-open.ts --home
 ```
 
-The daemon discovery file is normally
-`~/.local/share/cmux-localreview/daemon.json`, or
-`$CMUX_LOCALREVIEW_DATA_DIR/daemon.json` for an isolated environment. It holds
-an access token: inspect it only locally and never paste it into chat, tickets,
-shell history, or source control.
+The discovery record is `${CMUX_LOCALREVIEW_DATA_DIR}/daemon.json` when the
+variable is set, otherwise `~/.local/share/cmux-localreview/daemon.json`. It
+contains a bearer capability. Do not paste it—or an `open --no-open` URL—into
+logs, tickets, prompts, or shell history.
 
-## Queue Home says “Bearer token required”
+## “Bearer token required” or a blank UI
 
-Cause: the UI was opened directly at `/`, `/queue`, or `/review` without the
-token fragment supplied by `localreview-open`.
+Open the UI through the CLI, not by typing `/`, `/queue`, or `/review` into a
+browser:
 
 ```sh
-bun src/localreview-open.ts --home
-bun src/localreview-open.ts /absolute/path/to/workspace --base origin/main
+localreview open
+localreview open /absolute/path/to/workspace
 ```
 
-Use the Queue Home recovery field only with a token read from the owner-only
-local discovery file. If the daemon restarted, open a fresh URL with
-`localreview-open` instead of reusing an old bookmark.
+The token belongs in a URL fragment only; the UI immediately exchanges it for
+an HttpOnly local cookie. If the daemon restarted, generate a new URL rather
+than reusing an old bookmark. Verify the browser and daemon use the same
+`CMUX_LOCALREVIEW_DATA_DIR`.
 
-## The reviewer says “Failed to fetch diff data”
+## “Failed to fetch diff data”
 
-First ensure a local workspace is still a Git worktree and that the selected
-base exists:
+For a local item, verify the original submission workspace is a Git worktree,
+then open the saved queue item from Queue Home:
 
 ```sh
 git -C /absolute/path/to/workspace status
-git -C /absolute/path/to/workspace fetch --all --prune
-git -C /absolute/path/to/workspace show-ref --verify refs/remotes/origin/main
-bun src/localreview-open.ts /absolute/path/to/workspace --base origin/main
+git -C /absolute/path/to/workspace diff --binary HEAD
+localreview open
 ```
 
-For a GitHub PR worktree, never manually check out branches inside the managed
-cache. Select **Refresh remote PRs** in Queue Home, then open the workspace
-reviewer again. Refresh rebuilds the cached PR worktree at the resolved head
-and provides `origin/<base>` for comparisons like `origin/main → HEAD`.
+Do not manually alter a daemon-managed remote PR worktree. For a remote item,
+refresh it in Queue Home after the pull request head changes, then reopen the
+item. Record the visible queue ID, selected base/head, and exact error before
+filing a bug.
 
-If it still fails, report the queue-item ID and exact selected base/target,
-not just the generic error.
+## Queue appears empty or a submission is missing
 
-## A remote PR cannot be added, refreshed, or published
+Make sure submitting and opening use the same daemon environment:
 
 ```sh
-bun src/localreview-github-app.ts status
+localreview daemon status
+localreview submit --title 'Queue smoke test' /absolute/path/to/workspace
+localreview open
 ```
 
-| Symptom | Cause | Recovery |
-| --- | --- | --- |
-| `The read GitHub App is not connected` | PR read App is not connected | Configure/connect **PR read** in Queue Home or with `localreview-github-app connect --capability read`. |
-| PR cannot resolve | Wrong URL, missing App installation, or inaccessible repository | Verify canonical URL and install the PR read App on that repository. |
-| Review is stale | PR head changed after opening | Refresh remote PRs and reopen before recording a local decision. |
-| Publish to GitHub is unavailable | The native daemon has no GitHub Reviews write adapter yet | Choose **Save locally**. A publish request is rejected and no local decision is saved as a fallback. |
-| Inline comment rejected | Anchor is outdated/unsupported | Refresh and correct the anchor before saving local feedback; a future publish adapter must never silently redirect a review. |
-| Cache missing | Worktree/mirror was cleaned | Re-add the PR URL. |
+`CMUX_LOCALREVIEW_DATA_DIR` deliberately isolates queues. A snapshot
+submission requires a Git repository; it does not modify the worktree/index.
 
-In the native daemon, approval, request-changes, and comments remain local
-until a GitHub Reviews write adapter is added. Confirm the target PR and head
-SHA in the detail view before recording a local decision; an attempted GitHub
-publish is intentionally rejected rather than silently treated as local.
+## Copilot `/ask` is unavailable, models do not load, or streaming stops
 
-## `/ask` has no model, authentication fails, or streaming stalls
-
-`/ask` is a fresh Copilot SDK chat using the dedicated **Copilot /ask** GitHub
-App connection; it is not an existing ACP session and does not reuse a
-Copilot CLI, `gh`, or environment login.
+`/ask` uses only the dedicated `copilot` OAuth capability. It does not use
+`gh`, a PAT, environment token, or Copilot CLI login state.
 
 ```sh
-copilot --version
-bun src/localreview-github-app.ts status
+localreview auth status
+localreview github-app connect --capability copilot
 ```
 
-Connect the Copilot App and reload the reviewer. If `/ask` still fails, restart
-the daemon and start a new conversation; retain the displayed model and error
-for diagnosis. Cancel a streaming turn before issuing a new one. `/ask` transcript entries never become formal review
-feedback unless a reviewer explicitly converts an answer to a comment.
+For a headless machine add `--device`. Return to the existing `/ask` transcript
+after authentication; do not re-submit a question simply because the panel was
+reopened. If a turn is visibly streaming, cancel it before starting a different
+turn. A saved error means delivery failed and is useful diagnostics, not a
+hidden retry request.
 
-If Copilot cannot find the project skills:
+## GitHub PR cannot be added or appears stale
+
+Connect the least-privileged `read` capability and check its state:
 
 ```sh
-sh scripts/localreview-setup.sh /absolute/path/to/project
-# Then run /skills reload in Copilot CLI.
+localreview github-app connect --capability read
+localreview auth status
+localreview remote submit https://github.com/OWNER/REPOSITORY/pull/123
 ```
 
-Unmanaged `.github/skills` files are intentionally preserved. The setup output
-identifies a skipped file so its owner can decide how to reconcile it.
+Typical causes are an incorrect canonical PR URL, missing OAuth application
+access, or a new PR head. Refresh the remote item rather than reviewing an old
+head. **Publish to GitHub** is currently unavailable by design: the native
+daemon rejects it clearly and does not turn it into a local decision. Choose
+the plainly labelled local save action instead.
 
-## ACP feedback is unavailable, busy, or fails delivery
+## Feedback delivery is unavailable or already running
 
-Feedback reaches an existing session only while the queue item has a valid
-loopback endpoint, Copilot ACP is listening, and the session can be loaded:
+Review the formal feedback prompt and use **Copy feedback prompt** if it must
+go elsewhere. **Send through Copilot** requires the separate `copilot`
+capability and an explicit selected item. The daemon serializes delivery per
+item, records successful delivery, and leaves a failed batch undelivered for a
+deliberate retry. Opening the review never retries it.
+
+## Skills do not show up in Copilot CLI
 
 ```sh
-copilot --acp --port 4123
-bun src/queue-submit.ts . --title 'Review' \
-  --acp-host 127.0.0.1 --acp-port 4123 --acp-session-id "$ACP_SESSION_ID"
+localreview setup --dry-run /absolute/path/to/project
+localreview setup /absolute/path/to/project
 ```
 
-For a remote agent, SSH-forward the ACP port and submit the local loopback port
-instead. LAN/public hosts are rejected by design. Choose `queue` to wait for an
-in-flight daemon-issued turn, or `interrupt` to cancel it. A successful batch
-is recorded, so retries do not duplicate delivery. If the listener/session is
-gone, use **Copy feedback prompt** or reproduce the snapshot and create a new
-ACP session; a session ID cannot restore the old context by itself.
+Restart Copilot CLI or reload skills. The installer intentionally skips an
+unmanaged file of the same name; inspect that result and reconcile it manually
+instead of deleting user configuration.
 
-## cmux or terminal `/btw` fails
+## A remote daemon cannot be reached
 
-cmux is required only for terminal `/btw`; there is intentionally no
-focused-terminal fallback. That prevents sending a prompt into the wrong agent.
-
-1. Start cmux and ensure its control socket is reachable by the daemon.
-2. Register or reconnect the agent with workspace and cmux `surfaceId`.
-3. Confirm a current heartbeat and no cmux error in the agent status.
-4. Select that explicit target, then send `/btw` again.
-
-If cmux is unavailable, use `/ask` or copy a formal feedback prompt instead.
-
-## Remote queue node is disconnected, empty, or slow
-
-Local and remote queues are deliberately separate lists. Remote loading is lazy
-so a failed host does not hide local work.
+On the worker, verify its local process and port:
 
 ```sh
-# On remote host
-sh scripts/localreview-remote-daemon.sh --port 4311 --data-dir /srv/localreview
-
-# On review machine; run the printed ssh command
-sh scripts/localreview-remote-tunnel.sh \
-  --ssh-target reviewer@worker.example --remote-port 4311 --local-port 5311
+localreview remote daemon run --port 4311 --data-dir /srv/cmux-localreview
 ```
 
-The tunnel runs with `BatchMode=yes`; an SSH password prompt means keys, host
-verification, or SSH policy must be fixed first. Verify the remote discovery
-token was transferred securely and the remote port matches the daemon. Then use
-**Retry**/**Connect** in Queue Home. **Disconnect** keeps the configuration but
-stops aggregation; **Remove** forgets the local node configuration.
+Keep it on loopback. SSH forwarding and federated aggregation are explicit
+operator-managed steps during the migration. Fix SSH keys/host verification
+and validate the forward yourself; do not make the daemon public or transfer a
+discovery token through an untrusted channel.
 
-The repository includes a fake loopback-tunnel fixture. A real remote host
-still needs its own SSH and process-supervision validation.
+## Snapshot reproduction fails
 
-## Snapshot/reproduction failure or an empty queue
-
-Snapshots require a Git repository but should not mutate it:
+Use a new or empty destination and retain failed artifacts for diagnosis:
 
 ```sh
-git -C /absolute/path/to/workspace status
-git -C /absolute/path/to/workspace fsck --no-dangling
-mkdir /tmp/reproduced-review
-bun src/localreview-reproduce-copilot.ts QUEUE_ID /tmp/reproduced-review
+mkdir -p /tmp/localreview-reproduction
+localreview reproduce <manifest.json> /tmp/localreview-reproduction
 ```
 
-The reproduction destination must be new or empty. Keep a manifest that fails
-checksum verification for diagnosis; do not trust or overwrite a failed
-artifact. To distinguish UI state from submission, submit once by CLI:
+The destination must be empty. Snapshot verification failure should never be
+worked around by editing bundles or overwriting the original source checkout.
 
-```sh
-bun src/queue-submit.ts /absolute/path/to/workspace --title 'Queue smoke test' --json
-bun src/localreview-open.ts --home
-```
+## What to include in a report
 
-If an ID is returned but the queue is empty, ensure both commands use the same
-`CMUX_LOCALREVIEW_DATA_DIR`. That environment variable intentionally creates an
-isolated queue; avoid running multiple daemons against one data directory.
-
-## Safe reset boundaries
-
-- Refresh or requeue an item before submitting another copy.
-- Use remote clean-up controls only for cache-owned paths, never a normal
-  source checkout.
-- Restarting the daemon preserves persisted queue data. An interrupted ACP
-  delivery remains retryable unless it was recorded delivered.
-- Do not delete the discovery document, SQLite database, or artifact directory
-  to solve a UI problem; those removals discard recovery history.
-
-## What to include in a bug report
-
-Include the queue-item ID, local/remote source, exact visible error, action,
-and selected diff base/target. Include `bun --version`, `git --version`, and
-the output of `localreview-github-app status` or `copilot --version` with
-secrets redacted. Never include bearer tokens, discovery documents, ACP session IDs,
-or terminal transcripts.
+Include the queue ID, local path or PR URL, state, selected base/head, action,
+and exact visible error. Include `localreview daemon status` and relevant
+versions with secrets redacted. Never include OAuth tokens, discovery JSON,
+tokenized browser URLs, or full terminal transcripts.

@@ -6,5 +6,12 @@ user-invocable: true
 
 # Reproduce a review
 
-Materialize only into a new or empty destination. A saved snapshot does not
-restore an expired Copilot session, SSH tunnel, or authentication state.
+Materialize only into a new or empty destination with:
+
+```sh
+localreview reproduce --copilot <queue-id> <empty-directory>
+```
+
+A saved snapshot does not restore an expired Copilot session, SSH tunnel, or
+authentication state. Open the reproduced directory for a fresh native `/ask`
+conversation.

@@ -21,8 +21,9 @@ sh ./install.sh
 ```
 
 `localreviewd` owns the loopback HTTP server, SQLite data, browser session
-capability, embedded UI, and Git diff operations. `localreview` is the only
-operator CLI; it never opens the SQLite database directly.
+capability, embedded UI, Git diff operations, and SDK conversation runtime.
+`localreview` is the only operator CLI; it never opens the SQLite database
+directly.
 
 ## Start the daemon and open the UI
 
@@ -129,6 +130,31 @@ dismisses an item without claiming review completion. Removed and terminal
 items stay in history, cannot be reopened or receive feedback, and their
 snapshot is not altered.
 
+## Review a GitHub pull request locally (without queueing or publishing)
+
+Use this path when the goal is to inspect a pull request, ask Copilot inline
+questions, and leave no formal review record. It uses only the daemon's
+dedicated **PR read** credential to resolve and cache a detached PR worktree;
+it does not insert a queue item, send formal feedback, or publish anything to
+GitHub.
+
+```sh
+# Opens the cached PR diff in local-only mode. /ask remains available after
+# the separately configured Copilot capability is connected.
+localreview open --pr https://github.com/owner/repo/pull/123
+
+# Print the capability URL for Firefox/Chrome rather than opening the default
+# browser. The token stays in the URL fragment.
+localreview open --no-open --pr https://github.com/owner/repo/pull/123
+```
+
+Queue Home exposes the same distinction in its **Remote** column: enter the
+PR URL and choose **Review locally** for a read-only `/ask` session, or choose
+**Add PR** only when the PR should enter the formal review queue. Reopening a
+local-only review reads the existing cached diff and `/ask` transcript; it
+does not resend a prompt to Copilot. If you later want a formal queue round,
+choose **Add PR** or run `localreview queue-submit <PR URL>` explicitly.
+
 `localreview queue-submit` remains a compatible alias for `localreview submit`
 while existing skills and automation are migrated.
 
@@ -175,10 +201,10 @@ localreview auth logout copilot
 The default flow is state-verified browser OAuth on an ephemeral `127.0.0.1`
 callback. `--device` explicitly selects the terminal/device fallback. Tokens
 and client secrets are stored only through the OS secret store and never
-returned to the browser or CLI output. The fully live SDK message route and
-model enumeration are still being completed; until Queue Home reports a live
-model catalogue, the picker intentionally reports its unauthenticated or
-fallback state instead of pretending requests will work.
+returned to the browser or CLI output. When credentials or the Copilot SDK are
+unavailable, the picker reports an unauthenticated/fallback state instead of
+pretending a prompt was delivered. Once connected, turns stream through the
+selected persistent conversation; loading a transcript never starts a turn.
 
 For operators migrating from the former `localreview-github-app` executable,
 the native CLI retains its setup vocabulary as a thin, secure alias:
@@ -206,11 +232,24 @@ send anything to Copilot.
 
 ## Remote and GitHub workflows
 
-The queue UI can display remote nodes and PR records, but SSH federation,
-GitHub PR mirroring/publication, and remote setup are not yet operator-ready
-in the Go cutover. Do not use historical `global-daemon`, `queue-submit <PR
-URL>`, ACP, or remote-tunnel documentation as a supported production recipe.
-Use local snapshots until the corresponding Go CLI subcommands land.
+Use a dedicated `read` capability to queue a pull request for local inspection:
+
+```sh
+localreview github-app connect --capability read
+localreview remote submit --title 'Review owner/repo#123' \
+  https://github.com/OWNER/REPOSITORY/pull/123
+localreview open
+```
+
+The daemon resolves the PR and pins its managed worktree to the resolved head.
+Refresh it in Queue Home after a push. Local review, `/ask`, and saved local
+decisions do not need the `write` capability. GitHub Reviews publication is
+not shipped in the native daemon yet: a publish attempt is rejected clearly
+instead of being silently recorded locally.
+
+Run a remote worker loopback-only with `localreview remote daemon run`. SSH
+federation is intentionally operator-managed during the migration; do not use
+historical Bun tunnel helpers or ACP examples as a supported native recipe.
 
 ## Validation checklist
 

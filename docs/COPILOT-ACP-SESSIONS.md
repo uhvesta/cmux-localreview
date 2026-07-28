@@ -1,78 +1,87 @@
-# Multiple Copilot CLI sessions
+# Copilot conversations, CLI sessions, and remote workers
 
-> **Retired for the Go runtime:** this is retained only as legacy design
-> history. The current migration intentionally removes ACP/URI transport from
-> the Go core; `/ask` is SDK-native. See [Go CLI workflows](CLI-WORKFLOWS.md).
+## Supported native model
 
-This guide describes the current safe setup and the migration target. ACP is
-the feedback transport: cmux is for visibility and persistence, never for
-keystroke injection.
+The Go daemon uses fresh, persisted Copilot SDK conversations. It deliberately
+does **not** attach to Copilot CLI ACP sessions or inject terminal keystrokes
+through cmux. This avoids routing a prompt into a tool call, permission prompt,
+or the wrong terminal.
 
-## Current local setup
+There are two distinct native conversation uses:
 
-Run one ACP listener per Copilot worktree/branch. Choose different loopback
-ports and retain each returned ACP `sessionId`.
+| Use | Starts when | Context | Does reopening send anything? |
+| --- | --- | --- |
+| `/ask` | reviewer explicitly sends a question | selected workspace/file/range plus durable `/ask` transcript | No |
+| Formal feedback delivery | reviewer explicitly sends queued formal feedback | feedback prompt for exactly one queue item | No |
 
-```sh
-# Terminal A: branch feature/parser
-copilot --acp --port 4101
+Both use the dedicated `copilot` OAuth capability and show unavailable/busy/
+streaming states. Neither inherits a Copilot CLI login or external ACP session.
 
-# Terminal B: branch feature/ui
-copilot --acp --port 4102
-```
+## Multiple local review conversations
 
-Use the ACP client/session creation flow for each listener, then submit the
-matching worktree with its exact session metadata:
-
-```sh
-queue-submit /absolute/path/to/parser --title "Parser" --topic parser \
-  --agent-id parser-agent --agent-provider copilot --agent-kind copilot-cli \
-  --acp-host 127.0.0.1 --acp-port 4101 --acp-session-id "$PARSER_ACP_SESSION"
-
-queue-submit /absolute/path/to/ui --title "UI" --topic ui \
-  --agent-id ui-agent --agent-provider copilot --agent-kind copilot-cli \
-  --acp-host 127.0.0.1 --acp-port 4102 --acp-session-id "$UI_ACP_SESSION"
-```
-
-Each queue item retains its originating session. **Send through ACP** delivers
-only to that item, serializes duplicate delivery, and never runs merely
-because you reopen a review. Use `queue` to wait for idle or `interrupt` only
-when deliberately redirecting the selected agent.
-
-## Current remote setup
-
-Keep the remote ACP listener private. Create a separate local forward for each
-remote session/port, then submit the local forwarded port.
+Submit one item per independently reviewable workspace/topic, then start or
+select a `/ask` conversation on each item. The queue identity prevents rounds
+from being overwritten:
 
 ```sh
-# On the reviewer machine, one forward per remote ACP listener.
-ssh -N -L 127.0.0.1:5101:127.0.0.1:4101 worker.example
-ssh -N -L 127.0.0.1:5102:127.0.0.1:4102 worker.example
-
-queue-submit /local/path/for/submitted-state --topic parser \
-  --acp-host 127.0.0.1 --acp-port 5101 --acp-session-id "$REMOTE_PARSER_SESSION"
+localreview submit --topic parser /work/parser
+localreview submit --topic ui /work/ui
+localreview open
 ```
 
-For remote PRs, the daemon independently mirrors the pull request with the
-dedicated PR-read GitHub App. The ACP forward remains loopback-only and is
-only the feedback transport.
+In Queue Home, open the intended item. The `/ask` model picker governs its
+fresh SDK conversation. Use **Start fresh** for a new review pass and select
+old sessions only to read history. Inline questions across files use the same
+chosen conversation when the reviewer selects it; they retain their exact code
+anchor without resending prior transcript messages.
 
-## Minimal-copy-paste migration target
+## Formal feedback delivery
 
-The Go CLI will add an `agent start/register` workflow that starts or connects
-to Copilot ACP, records cwd/cmux surface/port/session metadata, heartbeats the
-agent, and submits the queue item atomically. Queue Home will require one
-selected target or an explicit confirmed broadcast and display a separate
-delivery ledger for every target. Until that command is shipped, use the
-explicit one-item/one-session commands above; do not rely on cmux `send`.
+Formal comments remain separate from `/ask`. The reviewer can copy a fully
+qualified review prompt or choose **Send through Copilot**. Delivery is
+item-scoped, explicit, serialized, and written to its delivery history. `queue`
+waits for the current SDK turn; `interrupt` is an explicit redirect policy.
 
-## Safety rules
+Do not use `/ask` as a way to accidentally approve, request changes, publish
+to GitHub, or deliver formal feedback. Converting an answer to a formal comment
+is the deliberate boundary.
 
-- Never expose ACP on a public interface; use `127.0.0.1` plus SSH forwarding.
-- Do not put daemon tokens, GitHub tokens, or ACP transcript content in shell
-  history, queue metadata, or remote nodes.
-- Reopening Queue Home, a diff, or an `/ask` transcript must not send a
-  prompt to any ACP session.
-- `/ask` is a separate fresh Copilot SDK conversation. It does not become
-  formal queue feedback unless a reviewer explicitly converts an answer into
-  a review comment.
+## Existing Copilot CLI sessions
+
+You may still run multiple Copilot CLI sessions in cmux for coding work, for
+example one per branch. They are separate from cmux-localreview’s native
+conversation system:
+
+```sh
+cd /work/parser && copilot
+cd /work/ui && copilot
+```
+
+Install project skills with `localreview setup /work/parser` and
+`localreview setup /work/ui`, then use `/localreview-submit` to create the
+corresponding immutable queue items. The skills do not capture session IDs or
+send feedback into a live terminal. Copy a formal feedback prompt when a human
+needs to paste it into one of these CLI sessions.
+
+## Remote workers
+
+Run a loopback-only native daemon on each remote worker and keep normal SSH
+operations explicit:
+
+```sh
+# On the remote worker.
+localreview remote daemon run --port 4311 --data-dir /srv/cmux-localreview
+```
+
+Never expose the daemon or a Copilot listener on a public interface. Native
+SSH federation remains an operator-managed migration feature, so validate your
+own SSH forward, host identity, and supervisor behavior before relying on it.
+Do not copy discovery tokens, OAuth credentials, or copied terminal content to
+the remote host.
+
+## Authentication boundary
+
+Configure the `copilot` capability using `localreview github-app` or
+`localreview auth`. Tokens live only in OS secure storage. The browser UI gets
+an HttpOnly local session, not an OAuth token. `gh`, environment variables,
+PATs, and an existing Copilot CLI credential are intentionally not fallbacks.
