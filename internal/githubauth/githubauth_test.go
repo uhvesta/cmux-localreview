@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -144,5 +145,31 @@ func TestOSSecretStoreFailsClosed(t *testing.T) {
 	}
 	if e := s.Set("s", "a", "token"); e == nil {
 		t.Fatal("unsupported OS must not write fallback")
+	}
+}
+
+func TestFileConfigStorePersistsPublicClientIDsOnly(t *testing.T) {
+	path := t.TempDir() + "/github-app.json"
+	store := NewFileConfigStore(path)
+	if err := store.SetClientID(Read, "Iv1.readonly"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := NewFileConfigStore(path).ClientID(Read)
+	if err != nil || got != "Iv1.readonly" {
+		t.Fatalf("ClientID = %q, %v", got, err)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(contents), "access_token") || !strings.Contains(string(contents), "readonly") {
+		t.Fatalf("unexpected public config contents: %s", contents)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("config mode = %o, want 600", info.Mode().Perm())
 	}
 }
