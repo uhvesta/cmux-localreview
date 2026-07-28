@@ -18,9 +18,10 @@ The command creates one new system temporary directory containing both daemon
 state and a disposable Git fixture. The fixture has a committed baseline and
 one uncommitted change, then it queues and opens that fixture automatically.
 It never snapshots, registers, or writes into this source checkout. It prints
-a tokenized `http://127.0.0.1:...` URL that can be pasted directly into Chrome
-or Firefox. The bearer token stays in the URL fragment and therefore is not
-sent to the web server.
+a `http://127.0.0.1:...` URL that can be pasted directly into Chrome or
+Firefox. Its fragment contains only a one-time, 60-second bootstrap code, not
+the daemon bearer token; the browser exchanges it for an HttpOnly loopback
+session and removes it from the address bar.
 
 Pass `--open` only if you want the command to launch the default browser. Use
 `--no-fixture` to inspect an empty Queue Home instead. `--json` produces the

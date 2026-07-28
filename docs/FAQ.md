@@ -18,11 +18,12 @@ cmux-localreview-managed Copilot skill files and instructions it owns.
 
 ### Why does opening `/queue` directly say “Bearer token required”?
 
-The browser UI controls a loopback daemon that requires its discovery token.
-Open it with `bun src/localreview-open.ts --home`; the CLI appends the token in
-the URL fragment, which the server never receives. If you are already on Queue
-Home, use its local token-recovery control rather than placing the token in a
-URL query parameter.
+The browser UI controls a loopback daemon that requires an authenticated local
+session. Open it with `bun src/localreview-open.ts --home`; the CLI appends a
+one-time, 60-second bootstrap code in the URL fragment, which the client
+immediately exchanges for an HttpOnly cookie and removes. If you are already
+on Queue Home, use its local token-recovery control rather than placing the
+token in a URL query parameter.
 
 ### Why is Queue Home separate from the reviewer?
 

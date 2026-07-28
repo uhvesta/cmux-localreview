@@ -46,8 +46,11 @@ bun src/localreview-setup.ts /path/to/workspace --personal
 The daemon only binds `127.0.0.1`. Its discovery file is
 `~/.local/share/cmux-localreview/daemon.json`, is written atomically with mode
 `0600`, and holds the bearer token used by queue/workspace/agent control APIs.
-The browser receives that token only through a URL fragment from
-`localreview-open`; fragments are not sent to the server.
+`localreview-open` spends that token locally to mint a separate, one-time,
+60-second browser bootstrap code. The bootstrap code is placed in a URL
+fragment, immediately exchanged for an `HttpOnly; SameSite=Strict` loopback
+cookie, and scrubbed from the address bar; the discovery token never enters a
+browser URL.
 
 ## Copilot CLI setup and skills
 
@@ -269,7 +272,8 @@ its actual absolute path is retained on every queue item. If Queue Home was
 opened directly rather than through `localreview-open`, it offers a local-only
 token recovery field instead of silently failing with a bare 401.
 Control APIs require the loopback daemon bearer token in the owner-only
-discovery file (the browser receives it through a URL fragment).
+discovery file. The CLI converts it into a one-time browser bootstrap code;
+the browser never receives the discovery token.
 
 | Need | Control/API | Recovery |
 | --- | --- | --- |

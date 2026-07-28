@@ -15,6 +15,15 @@ interface OpenReadOnlyPullRequestResponse extends OpenWorkspaceResponse {
   pullRequest: { url: string; number: number; title: string; headSha: string; baseSha: string };
 }
 
+async function browserUrl(daemon: Awaited<ReturnType<typeof connectDaemon>>, path: string): Promise<string> {
+  const grant = await daemon.request<{ bootstrapCode: string }>("/api/browser/grant", { method: "POST" });
+  const url = new URL(path, `${daemon.baseUrl}/`);
+  // This is a one-time, 60-second bootstrap code—not the daemon discovery
+  // capability. The client immediately exchanges and removes it from the URL.
+  url.hash = new URLSearchParams({ bootstrapCode: grant.bootstrapCode }).toString();
+  return url.toString();
+}
+
 async function main(): Promise<void> {
   const program = new Command();
   program
@@ -31,9 +40,7 @@ async function main(): Promise<void> {
       const workspacePath = resolve(workspace);
       const daemon = await connectDaemon();
       if (options.home) {
-        const reviewUrlObject = new URL("/", `${daemon.baseUrl}/`);
-        reviewUrlObject.hash = new URLSearchParams({ daemonToken: daemon.discovery.token }).toString();
-        const reviewUrl = reviewUrlObject.toString();
+        const reviewUrl = await browserUrl(daemon, "/");
         if (options.open) await open(reviewUrl);
         if (options.json) {
           console.log(JSON.stringify({ reviewUrl, queueHome: true }, null, 2));
@@ -69,12 +76,10 @@ async function main(): Promise<void> {
         method: "POST",
         body: JSON.stringify({ workspacePath, base: options.base }),
       });
-      // The bearer token stays client-side in the URL fragment (and is never
-      // sent in an HTTP request); the UI reads it to authenticate its daemon
-      // control-plane calls.
-      const reviewUrlObject = new URL(result.reviewUrl || "/", `${daemon.baseUrl}/`);
-      reviewUrlObject.hash = new URLSearchParams({ daemonToken: daemon.discovery.token }).toString();
-      const reviewUrl = reviewUrlObject.toString();
+      // The browser receives only a short-lived, one-time bootstrap code in
+      // the fragment. It exchanges that code for an HttpOnly loopback cookie;
+      // the daemon bearer capability never enters browser JavaScript or URLs.
+      const reviewUrl = await browserUrl(daemon, result.reviewUrl || "/");
       if (options.open) await open(reviewUrl);
       if (options.json) {
         console.log(JSON.stringify({ ...result, reviewUrl }, null, 2));

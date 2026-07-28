@@ -24,7 +24,7 @@ shell history, or source control.
 ## Queue Home says “Bearer token required”
 
 Cause: the UI was opened directly at `/`, `/queue`, or `/review` without the
-token fragment supplied by `localreview-open`.
+one-time bootstrap fragment supplied by `localreview-open`.
 
 ```sh
 bun src/localreview-open.ts --home

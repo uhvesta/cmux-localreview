@@ -106,7 +106,9 @@ project instructions.
 ## Start Queue Home and submit a local review
 
 Always open the UI through `localreview-open`; it starts the loopback daemon if
-needed and places its bearer token in the browser URL fragment.
+needed and mints a one-time browser bootstrap code. The browser immediately
+exchanges that code for an HttpOnly loopback session and removes it from the
+URL; the daemon bearer token stays in the owner-only discovery file.
 
 ```sh
 # Global home: local and federated queues

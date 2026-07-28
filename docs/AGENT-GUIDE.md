@@ -41,8 +41,10 @@ reviewer must make that conversion deliberately.
    bun src/localreview-open.ts --home
    ```
 
-   This starts or discovers the loopback daemon and places its bearer token in
-   the browser URL fragment. Do not paste that URL into tickets, logs, or chat.
+   This starts or discovers the loopback daemon and places a one-time,
+   short-lived browser bootstrap code in the URL fragment. It is consumed for
+   an HttpOnly loopback session and removed immediately; do not paste that URL
+   into tickets, logs, or chat.
 3. Treat absolute paths, snapshot IDs, branch/base/head SHAs, and queue IDs as
    provenance. Preserve them in handoffs; do not replace them with a vague
    label such as “workspace root.”

@@ -76,8 +76,11 @@ export async function startDemo(options: { dataDir?: string; fixture?: boolean }
       const opened = await request(baseUrl, daemon.discovery.token, "/api/workspaces/open", { workspacePath: paths.workspace, base: "HEAD" });
       if (!opened.ok) throw new Error(`Could not open demo workspace: ${await opened.text()}`);
     }
+    const grantResponse = await request(baseUrl, daemon.discovery.token, "/api/browser/grant", {});
+    if (!grantResponse.ok) throw new Error(`Could not create demo browser bootstrap code: ${await grantResponse.text()}`);
+    const { bootstrapCode } = await grantResponse.json() as { bootstrapCode: string };
     const url = new URL(options.fixture === false ? "/" : "/review", `${baseUrl}/`);
-    url.hash = new URLSearchParams({ daemonToken: daemon.discovery.token }).toString();
+    url.hash = new URLSearchParams({ bootstrapCode }).toString();
     return { daemon, paths, baseUrl, reviewUrl: url.toString(), itemId, restoreEnvironment: () => {
       if (previousDataDir === undefined) delete process.env.CMUX_LOCALREVIEW_DATA_DIR;
       else process.env.CMUX_LOCALREVIEW_DATA_DIR = previousDataDir;
@@ -102,7 +105,10 @@ export async function main(argv = process.argv): Promise<void> {
       const demo = await startDemo({ dataDir: options.dataDir, fixture: options.fixture });
       const output = {
         url: demo.reviewUrl,
-        queueHomeUrl: new URL(`/#daemonToken=${encodeURIComponent(demo.daemon.discovery.token)}`, `${demo.baseUrl}/`).toString(),
+        // Do not derive another browser URL from the long-lived daemon
+        // capability. `url` is the single, one-time bootstrap link produced
+        // for this demo invocation.
+        queueHomeUrl: demo.baseUrl,
         dataDir: demo.paths.dataDir,
         fixtureWorkspace: options.fixture === false ? null : demo.paths.workspace,
         queueItemId: demo.itemId ?? null,
