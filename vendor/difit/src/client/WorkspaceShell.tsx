@@ -5,7 +5,7 @@ import App from './App';
 import { AskPanel } from './components/AskPanel';
 import { BtwPanel } from './components/BtwPanel';
 import { ReviewControlPanel } from './components/ReviewControlPanel';
-import { captureDaemonTokenFromLocation } from './services/daemonAuth';
+import { captureDaemonTokenFromLocation, daemonFetch } from './services/daemonAuth';
 
 const WORKSPACE_UI_STATE_KEY = 'cmux-localreview.workspace-ui-v1';
 
@@ -63,7 +63,10 @@ interface WorkspaceSummary {
 }
 
 async function fetchRepos(): Promise<WorkspaceSummary> {
-  const response = await fetch('/api/repos');
+  // Workspace Shell is the first screen after `localreview open <path>`.
+  // Use the same capability-aware fetch as Queue Home so the fragment token
+  // is exchanged for the HttpOnly local session before this protected read.
+  const response = await daemonFetch('/api/repos');
   if (!response.ok) {
     throw new Error(`Failed to fetch workspace repos: ${response.status}`);
   }
