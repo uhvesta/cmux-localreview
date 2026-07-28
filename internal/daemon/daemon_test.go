@@ -320,4 +320,15 @@ func TestWorkspaceActivationDiscoversNestedRepositories(t *testing.T) {
 	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "review.txt") {
 		t.Fatalf("diff status=%d body=%s", response.StatusCode, body)
 	}
+	req, _ = http.NewRequest(http.MethodGet, base+"/api/repos/"+childID+"/api/revisions", nil)
+	req.Header.Set("Authorization", "Bearer "+discovered.Token)
+	response, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "initial") {
+		t.Fatalf("revisions status=%d body=%s", response.StatusCode, body)
+	}
 }

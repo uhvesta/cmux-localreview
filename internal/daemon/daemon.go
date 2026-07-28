@@ -180,6 +180,15 @@ func gitRoot(path string) (string, error) {
 	return filepath.EvalSymlinks(strings.TrimSpace(string(output)))
 }
 
+func gitOutput(path string, args ...string) (string, error) {
+	command := exec.Command("git", append([]string{"-C", path}, args...)...)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), strings.TrimSpace(string(output)))
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
 // discoverReviewRepos finds nested repositories without treating .git's
 // internal contents as workspace files. A workspace may itself be a repository
 // or contain several independent repositories.
@@ -427,6 +436,39 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			response.RepositoryID = repo.ID
 			writeJSON(w, http.StatusOK, response)
+			return
+		}
+		if len(parts) == 4 && parts[0] == "repos" && parts[2] == "api" && parts[3] == "revisions" && r.Method == http.MethodGet {
+			repo, ok := d.reviewRepo(parts[1])
+			if !ok {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "Unknown review repository"})
+				return
+			}
+			branchOutput, err := gitOutput(repo.AbsolutePath, "for-each-ref", "--format=%(refname:short)%00%(HEAD)", "refs/heads")
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			branches := []map[string]any{}
+			for _, line := range strings.Split(branchOutput, "\n") {
+				fields := strings.Split(line, "\x00")
+				if len(fields) == 2 && fields[0] != "" {
+					branches = append(branches, map[string]any{"name": fields[0], "current": strings.TrimSpace(fields[1]) == "*"})
+				}
+			}
+			logOutput, err := gitOutput(repo.AbsolutePath, "log", "--format=%H%x00%h%x00%s", "-n", "100")
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			commits := []map[string]string{}
+			for _, line := range strings.Split(logOutput, "\n") {
+				fields := strings.Split(line, "\x00")
+				if len(fields) == 3 {
+					commits = append(commits, map[string]string{"hash": fields[0], "shortHash": fields[1], "message": fields[2]})
+				}
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"specialOptions": []map[string]string{{"value": ".", "label": "Working Directory"}, {"value": "staged", "label": "Staging Area"}}, "branches": branches, "commits": commits})
 			return
 		}
 	}
