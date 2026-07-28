@@ -26,12 +26,18 @@ Validated:
 - `bun scripts/capture-parity-fixtures.ts` generated the corpus cleanly.
 - `go build ./...`, `go test ./...`, and `bazel test //...` passed after the
   capture.
+- `bun test --path-ignore-patterns='**/vendor/**'` passed: 106 tests, 0
+  failures. This is the last green frozen-TS suite before further Go parity
+  work.
 
 Decided:
 
 - The `vendor/` directory is shared intentionally: Go dependencies use
   `vendor/modules.txt`, while the existing UI remains under `vendor/difit` and
   `vendor/cmux-hub`. `go mod vendor` must preserve those two directories.
+- The frozen TypeScript contract is tagged `ts-final` and pushed. No future
+  feature work should modify `src/`; only a validation-blocking bug fix may do
+  so, followed by recapture of the affected fixture.
 
 Next:
 
