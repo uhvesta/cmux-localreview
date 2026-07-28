@@ -274,6 +274,61 @@ func GetMessage(ctx context.Context, db *sql.DB, id int64) (*Message, error) {
 	return message, err
 }
 
+// AppendPendingMessage records one streamed assistant fragment. The row is
+// addressed by its immutable message ID rather than "the latest pending row",
+// so an older delayed SDK callback can never be attached to a newer prompt.
+// It returns ErrNotFound when the row was already settled (for example after a
+// cancellation or daemon restart); callers should treat that as a harmless
+// stale callback, not resurrect the response.
+func AppendPendingMessage(ctx context.Context, db *sql.DB, id int64, fragment string) (*Message, error) {
+	if fragment == "" {
+		return GetMessage(ctx, db, id)
+	}
+	result, err := db.ExecContext(ctx, `UPDATE ask_messages SET body=body||? WHERE id=? AND role=? AND pending=1`, fragment, id, RoleAssistant)
+	if err != nil {
+		return nil, err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if changed == 0 {
+		return nil, ErrNotFound
+	}
+	message, err := GetMessage(ctx, db, id)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE ask_conversations SET updated_at=? WHERE id=?`, time.Now().UnixMilli(), message.ConversationID); err != nil {
+		return nil, err
+	}
+	return message, nil
+}
+
+// SettlePendingMessage finishes exactly one streaming assistant row. It is
+// intentionally idempotent: cancellation/error races are normal in a
+// streaming UI and must not make a later reload replay a completed turn.
+func SettlePendingMessage(ctx context.Context, db *sql.DB, id int64, fallback string) (*Message, bool, error) {
+	result, err := db.ExecContext(ctx, `UPDATE ask_messages SET pending=0,body=CASE WHEN body='' THEN ? ELSE body END WHERE id=? AND role=? AND pending=1`, fallback, id, RoleAssistant)
+	if err != nil {
+		return nil, false, err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return nil, false, err
+	}
+	message, err := GetMessage(ctx, db, id)
+	if err != nil {
+		return nil, false, err
+	}
+	if changed > 0 {
+		if _, err := db.ExecContext(ctx, `UPDATE ask_conversations SET updated_at=? WHERE id=?`, time.Now().UnixMilli(), message.ConversationID); err != nil {
+			return nil, false, err
+		}
+	}
+	return message, changed > 0, nil
+}
+
 func ListMessages(ctx context.Context, db *sql.DB, conversationID string) ([]Message, error) {
 	rows, err := db.QueryContext(ctx, `SELECT id,conversation_id,role,body,pending,location_json,created_at FROM ask_messages WHERE conversation_id=? ORDER BY id`, conversationID)
 	if err != nil {

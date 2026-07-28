@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/uhvesta/cmux-localreview/internal/ask"
+	"github.com/uhvesta/cmux-localreview/internal/askruntime"
 )
 
 func (d *Daemon) askSessionID() *int64 {
@@ -211,7 +212,20 @@ func (d *Daemon) handleAsk(w http.ResponseWriter, r *http.Request, path string) 
 				askError(w, err)
 				return true
 			}
-			writeJSON(w, http.StatusAccepted, map[string]any{"user": user, "assistant": assistant, "delivery": "pending-runtime"})
+			conversation, err := ask.GetConversation(ctx, d.db, id)
+			if err != nil {
+				askError(w, err)
+				return true
+			}
+			if err := d.startAskTurn(conversation, user, assistant); err != nil {
+				// The question remains visible and terminal rather than becoming a
+				// forever-pending row. Crucially we never retry it from a reload.
+				d.persistAskEvent(id, assistant.ID, askruntime.Delta{Event: askruntime.EventError, Error: err.Error()})
+				settled, _ := ask.GetMessage(ctx, d.db, assistant.ID)
+				writeJSON(w, http.StatusServiceUnavailable, map[string]any{"user": user, "assistant": settled, "delivery": "unavailable", "error": err.Error()})
+				return true
+			}
+			writeJSON(w, http.StatusAccepted, map[string]any{"user": user, "assistant": assistant, "delivery": "streaming"})
 			return true
 		}
 		if action == "cancel" && r.Method == http.MethodPost {
@@ -219,13 +233,28 @@ func (d *Daemon) handleAsk(w http.ResponseWriter, r *http.Request, path string) 
 				askError(w, err)
 				return true
 			}
+			d.askMu.Lock()
+			runtime := d.askRuntime
+			d.askMu.Unlock()
+			aborted := false
+			if runtime != nil {
+				var cancelErr error
+				aborted, cancelErr = runtime.Cancel(ctx, id)
+				if cancelErr != nil {
+					askError(w, cancelErr)
+					return true
+				}
+			}
 			result, err := d.db.ExecContext(ctx, `UPDATE ask_messages SET pending=0,body=CASE WHEN body='' THEN 'Response cancelled before it completed.' ELSE body END WHERE conversation_id=? AND pending=1`, id)
 			if err != nil {
 				askError(w, err)
 				return true
 			}
 			changed, _ := result.RowsAffected()
-			writeJSON(w, http.StatusOK, map[string]any{"cancelled": changed > 0})
+			if changed > 0 {
+				d.publishAskEvent(askruntime.Delta{Event: askruntime.EventDone, ConversationID: id, Aborted: true})
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"cancelled": changed > 0, "abortRequested": aborted})
 			return true
 		}
 		if action == "resume" && r.Method == http.MethodPost {
@@ -254,6 +283,40 @@ func (d *Daemon) handleAsk(w http.ResponseWriter, r *http.Request, path string) 
 				writeJSON(w, http.StatusOK, map[string]any{"conversation": item})
 			}
 			return true
+		}
+	}
+	if len(parts) == 4 && parts[0] == "ask" && parts[1] == "conversations" && parts[3] == "events" && r.Method == http.MethodGet {
+		if _, err := ask.GetConversation(ctx, d.db, parts[2]); err != nil {
+			askError(w, err)
+			return true
+		}
+		watcher, remove := d.addAskWatcher(parts[2])
+		defer remove()
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("X-Accel-Buffering", "no")
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			askError(w, errors.New("streaming is unavailable on this HTTP writer"))
+			return true
+		}
+		if err := WriteAskSSE(w, askruntime.Delta{Event: askruntime.EventStatus, ConversationID: parts[2], Text: "connected"}); err != nil {
+			return true
+		}
+		flusher.Flush()
+		for {
+			select {
+			case <-r.Context().Done():
+				return true
+			case event, open := <-watcher:
+				if !open {
+					return true
+				}
+				if err := WriteAskSSE(w, event); err != nil {
+					return true
+				}
+				flusher.Flush()
+			}
 		}
 	}
 	if len(parts) == 3 && parts[0] == "ask" && parts[1] == "conversations" && r.Method == http.MethodGet {

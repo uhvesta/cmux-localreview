@@ -28,7 +28,16 @@ operator CLI; it never opens the SQLite database directly.
 
 ```sh
 # Keep this process running in a terminal or service supervisor.
+localreview daemon run --port 0
+
+# The flag-only spelling remains supported during the migration.
 localreview daemon --port 0
+
+# Inspect the exact loopback process recorded in the owner-only discovery file.
+localreview daemon status
+
+# Gracefully stop only the daemon whose /health PID matches that record.
+localreview daemon stop
 
 # Queue Home. It prints a one-time URL, then opens it unless --no-open is set.
 localreview open
@@ -45,6 +54,16 @@ otherwise `~/.local/share/cmux-localreview`. It is mode `0600` and contains a
 loopback bearer capability. `localreview open` places it only in the URL
 fragment; the UI exchanges it for an HttpOnly, SameSite=Strict local cookie.
 Do not copy that URL or token into tickets, logs, or prompts.
+
+`daemon status` reads this record and verifies the responding `/health` PID;
+`daemon stop` performs the same check before it sends `SIGTERM`. This prevents
+a stale port record from ever terminating an unrelated local process. A remote
+worker uses the same loopback command after logging in there:
+
+```sh
+# Run on the worker itself. It does not expose a TCP service beyond loopback.
+localreview remote daemon run --port 4311 --data-dir /srv/localreview
+```
 
 ## Desktop shell (optional)
 
@@ -87,7 +106,7 @@ CLI session or reload skills after installation.
 
 ```sh
 # Capture an immutable snapshot, then create or reuse the active queue stream.
-localreview queue-submit --title 'Review parser change' --topic parser-boundaries \
+localreview submit --title 'Review parser change' --topic parser-boundaries \
   /absolute/path/to/workspace
 
 # Open Queue Home, select the item, and choose Open workspace.
@@ -105,17 +124,26 @@ dismisses an item without claiming review completion. Removed and terminal
 items stay in history, cannot be reopened or receive feedback, and their
 snapshot is not altered.
 
+`localreview queue-submit` remains a compatible alias for `localreview submit`
+while existing skills and automation are migrated.
+
 ## Reproduce a saved snapshot
 
 ```sh
 localreview reproduce /path/to/manifest.json /new-or-empty/destination
 localreview open /new-or-empty/destination
+
+# Materialize the immutable snapshot retained by a queue item and print the
+# fresh SDK-native /ask continuation plan (never ACP session resurrection).
+localreview reproduce --copilot <queue-item-id> /new-or-empty/destination
 ```
 
 Reproduction verifies the saved Git bundles and refuses a non-empty
-destination. Opening the reproduction starts a fresh SDK-native `/ask`
-conversation; it never replays prompts merely because a page, queue item, or
-conversation is reopened.
+destination. `--copilot` reads the queue item's retained manifest through the
+authenticated daemon, then prints the historic session ID only as provenance.
+Opening the reproduction starts a fresh SDK-native `/ask` conversation; it
+never replays prompts or tries to resurrect ACP merely because a page, queue
+item, or conversation is reopened. Add `--json` for automation.
 
 ## `/ask`, Copilot authentication, and model choice
 
@@ -146,6 +174,22 @@ returned to the browser or CLI output. The fully live SDK message route and
 model enumeration are still being completed; until Queue Home reports a live
 model catalogue, the picker intentionally reports its unauthenticated or
 fallback state instead of pretending requests will work.
+
+For operators migrating from the former `localreview-github-app` executable,
+the native CLI retains its setup vocabulary as a thin, secure alias:
+
+```sh
+localreview github-app guide
+localreview github-app configure --capability copilot --client-id "$COPILOT_APP_CLIENT_ID"
+localreview github-app connect --capability copilot       # loopback browser flow
+localreview github-app connect --capability copilot --device
+localreview github-app status
+localreview github-app disconnect --capability copilot
+```
+
+`github-app configure` saves only the public client ID. If your registration
+uses a confidential client, add `--client-secret-stdin` and pipe the secret;
+never place it in a shell history or argument list.
 
 ## File-change reload workflow
 

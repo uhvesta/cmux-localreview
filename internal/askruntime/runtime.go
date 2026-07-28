@@ -206,6 +206,11 @@ func (runtime *Runtime) Cancel(ctx context.Context, conversationID string) (bool
 	if err := entry.session.Abort(ctx); err != nil {
 		return false, err
 	}
+	// Abort is the terminal boundary from the reviewer's perspective. Some SDK
+	// transports subsequently emit idle/aborted and some do not; settling here
+	// makes cancellation idempotent and prevents a missing idle event from
+	// permanently blocking the next explicit question in this conversation.
+	runtime.finish(conversationID, entry, RuntimeEvent{Kind: EventDone, Aborted: true})
 	return true, nil
 }
 

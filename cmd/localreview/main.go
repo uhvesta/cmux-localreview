@@ -27,8 +27,11 @@ import (
 )
 
 type discovery struct {
-	Port  int    `json:"port"`
-	Token string `json:"token"`
+	Port      int    `json:"port"`
+	Token     string `json:"token"`
+	PID       int    `json:"pid"`
+	Version   string `json:"version"`
+	CreatedAt string `json:"createdAt"`
 }
 
 func dataDir() (string, error) {
@@ -58,6 +61,142 @@ func runDaemon(args []string) error {
 	fmt.Printf("cmux-localreview Go daemon listening on 127.0.0.1:%d\n", d.Port())
 	<-ctx.Done()
 	return d.Close()
+}
+
+// daemonCommand is intentionally a process-management command, not another
+// HTTP API. The discovery capability remains private to the daemon owner, and
+// stop verifies the serving process identity before delivering SIGTERM.
+// Keeping the historical `localreview daemon --port …` spelling working makes
+// the Go cutover painless while `daemon run|status|stop` is the documented
+// stable interface.
+func daemonCommand(args []string) error {
+	if len(args) == 0 {
+		return runDaemon(nil)
+	}
+	switch args[0] {
+	case "run":
+		return runDaemon(args[1:])
+	case "status":
+		if len(args) != 1 {
+			return errors.New("usage: localreview daemon status")
+		}
+		return daemonStatus(os.Stdout)
+	case "stop":
+		if len(args) != 1 {
+			return errors.New("usage: localreview daemon stop")
+		}
+		return daemonStop()
+	default:
+		// Backwards-compatible flag-only invocation: `localreview daemon
+		// --port 0` is equivalent to `localreview daemon run --port 0`.
+		if strings.HasPrefix(args[0], "-") {
+			return runDaemon(args)
+		}
+		return errors.New("usage: localreview daemon <run|status|stop> [options]")
+	}
+}
+
+type daemonHealth struct {
+	OK      bool   `json:"ok"`
+	PID     int    `json:"pid"`
+	Version string `json:"version"`
+}
+
+func healthFor(d discovery) (daemonHealth, error) {
+	if d.Port < 1 || d.Port > 65535 {
+		return daemonHealth{}, errors.New("invalid localreviewd discovery record")
+	}
+	client := &http.Client{Timeout: 2 * time.Second}
+	response, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/health", d.Port))
+	if err != nil {
+		return daemonHealth{}, fmt.Errorf("localreviewd is not responding on 127.0.0.1:%d: %w", d.Port, err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return daemonHealth{}, fmt.Errorf("localreviewd health check failed: %s", response.Status)
+	}
+	var health daemonHealth
+	if err := json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(&health); err != nil {
+		return daemonHealth{}, fmt.Errorf("decode localreviewd health response: %w", err)
+	}
+	if !health.OK || health.PID <= 0 {
+		return daemonHealth{}, errors.New("localreviewd returned an invalid health response")
+	}
+	return health, nil
+}
+
+func daemonStatus(out io.Writer) error {
+	d, err := discovered()
+	if err != nil {
+		return err
+	}
+	health, err := healthFor(d)
+	if err != nil {
+		return err
+	}
+	if d.PID > 0 && d.PID != health.PID {
+		return fmt.Errorf("refusing stale discovery record: record PID %d does not match serving localreviewd PID %d", d.PID, health.PID)
+	}
+	return json.NewEncoder(out).Encode(map[string]any{
+		"running":   true,
+		"pid":       health.PID,
+		"port":      d.Port,
+		"version":   health.Version,
+		"startedAt": d.CreatedAt,
+	})
+}
+
+func signalDaemon(pid int) error {
+	if pid <= 0 {
+		return errors.New("invalid localreviewd PID")
+	}
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	return process.Signal(syscall.SIGTERM)
+}
+
+func daemonProcessAlive(pid int) bool {
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	err = process.Signal(syscall.Signal(0))
+	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
+func daemonStop() error {
+	d, err := discovered()
+	if err != nil {
+		return err
+	}
+	health, err := healthFor(d)
+	if err != nil {
+		return err
+	}
+	if d.PID <= 0 || d.PID != health.PID {
+		return fmt.Errorf("refusing to stop: discovery PID %d does not match serving localreviewd PID %d", d.PID, health.PID)
+	}
+	if err := signalDaemon(health.PID); err != nil {
+		return fmt.Errorf("stop localreviewd PID %d: %w", health.PID, err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := healthFor(d); err != nil && !daemonProcessAlive(health.PID) {
+			// The discovery record is trusted only after identity verification
+			// above. Removing it here prevents a stale record from blocking a
+			// subsequent daemon start, without ever deleting an arbitrary path.
+			dir, dirErr := dataDir()
+			if dirErr == nil {
+				_ = os.Remove(filepath.Join(dir, "daemon.json"))
+			}
+			fmt.Printf("Stopped localreviewd PID %d.\n", health.PID)
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("localreviewd PID %d did not stop within 5s", health.PID)
 }
 func discovered() (discovery, error) {
 	dir, err := dataDir()
@@ -136,6 +275,15 @@ func printDaemonJSON(method, path string, body any) error {
 	return nil
 }
 
+func configureAuthCapability(capability, clientID, clientSecret string) error {
+	configure := map[string]string{"capability": capability, "clientId": clientID}
+	if clientSecret != "" {
+		configure["clientSecret"] = clientSecret
+	}
+	_, _, err := daemonCall(http.MethodPost, "/github/auth/configure", configure)
+	return err
+}
+
 func authCommand(args []string) error {
 	if len(args) == 0 {
 		return errors.New("usage: localreview auth <login|status|logout> [options]")
@@ -171,15 +319,15 @@ func authCommand(args []string) error {
 			return errors.New("--client-secret-stdin requires --client-id")
 		}
 		if *clientID != "" {
-			configure := map[string]string{"capability": *capability, "clientId": *clientID}
+			secretValue := ""
 			if *clientSecretStdin {
 				secret, err := io.ReadAll(io.LimitReader(os.Stdin, 64<<10))
 				if err != nil {
 					return fmt.Errorf("read OAuth client secret from stdin: %w", err)
 				}
-				configure["clientSecret"] = strings.TrimSpace(string(secret))
+				secretValue = strings.TrimSpace(string(secret))
 			}
-			if _, _, err := daemonCall(http.MethodPost, "/github/auth/configure", configure); err != nil {
+			if err := configureAuthCapability(*capability, *clientID, secretValue); err != nil {
 				return err
 			}
 		}
@@ -235,11 +383,92 @@ func authCommand(args []string) error {
 	}
 }
 
-func remoteCommand(args []string) error {
-	if len(args) == 0 {
-		return errors.New("usage: localreview remote <submit|status> [options]")
+// githubAppCommand preserves the old setup-oriented vocabulary while routing
+// every credential operation through the native auth surface. It never accepts
+// a token, and it keeps a client secret off argv by delegating stdin handling
+// to `auth login`.
+func githubAppCommand(args []string) error {
+	if len(args) == 0 || args[0] == "guide" {
+		if len(args) > 1 {
+			return errors.New("usage: localreview github-app guide")
+		}
+		fmt.Fprintln(os.Stdout, "Create dedicated GitHub OAuth Apps for cmux-localreview capabilities: read, write, and copilot.")
+		fmt.Fprintln(os.Stdout, "Use minimum permissions for each capability. Configure each app with a loopback callback and device flow, then run:")
+		fmt.Fprintln(os.Stdout, "  localreview github-app configure --capability copilot --client-id <client-id>")
+		fmt.Fprintln(os.Stdout, "  localreview github-app connect --capability copilot")
+		fmt.Fprintln(os.Stdout, "Tokens and optional client secrets stay in the OS secret store; they are never printed by this CLI.")
+		return nil
 	}
 	switch args[0] {
+	case "status":
+		if len(args) != 1 {
+			return errors.New("usage: localreview github-app status")
+		}
+		return authCommand([]string{"status"})
+	case "disconnect":
+		flags := flag.NewFlagSet("github-app disconnect", flag.ContinueOnError)
+		capability := flags.String("capability", "", "GitHub App capability: read, write, or copilot")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if flags.NArg() != 0 || *capability == "" {
+			return errors.New("usage: localreview github-app disconnect --capability <read|write|copilot>")
+		}
+		return authCommand([]string{"logout", *capability})
+	case "configure":
+		flags := flag.NewFlagSet("github-app configure", flag.ContinueOnError)
+		capability := flags.String("capability", "", "GitHub App capability: read, write, or copilot")
+		clientID := flags.String("client-id", "", "public GitHub OAuth client ID")
+		clientSecretStdin := flags.Bool("client-secret-stdin", false, "read optional client secret from stdin")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if flags.NArg() != 0 || *capability == "" || *clientID == "" {
+			return errors.New("usage: localreview github-app configure --capability <read|write|copilot> --client-id <id> [--client-secret-stdin]")
+		}
+		secretValue := ""
+		if *clientSecretStdin {
+			secret, err := io.ReadAll(io.LimitReader(os.Stdin, 64<<10))
+			if err != nil {
+				return fmt.Errorf("read OAuth client secret from stdin: %w", err)
+			}
+			secretValue = strings.TrimSpace(string(secret))
+		}
+		if err := configureAuthCapability(*capability, *clientID, secretValue); err != nil {
+			return err
+		}
+		fmt.Printf("Saved %s GitHub App client ID. Run `localreview github-app connect --capability %s`.\n", *capability, *capability)
+		return nil
+	case "connect":
+		flags := flag.NewFlagSet("github-app connect", flag.ContinueOnError)
+		capability := flags.String("capability", "", "GitHub App capability: read, write, or copilot")
+		device := flags.Bool("device", false, "use device flow instead of loopback browser OAuth")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if flags.NArg() != 0 || *capability == "" {
+			return errors.New("usage: localreview github-app connect --capability <read|write|copilot> [--device]")
+		}
+		loginArgs := []string{"login", "--capability", *capability}
+		if *device {
+			loginArgs = append(loginArgs, "--device")
+		}
+		return authCommand(loginArgs)
+	default:
+		return errors.New("usage: localreview github-app <guide|configure|connect|status|disconnect> [options]")
+	}
+}
+
+func remoteCommand(args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: localreview remote <daemon|submit|status> [options]")
+	}
+	switch args[0] {
+	case "daemon":
+		// Run this on the remote host when it is acting as a loopback-only
+		// worker. Federation transport is deliberately not hidden behind this
+		// command: an SSH forward remains an explicit operator action.
+		return daemonCommand(args[1:])
 	case "status":
 		if len(args) != 1 {
 			return errors.New("usage: localreview remote status")
@@ -268,7 +497,7 @@ func remoteCommand(args []string) error {
 		}
 		return printDaemonJSON(http.MethodPost, "/queue", map[string]string{"title": *title, "workspacePath": absolute, "kind": "remote", "remoteUrl": flags.Arg(0)})
 	default:
-		return errors.New("usage: localreview remote <submit|status> [options]")
+		return errors.New("usage: localreview remote <daemon|submit|status> [options]")
 	}
 }
 func submit(args []string) error {
@@ -322,11 +551,13 @@ func submit(args []string) error {
 }
 func reproduce(args []string) error {
 	flags := flag.NewFlagSet("reproduce", flag.ContinueOnError)
+	copilotSetup := flags.Bool("copilot", false, "reproduce a queued snapshot and print SDK-native /ask continuation guidance")
+	jsonOutput := flags.Bool("json", false, "print machine-readable reproduction details")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 2 {
-		return errors.New("usage: localreview reproduce <manifest.json> <empty-destination>")
+		return errors.New("usage: localreview reproduce [--copilot] [--json] <manifest.json-or-queue-id> <empty-destination>")
 	}
 	destination, err := filepath.Abs(flags.Arg(1))
 	if err != nil {
@@ -335,12 +566,63 @@ func reproduce(args []string) error {
 	if entries, err := os.ReadDir(destination); err == nil && len(entries) > 0 {
 		return errors.New("destination must be empty")
 	}
-	manifest, err := snapshot.Materialize(flags.Arg(0), destination)
+	manifestPath := flags.Arg(0)
+	var queueID string
+	var copilotSessionID *string
+	if *copilotSetup {
+		queueID = flags.Arg(0)
+		_, response, err := daemonCall(http.MethodGet, "/queue/"+queueID, nil)
+		if err != nil {
+			return err
+		}
+		var detail struct {
+			Item struct {
+				SnapshotManifestPath *string `json:"snapshotManifestPath"`
+				CopilotSessionID     *string `json:"copilotSessionId"`
+			} `json:"item"`
+		}
+		if err := json.Unmarshal(response, &detail); err != nil {
+			return fmt.Errorf("decode queue reproduction metadata: %w", err)
+		}
+		if detail.Item.SnapshotManifestPath == nil || strings.TrimSpace(*detail.Item.SnapshotManifestPath) == "" {
+			return fmt.Errorf("queue item %s has no retained immutable snapshot", queueID)
+		}
+		manifestPath = *detail.Item.SnapshotManifestPath
+		copilotSessionID = detail.Item.CopilotSessionID
+	}
+	manifest, err := snapshot.Materialize(manifestPath, destination)
 	if err != nil {
 		return err
 	}
+	if *jsonOutput {
+		return json.NewEncoder(os.Stdout).Encode(map[string]any{
+			"snapshotId":       manifest.ID,
+			"cwd":              destination,
+			"queueItemId":      queueID,
+			"copilotSessionId": copilotSessionID,
+			"openReviewer":     "localreview open " + shellQuoteCLI(destination),
+			"notes": []string{
+				"Open the reproduced workspace to start a fresh, SDK-native /ask conversation.",
+				"Historic transcripts remain readable but are never replayed or resumed automatically.",
+			},
+		})
+	}
 	fmt.Printf("Reproduced snapshot %s\ncwd: %s\n", manifest.ID, destination)
+	if *copilotSetup {
+		fmt.Printf("Queue item: %s\n", queueID)
+		if copilotSessionID != nil && strings.TrimSpace(*copilotSessionID) != "" {
+			fmt.Printf("Historic Copilot session ID: %s (reference only; it is not resumed).\n", *copilotSessionID)
+		}
+		fmt.Printf("Start a fresh SDK-native /ask conversation: localreview open %s\n", shellQuoteCLI(destination))
+	}
 	return nil
+}
+
+func shellQuoteCLI(value string) string {
+	if value == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
 // setupCopilot installs only cmux-localreview-managed Copilot instructions and
@@ -439,16 +721,16 @@ func openHome(args []string) error {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: localreview <daemon|open|queue-submit|reproduce|setup|auth|remote> [options]")
+		fmt.Fprintln(os.Stderr, "usage: localreview <daemon|open|submit|queue-submit|reproduce|setup|auth|github-app|remote> [options]")
 		os.Exit(2)
 	}
 	switch os.Args[1] {
 	case "daemon":
-		if err := runDaemon(os.Args[2:]); err != nil {
+		if err := daemonCommand(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "localreview:", err)
 			os.Exit(1)
 		}
-	case "queue-submit":
+	case "submit", "queue-submit":
 		if err := submit(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "localreview:", err)
 			os.Exit(1)
@@ -468,6 +750,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, "localreview:", err)
 			os.Exit(1)
 		}
+	case "github-app":
+		if err := githubAppCommand(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "localreview:", err)
+			os.Exit(1)
+		}
 	case "remote":
 		if err := remoteCommand(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "localreview:", err)
@@ -479,7 +766,7 @@ func main() {
 			os.Exit(1)
 		}
 	default:
-		fmt.Fprintln(os.Stderr, "usage: localreview <daemon|open|queue-submit|reproduce|setup|auth|remote> [options]")
+		fmt.Fprintln(os.Stderr, "usage: localreview <daemon|open|submit|queue-submit|reproduce|setup|auth|github-app|remote> [options]")
 		os.Exit(2)
 	}
 }

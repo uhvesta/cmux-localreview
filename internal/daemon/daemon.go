@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/uhvesta/cmux-localreview/internal/agent"
+	"github.com/uhvesta/cmux-localreview/internal/askruntime"
 	"github.com/uhvesta/cmux-localreview/internal/gitdiff"
 	"github.com/uhvesta/cmux-localreview/internal/githubauth"
 	queueStore "github.com/uhvesta/cmux-localreview/internal/queue"
@@ -42,6 +43,12 @@ type Options struct {
 	DataDir    string
 	UIDir      string
 	GitHubAuth *githubauth.ServiceClient
+	// AskRuntime is an already constructed runtime, primarily for deterministic
+	// embedding/tests. It is never constructed by a read/reload route.
+	AskRuntime *askruntime.Runtime
+	// AskRuntimeFactory builds the official SDK runtime lazily on the first
+	// explicit prompt. It owns the dedicated Copilot credential boundary.
+	AskRuntimeFactory *AskRuntimeFactory
 }
 
 type discovery struct {
@@ -53,21 +60,28 @@ type discovery struct {
 }
 
 type Daemon struct {
-	listener  net.Listener
-	server    *http.Server
-	dataDir   string
-	token     string
-	mu        sync.Mutex
-	sessions  map[string]time.Time
-	db        *sql.DB
-	review    *workspaceReview
-	github    *githubauth.ServiceClient
-	ws        *wshub.Hub
-	watchStop context.CancelFunc
-	watchMu   sync.Mutex
-	watches   map[chan string]struct{}
-	authMu    sync.Mutex
-	authFlows map[githubauth.Capability]*githubauth.LoopbackFlow
+	listener     net.Listener
+	server       *http.Server
+	dataDir      string
+	token        string
+	mu           sync.Mutex
+	sessions     map[string]time.Time
+	db           *sql.DB
+	review       *workspaceReview
+	github       *githubauth.ServiceClient
+	ws           *wshub.Hub
+	watchStop    context.CancelFunc
+	watchMu      sync.Mutex
+	watches      map[chan string]struct{}
+	queueWatchMu sync.Mutex
+	queueWatches map[string]context.CancelFunc
+	authMu       sync.Mutex
+	authFlows    map[githubauth.Capability]*githubauth.LoopbackFlow
+	askMu        sync.Mutex
+	askRuntime   *askruntime.Runtime
+	askClose     func() error
+	askFactory   *AskRuntimeFactory
+	askWatchers  map[string]map[chan askruntime.Delta]struct{}
 }
 
 func browserOpener(rawURL string) error {
@@ -1590,6 +1604,14 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if path == "/queue/watch" && r.Method == http.MethodPost {
+		d.handleQueueWatch(w, r)
+		return
+	}
+	if path == "/queue/hook" && r.Method == http.MethodPost {
+		d.handleQueueHook(w, r)
+		return
+	}
 	if path == "/queue/open-next" && r.Method == http.MethodPost {
 		item, err := queueStore.OpenNext(d.db)
 		if err != nil {
@@ -1858,7 +1880,7 @@ func Start(ctx context.Context, options Options) (*Daemon, error) {
 		}
 		github = githubauth.New(secrets, githubauth.NewFileConfigStore(filepath.Join(dir, "github-apps.json")), http.DefaultClient, browserOpener)
 	}
-	d := &Daemon{listener: listener, dataDir: dir, token: token, sessions: make(map[string]time.Time), watches: make(map[chan string]struct{}), authFlows: make(map[githubauth.Capability]*githubauth.LoopbackFlow), db: db, github: github, ws: wshub.New(wshub.Options{Path: "/ws"})}
+	d := &Daemon{listener: listener, dataDir: dir, token: token, sessions: make(map[string]time.Time), watches: make(map[chan string]struct{}), queueWatches: make(map[string]context.CancelFunc), authFlows: make(map[githubauth.Capability]*githubauth.LoopbackFlow), askRuntime: options.AskRuntime, askFactory: options.AskRuntimeFactory, askWatchers: make(map[string]map[chan askruntime.Delta]struct{}), db: db, github: github, ws: wshub.New(wshub.Options{Path: "/ws"})}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1883,6 +1905,7 @@ func Start(ctx context.Context, options Options) (*Daemon, error) {
 			fmt.Fprintln(os.Stderr, "localreviewd:", err)
 		}
 	}()
+	d.resumeQueueWatchers()
 	go func() { <-ctx.Done(); _ = d.Close() }()
 	return d, nil
 }
@@ -1899,14 +1922,29 @@ func (d *Daemon) Close() error {
 		d.watchStop = nil
 	}
 	d.mu.Unlock()
+	d.stopAllQueueWatchers()
 	d.authMu.Lock()
 	for capability, flow := range d.authFlows {
 		flow.Close()
 		delete(d.authFlows, capability)
 	}
 	d.authMu.Unlock()
+	err := error(nil)
+	d.askMu.Lock()
+	askClose := d.askClose
+	d.askClose = nil
+	d.askRuntime = nil
+	d.askWatchers = make(map[string]map[chan askruntime.Delta]struct{})
+	d.askMu.Unlock()
+	if askClose != nil {
+		if closeErr := askClose(); err == nil {
+			err = closeErr
+		}
+	}
 	d.ws.Close()
-	err := d.server.Shutdown(context.Background())
+	if shutdownErr := d.server.Shutdown(context.Background()); err == nil {
+		err = shutdownErr
+	}
 	if d.db != nil {
 		if closeErr := d.db.Close(); err == nil {
 			err = closeErr

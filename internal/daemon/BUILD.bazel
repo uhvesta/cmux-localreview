@@ -2,7 +2,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "daemon",
-    srcs = ["ask.go", "ask_runtime.go", "comment_imports.go", "daemon.go"],
+    srcs = ["ask.go", "ask_runtime.go", "ask_stream.go", "comment_imports.go", "daemon.go", "queue_watcher.go"],
     importpath = "github.com/uhvesta/cmux-localreview/internal/daemon",
     visibility = ["//visibility:public"],
     deps = [
@@ -13,9 +13,11 @@ go_library(
         "//internal/gitdiff",
         "//internal/githubauth",
         "//internal/queue",
+		"//internal/snapshot",
         "//internal/store",
         "//internal/webassets",
         "//internal/wshub",
+		"@com_github_github_copilot_sdk_go//:go_default_library",
     ],
 )
 

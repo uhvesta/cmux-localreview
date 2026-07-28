@@ -416,6 +416,57 @@ func TestRepoFingerprintChangesWhenModifiedFileContentChanges(t *testing.T) {
 	}
 }
 
+func TestQueueHookAndWatcherHTTPContract(t *testing.T) {
+	workspace := t.TempDir()
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"config", "user.email", "localreview-test@example.invalid"}, {"config", "user.name", "localreview-test"}} {
+		if output, err := exec.Command("git", append([]string{"-C", workspace}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, output)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "review.txt"), []byte("initial\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "review.txt"}, {"commit", "-qm", "initial"}} {
+		if output, err := exec.Command("git", append([]string{"-C", workspace}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, output)
+		}
+	}
+	d, err := Start(context.Background(), Options{DataDir: t.TempDir(), UIDir: filepath.Join(t.TempDir(), "missing-ui")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	call := func(path, payload string) (int, []byte) {
+		req, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d%s", d.Port(), path), strings.NewReader(payload))
+		req.Header.Set("Authorization", "Bearer "+d.token)
+		req.Header.Set("Content-Type", "application/json")
+		res, callErr := http.DefaultClient.Do(req)
+		if callErr != nil {
+			t.Fatal(callErr)
+		}
+		defer res.Body.Close()
+		body, _ := io.ReadAll(res.Body)
+		return res.StatusCode, body
+	}
+	payload := `{"workspacePath":` + strconv.Quote(workspace) + `,"title":"Hook review"}`
+	status, body := call("/api/queue/hook", payload)
+	if status != http.StatusCreated || !strings.Contains(string(body), `"created":true`) || !strings.Contains(string(body), `"snapshotManifest"`) {
+		t.Fatalf("first hook=%d %s", status, body)
+	}
+	status, body = call("/api/queue/hook", payload)
+	if status != http.StatusOK || !strings.Contains(string(body), `"created":false`) {
+		t.Fatalf("duplicate hook=%d %s", status, body)
+	}
+	status, body = call("/api/queue/watch", `{"workspacePath":`+strconv.Quote(workspace)+`,"pollIntervalMs":1}`)
+	if status != http.StatusCreated || !strings.Contains(string(body), `"pollIntervalMs":1000`) {
+		t.Fatalf("enable watch=%d %s", status, body)
+	}
+	status, body = call("/api/queue/watch", `{"workspacePath":`+strconv.Quote(workspace)+`,"enabled":false}`)
+	if status != http.StatusOK || !strings.Contains(string(body), `"enabled":false`) {
+		t.Fatalf("disable watch=%d %s", status, body)
+	}
+}
+
 func TestWorkspaceActivationDiscoversNestedRepositories(t *testing.T) {
 	workspace := t.TempDir()
 	for _, relative := range []string{".", "tools/child"} {

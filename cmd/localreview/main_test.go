@@ -1,6 +1,15 @@
 package main
 
-import "testing"
+import (
+	"bytes"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 func TestAuthAndRemoteCommandUsageIsValidatedBeforeDaemonAccess(t *testing.T) {
 	for _, command := range [][]string{
@@ -16,9 +25,92 @@ func TestAuthAndRemoteCommandUsageIsValidatedBeforeDaemonAccess(t *testing.T) {
 		nil,
 		{"submit"},
 		{"status", "unexpected"},
+		{"daemon", "unknown"},
 	} {
 		if err := remoteCommand(command); err == nil {
 			t.Fatalf("remote command %v unexpectedly succeeded", command)
+		}
+	}
+	for _, command := range [][]string{
+		{"status", "unexpected"},
+		{"stop", "unexpected"},
+		{"unknown"},
+	} {
+		if err := daemonCommand(command); err == nil {
+			t.Fatalf("daemon command %v unexpectedly succeeded", command)
+		}
+	}
+	for _, command := range [][]string{
+		{"guide", "unexpected"},
+		{"configure", "--capability", "copilot"},
+		{"connect"},
+		{"disconnect"},
+		{"unknown"},
+	} {
+		if err := githubAppCommand(command); err == nil {
+			t.Fatalf("github-app command %v unexpectedly succeeded", command)
+		}
+	}
+}
+
+func TestDaemonStatusVerifiesServingDiscoveryIdentity(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/health" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = fmt.Fprint(w, `{"ok":true,"pid":1234,"version":"test"}`)
+	}))
+	defer server.Close()
+
+	data := t.TempDir()
+	t.Setenv("CMUX_LOCALREVIEW_DATA_DIR", data)
+	var port int
+	if _, err := fmt.Sscanf(strings.TrimPrefix(server.URL, "http://127.0.0.1:"), "%d", &port); err != nil {
+		t.Fatal(err)
+	}
+	contents := fmt.Sprintf(`{"port":%d,"token":"private","pid":1234,"version":"test","createdAt":"2026-01-01T00:00:00Z"}`, port)
+	if err := os.WriteFile(filepath.Join(data, "daemon.json"), []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := daemonStatus(&output); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{`"running":true`, `"pid":1234`, `"port":`} {
+		if !strings.Contains(output.String(), expected) {
+			t.Fatalf("status output %q missing %q", output.String(), expected)
+		}
+	}
+}
+
+func TestDaemonStatusRejectsPIDMismatch(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `{"ok":true,"pid":555,"version":"test"}`)
+	}))
+	defer server.Close()
+	data := t.TempDir()
+	t.Setenv("CMUX_LOCALREVIEW_DATA_DIR", data)
+	var port int
+	if _, err := fmt.Sscanf(strings.TrimPrefix(server.URL, "http://127.0.0.1:"), "%d", &port); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(data, "daemon.json"), []byte(fmt.Sprintf(`{"port":%d,"token":"private","pid":444}`, port)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := daemonStatus(&bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("expected stale discovery rejection, got %v", err)
+	}
+}
+
+func TestShellQuoteCLI(t *testing.T) {
+	for input, expected := range map[string]string{
+		"":             "''",
+		"/tmp/a b":     "'/tmp/a b'",
+		"/tmp/it's ok": "'/tmp/it'\\''s ok'",
+	} {
+		if got := shellQuoteCLI(input); got != expected {
+			t.Fatalf("shellQuoteCLI(%q)=%q, want %q", input, got, expected)
 		}
 	}
 }
