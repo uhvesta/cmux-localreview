@@ -56,12 +56,37 @@ export function InlineAskForm({ location, initialPrompt, onInitialPromptSent, on
   const [status, setStatus] = useState<'loading' | 'idle' | 'sending' | 'cancelling' | 'error'>('loading');
   const [activity, setActivity] = useState('Opening the review’s shared Copilot conversation…');
   const [error, setError] = useState<string | null>(null);
+  const [copilotAvailability, setCopilotAvailability] = useState<'checking' | 'ready' | 'unavailable'>('checking');
+  const [copilotRecovery, setCopilotRecovery] = useState<string | null>(null);
   const [convertingId, setConvertingId] = useState<number | null>(null);
   const sentInitialPrompts = useRef(new Set<string>());
   const eventSourceRef = useRef<EventSource | null>(null);
   const abortStreamRef = useRef<(() => void) | null>(null);
   const cancelRequestedRef = useRef(false);
   const sendInFlightRef = useRef(false);
+
+  // Model discovery is a read-only SDK health check.  It deliberately happens
+  // independently of the conversation transcript so opening/reopening an
+  // inline thread can never replay a saved question.  It also gives an
+  // unauthenticated reviewer an actionable explanation before they type a
+  // question into a composer that cannot currently send it.
+  const refreshCopilotAvailability = async () => {
+    setCopilotAvailability('checking');
+    setCopilotRecovery(null);
+    try {
+      const response = await daemonFetch('/api/ask/models');
+      const body = await response.json() as { state?: 'ready' | 'unavailable'; warning?: string };
+      if (!response.ok || body.state !== 'ready') {
+        setCopilotAvailability('unavailable');
+        setCopilotRecovery(body.warning ?? 'Copilot is unavailable. Authenticate the dedicated Copilot OAuth connection, restart the daemon, then try again.');
+        return;
+      }
+      setCopilotAvailability('ready');
+    } catch {
+      setCopilotAvailability('unavailable');
+      setCopilotRecovery('Copilot is unavailable. Check the local daemon connection, then try again.');
+    }
+  };
 
   useEffect(() => {
     let active = true;
@@ -88,9 +113,15 @@ export function InlineAskForm({ location, initialPrompt, onInitialPromptSent, on
     return () => { active = false; abortStreamRef.current?.(); };
   }, [location.filePath, location.side, location.startLine, location.endLine]);
 
+  useEffect(() => { void refreshCopilotAvailability(); }, []);
+
   const send = async (promptOverride?: string) => {
     const text = (promptOverride ?? prompt).trim();
     if (!text || !conversationId || status === 'sending' || status === 'cancelling' || sendInFlightRef.current) return;
+    if (copilotAvailability !== 'ready') {
+      setError(copilotRecovery ?? 'Copilot is still being checked. Try again once the connection is ready.');
+      return;
+    }
     sendInFlightRef.current = true;
     const optimisticUser: AskMessage = { id: -Date.now(), role: 'user', body: text, pending: false, location };
     const optimisticAssistant: AskMessage = { id: -(Date.now() + 1), role: 'assistant', body: '', pending: true, location };
@@ -222,6 +253,7 @@ export function InlineAskForm({ location, initialPrompt, onInitialPromptSent, on
   };
 
   const busy = status === 'sending' || status === 'cancelling';
+  const copilotUnavailable = copilotAvailability === 'unavailable';
   // Assistant rows intentionally have no line anchor in the durable schema:
   // their anchor is the immediately preceding user turn. Preserve that
   // relationship when restoring a page so replies do not vanish after reload.
@@ -245,6 +277,8 @@ export function InlineAskForm({ location, initialPrompt, onInitialPromptSent, on
       <button type="button" onClick={onClose} className="text-xs underline">Close conversation</button>
     </div>
     <p className="mb-3 text-xs text-github-text-muted">This inline view shows this code location. Copilot keeps questions from every inline /ask and the side chat in one long-lived review session. This private chat never becomes review feedback unless you explicitly convert an answer.</p>
+    {copilotAvailability === 'checking' && <div role="status" aria-live="polite" className="mb-2 flex items-center gap-2 rounded border border-blue-500/30 bg-blue-950/20 px-2 py-1.5 text-xs text-blue-100"><span aria-hidden="true" className="inline-block h-2 w-2 animate-pulse rounded-full bg-blue-300" />Checking whether Copilot is ready…</div>}
+    {copilotUnavailable && <div role="status" aria-live="polite" className="mb-2 rounded border border-amber-500/40 bg-amber-950/20 p-2 text-xs text-amber-100"><div>{copilotRecovery}</div><button type="button" onClick={() => void refreshCopilotAvailability()} className="mt-1 underline">Try Copilot again</button><span className="ml-2 text-github-text-muted">No question has been sent.</span></div>}
     {error && <div role="alert" className="mb-2 rounded border border-red-500/40 bg-red-950/20 p-2 text-xs text-red-200"><span>{error}</span>{retryPrompt && <button type="button" onClick={() => void send(retryPrompt)} disabled={busy} className="ml-2 underline disabled:opacity-50">Retry last question</button>}</div>}
     {(status === 'loading' || busy || status === 'error') && <div role="status" aria-live="polite" className="mb-2 flex items-center gap-2 rounded border border-blue-500/30 bg-blue-950/20 px-2 py-1.5 text-xs text-blue-100"><span aria-hidden="true" className={busy || status === 'loading' ? 'inline-block h-2 w-2 animate-pulse rounded-full bg-blue-300' : 'inline-block h-2 w-2 rounded-full bg-red-300'} />{activity}</div>}
     <div className="max-h-72 space-y-2 overflow-y-auto" aria-live="polite" aria-relevant="additions text">
@@ -260,7 +294,7 @@ export function InlineAskForm({ location, initialPrompt, onInitialPromptSent, on
       })}
     </div>
     <label className="mt-3 block text-xs font-medium text-github-text-primary" htmlFor={`inline-ask-${conversationId ?? 'loading'}`}>Reply to Copilot</label>
-    <textarea id={`inline-ask-${conversationId ?? 'loading'}`} value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') void send(); }} disabled={status === 'loading' || busy} placeholder="Ask a follow-up — Copilot has the full review conversation…" rows={2} className="mt-1 w-full rounded border border-github-border bg-github-bg-secondary p-2 text-xs" />
-    <div className="mt-2 flex items-center gap-2"><span className="text-[10px] text-github-text-muted">⌘/Ctrl + Enter to send</span><div className="ml-auto flex gap-2">{busy && <button type="button" onClick={() => void cancel()} className="rounded border border-github-border px-2 py-1 text-xs">{status === 'cancelling' ? 'Stopping…' : 'Stop response'}</button>}<button type="button" onClick={() => void send()} disabled={!prompt.trim() || status === 'loading' || busy} className="rounded border border-blue-400 bg-blue-950/30 px-2 py-1 text-xs text-blue-100 disabled:opacity-50">{busy ? 'Copilot is replying…' : 'Send reply'}</button></div></div>
+    <textarea id={`inline-ask-${conversationId ?? 'loading'}`} value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') void send(); }} disabled={status === 'loading' || busy || copilotUnavailable} placeholder={copilotUnavailable ? 'Connect Copilot to ask a question…' : 'Ask a follow-up — Copilot has the full review conversation…'} rows={2} className="mt-1 w-full rounded border border-github-border bg-github-bg-secondary p-2 text-xs" />
+    <div className="mt-2 flex items-center gap-2"><span className="text-[10px] text-github-text-muted">⌘/Ctrl + Enter to send</span><div className="ml-auto flex gap-2">{busy && <button type="button" onClick={() => void cancel()} className="rounded border border-github-border px-2 py-1 text-xs">{status === 'cancelling' ? 'Stopping…' : 'Stop response'}</button>}<button type="button" onClick={() => void send()} disabled={!prompt.trim() || status === 'loading' || busy || copilotAvailability !== 'ready'} className="rounded border border-blue-400 bg-blue-950/30 px-2 py-1 text-xs text-blue-100 disabled:opacity-50">{busy ? 'Copilot is replying…' : 'Send reply'}</button></div></div>
   </section>;
 }
