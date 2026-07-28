@@ -830,3 +830,43 @@ Not yet claimed:
   live Copilot SDK streaming/model switching/`/btw`, remote Queue Home tunnel
   UI, authenticated Electron click-through, Phase-4 legacy deletion, and a
   tagged release remain required.
+
+## 2026-07-28 — Persisted structured Copilot review plans
+
+Done:
+
+- Added an explicitly invoked, read-only Copilot review-plan operation for an
+  immutable diff. Its contract requires exactly one JSON object that assigns
+  every hunk exactly once to ranks `1..N`, with a rationale and optional
+  hunk-linked questions. Invalid output, Markdown wrappers, trailing prose,
+  and a second JSON document are rejected rather than partially applied.
+- Plans are durable records keyed by review session, repository, model,
+  settings, and diff fingerprint. Loading a review, switching between File
+  order and Copilot order, reopening a saved plan, and moving between hunks
+  are read-only; only the explicit Generate/Recompute action can create a
+  Copilot turn.
+- Made the alternate representation unambiguous in the reviewer: Copilot
+  order is enabled only for a complete, current saved plan, and Previous/Next
+  follows the validated Copilot ranks rather than canonical file order. A
+  stale or invalid plan immediately falls back to File order locally.
+- Added visible Copilot model availability/recovery state. When discovery is
+  unavailable, plan generation is disabled and states that no diff or prompt
+  was sent. Plan questions open the existing private `/ask` conversation and
+  never become formal review feedback automatically.
+
+Validated:
+
+- `go test ./internal/daemon -run 'Hunk|ReviewPlan' -count=1`
+- `bazel test //internal/daemon:daemon_test --test_output=errors`
+- `cd vendor/difit && bunx vitest run src/client/components/ReviewPlanPanel.test.tsx src/client/App.test.tsx`
+- `cd vendor/difit && bunx tsc --project tsconfig.json --noEmit`
+- `go build ./... && go test ./...`
+- Frozen-corpus, Go-parity, native-runtime-boundary, and release-archive
+  verification scripts.
+
+Not yet claimed:
+
+- A real authenticated Copilot plan generation remains part of the required
+  clean-profile Phase-3 passes. The persisted/recovery behavior above is
+  covered without treating a fixture or an unauthenticated error state as a
+  substitute for it.
