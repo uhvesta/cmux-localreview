@@ -11,6 +11,7 @@
     "localreview-reproduce": "./src/localreview-reproduce.ts",
     "localreview-reproduce-copilot": "./src/localreview-reproduce-copilot.ts",
     "localreview-open": "./src/localreview-open.ts",
+    "localreview-start": "./src/localreview-start.ts",
     "localreview-demo": "./src/localreview-demo.ts",
     "localreview-setup": "./src/localreview-setup.ts",
     "localreview-github-app": "./src/localreview-github-app.ts",

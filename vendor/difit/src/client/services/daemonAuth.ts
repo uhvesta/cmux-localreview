@@ -76,7 +76,10 @@ async function exchangeBrowserSession(): Promise<void> {
 }
 
 async function ensureBrowserSession(): Promise<void> {
-  if (!pendingDaemonCapability) return;
+  // A normal CLI launch supplies a one-time bootstrap code. Manual recovery
+  // supplies the owner capability, which is first converted to such a code.
+  // Both must trigger the same exchange before protected Queue Home calls.
+  if (!pendingBootstrapCode && !pendingDaemonCapability) return;
   if (!browserSessionExchange) browserSessionExchange = exchangeBrowserSession().finally(() => { browserSessionExchange = undefined; });
   await browserSessionExchange;
 }

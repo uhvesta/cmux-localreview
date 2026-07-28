@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { Command } from "commander";
 import open from "open";
 
-import { connectDaemon } from "./daemonClient.ts";
+import { connectDaemon, type DaemonClient } from "./daemonClient.ts";
 
 interface OpenWorkspaceResponse {
   workspacePath: string;
@@ -15,7 +15,8 @@ interface OpenReadOnlyPullRequestResponse extends OpenWorkspaceResponse {
   pullRequest: { url: string; number: number; title: string; headSha: string; baseSha: string };
 }
 
-async function browserUrl(daemon: Awaited<ReturnType<typeof connectDaemon>>, path: string): Promise<string> {
+/** Create the short-lived browser handoff URL without exposing the daemon token. */
+export async function browserUrl(daemon: DaemonClient, path: string): Promise<string> {
   const grant = await daemon.request<{ bootstrapCode: string }>("/api/browser/grant", { method: "POST" });
   const url = new URL(path, `${daemon.baseUrl}/`);
   // This is a one-time, 60-second bootstrap code—not the daemon discovery
@@ -92,7 +93,9 @@ async function main(): Promise<void> {
   await program.parseAsync(process.argv);
 }
 
-main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-});
+if (import.meta.main) {
+  main().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  });
+}

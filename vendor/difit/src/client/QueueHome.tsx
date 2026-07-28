@@ -47,9 +47,10 @@ interface GitHubCapabilityStatus {
   error?: string;
   loginState: 'idle' | 'waiting' | 'succeeded' | 'failed';
   message?: string;
+  source?: 'github-app' | 'gh-cli';
 }
 interface GitHubAuthStatus {
-  provider: 'github-app-device-flow';
+  provider: 'github-app-device-flow' | 'gh-cli' | 'mixed' | 'unavailable';
   capabilities: Record<GitHubCapability, GitHubCapabilityStatus>;
 }
 
@@ -326,18 +327,18 @@ export function QueueHome() {
       <input value={daemonToken} onChange={(event) => setDaemonToken(event.target.value)} type="password" autoComplete="off" aria-label="Daemon bearer token" placeholder="Daemon token" style={{ flex: 1, minWidth: 180, padding: '7px 8px', borderRadius: 5, border: '1px solid rgba(127,127,127,0.45)', background: 'transparent', color: 'inherit' }} />
       <button type="submit" disabled={!daemonToken.trim()} style={buttonStyle}>Connect</button>
     </form>}
-    {githubAuth && <section aria-label="GitHub App connections" style={{ margin: '0 0 18px', padding: 12, border: '1px solid rgba(127,127,127,0.42)', borderRadius: 8 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}><div><strong>GitHub App connections</strong><p style={{ margin: '4px 0 0', fontSize: 12, opacity: 0.74 }}>Separate, least-privilege App grants. Tokens stay in this daemon’s system secret store; the browser receives only a device code.</p></div><button onClick={() => void refreshGitHubAuth()} disabled={githubAuthLoading} style={buttonStyle}>{githubAuthLoading ? 'Checking…' : 'Refresh status'}</button></div>
+    {githubAuth && <section aria-label="GitHub credentials" style={{ margin: '0 0 18px', padding: 12, border: '1px solid rgba(127,127,127,0.42)', borderRadius: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}><div><strong>GitHub credentials</strong><p style={{ margin: '4px 0 0', fontSize: 12, opacity: 0.74 }}>By default this daemon uses your authenticated local <code>gh</code> CLI credential only in memory. You may configure dedicated GitHub Apps as least-privilege overrides.</p></div><button onClick={() => void refreshGitHubAuth()} disabled={githubAuthLoading} style={buttonStyle}>{githubAuthLoading ? 'Checking…' : 'Refresh status'}</button></div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(225px, 1fr))', gap: 9, marginTop: 10 }}>
         {(Object.keys(capabilityLabels) as GitHubCapability[]).map((capability) => {
           const status = githubAuth.capabilities[capability];
           const waiting = status.loginState === 'waiting';
           return <article key={capability} style={{ border: '1px solid rgba(127,127,127,0.3)', padding: 10, borderRadius: 6 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 7 }}><strong style={{ fontSize: 13 }}>{capabilityLabels[capability].title}</strong><span style={{ fontSize: 11, color: status.authenticated ? '#2ea043' : status.configured ? '#d29922' : '#8b949e' }}>{status.authenticated ? `Connected${status.login ? ` @${status.login}` : ''}` : status.configured ? (waiting ? 'Waiting…' : 'Not connected') : 'Not configured'}</span></div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 7 }}><strong style={{ fontSize: 13 }}>{capabilityLabels[capability].title}</strong><span style={{ fontSize: 11, color: status.authenticated ? '#2ea043' : status.configured ? '#d29922' : '#8b949e' }}>{status.authenticated ? `${status.source === 'gh-cli' ? 'Using gh' : 'Connected'}${status.login ? ` @${status.login}` : ''}` : status.configured ? (waiting ? 'Waiting…' : 'Not connected') : 'Not configured'}</span></div>
             <p style={{ margin: '5px 0 9px', fontSize: 11, opacity: 0.7 }}>{status.message ?? status.error ?? capabilityLabels[capability].description}</p>
             <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
               {status.configured && !status.authenticated && <button onClick={() => void startGitHubAuth(capability)} disabled={githubAction !== null} style={{ ...buttonStyle, borderColor: '#2ea043' }}>{githubAction === capability ? 'Opening…' : waiting ? 'Restart device flow' : 'Connect'}</button>}
-              {status.authenticated && <button onClick={() => void disconnectGitHubApp(capability)} disabled={githubAction !== null} style={buttonStyle}>{githubAction === capability ? 'Disconnecting…' : 'Disconnect'}</button>}
+              {status.authenticated && status.source !== 'gh-cli' && <button onClick={() => void disconnectGitHubApp(capability)} disabled={githubAction !== null} style={buttonStyle}>{githubAction === capability ? 'Disconnecting…' : 'Disconnect'}</button>}
             </div>
           </article>;
         })}

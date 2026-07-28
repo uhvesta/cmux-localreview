@@ -363,9 +363,9 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
     agentId?: string; agentProvider?: string; copilotSessionId?: string; feedbackTarget?: string; provenance?: unknown;
     acpHost?: string; acpPort?: number; acpSessionId?: string; agentKind?: string;
   }) => {
-    // A remote checkout is never allowed to borrow credentials from `gh`, a
-    // Git credential helper, or the browser.  The read-only GitHub App owns
-    // both PR resolution and the short-lived HTTP header used by git.
+    // The daemon resolves remote PRs with its local GitHub credential: the
+    // authenticated `gh` CLI by default, or an optional read App override.
+    // The browser never receives that credential or the resulting Git header.
     const readToken = await githubAuth.token("read");
     const pr = await resolveRemotePullRequest(input.remoteUrl, readToken);
     const remoteWorkspace = await prepareRemoteWorkspace(pr, readToken);
@@ -431,9 +431,9 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
       resolveTerminalAgent: (agentId, rootPath) => resolveTerminalTarget(db, agentId, rootPath),
       onTerminalDeliverySuccess: (agentId) => markAgentDelivered(db, agentId),
       onTerminalDeliveryFailure: (agentId, error) => markAgentDeliveryFailed(db, agentId, error),
-      // `/ask` is deliberately a fresh Copilot SDK session, authenticated by
-      // the capability-specific App token. It does not inherit Copilot CLI,
-      // `gh`, environment, or browser credentials.
+      // `/ask` is deliberately a fresh Copilot SDK session. It is given one
+      // explicit daemon credential (the local `gh` token by default, or an
+      // optional Copilot App override), and never browser/session credentials.
       copilotToken: () => githubAuth.token("copilot"),
       queueItemId,
       queueDb: queueItemId ? db : undefined,

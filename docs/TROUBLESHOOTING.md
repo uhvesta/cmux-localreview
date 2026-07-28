@@ -63,7 +63,7 @@ bun src/localreview-github-app.ts status
 
 | Symptom | Cause | Recovery |
 | --- | --- | --- |
-| `The read GitHub App is not connected` | PR read App is not connected | Configure/connect **PR read** in Queue Home or with `localreview-github-app connect --capability read`. |
+| `No GitHub credential is available` | The daemon cannot read the local GitHub CLI login and no optional App override is connected | Run `gh auth login --hostname github.com` as the daemon user, then refresh. Or configure/connect **PR read** with `localreview-github-app connect --capability read`. |
 | PR cannot resolve | Wrong URL, missing App installation, or inaccessible repository | Verify canonical URL and install the PR read App on that repository. |
 | Review is stale | PR head changed after opening | Refresh remote PRs, reopen, then publish. |
 | Inline comment rejected | Anchor is outdated/unsupported | Refresh and correct the anchor; the publish App never silently redirects a review. |

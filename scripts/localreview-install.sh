@@ -80,6 +80,7 @@ else
     queue-submit:src/queue-submit.ts \
     localreview-submit:src/queue-submit.ts \
     localreview-open:src/localreview-open.ts \
+    localreview-start:src/localreview-start.ts \
     localreview-demo:src/localreview-demo.ts \
     localreview-setup:src/localreview-setup.ts \
     localreview-github-app:src/localreview-github-app.ts \

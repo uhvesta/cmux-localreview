@@ -21,14 +21,32 @@ copilot --version
 ssh -V
 ```
 
-`/ask` uses the installed Copilot CLI runtime but does **not** use its stored
-login. cmux-localreview passes an explicit daemon-owned GitHub App token with
-all other SDK credential sources disabled. On macOS this requires Keychain;
-on Linux install a libsecret provider that exposes `secret-tool`.
+`/ask` uses the installed Copilot CLI runtime but creates a fresh SDK
+conversation. The daemon obtains an explicit credential from the local,
+already-authenticated `gh` CLI for the request and disables other SDK
+credential sources. The `gh` credential is never persisted or sent to the
+browser. Optional dedicated GitHub Apps can override it per capability; those
+App tokens use Keychain on macOS or a `secret-tool` libsecret provider on
+Linux.
 cmux is optional: without it, snapshots, GitHub PRs, and `/ask` still work,
 but cmux provenance and terminal `/btw` routing do not.
 
-## Create and connect the GitHub Apps
+## Authenticate GitHub (default: `gh`)
+
+On the local reviewer host, authenticate GitHub CLI once. The daemon will use
+this credential for PR resolution, explicit publication, and fresh `/ask`
+sessions without copying it into its own storage:
+
+```sh
+gh auth login --hostname github.com
+localreview-github-app status
+```
+
+`status` reports `gh-cli` and the GitHub login but never prints a token. If the
+CLI is unauthenticated, Queue Home explains how to repair it; no browser token
+field is required.
+
+## Optional: create and connect dedicated GitHub Apps
 
 Create three GitHub Apps (personal or organization-owned), enable **Device
 Flow** on each, and retain their public Client IDs. The CLI prints the exact
@@ -55,9 +73,10 @@ bun src/localreview-github-app.ts connect --capability read
 bun src/localreview-github-app.ts status
 ```
 
-`connect` opens GitHub’s device-flow page and waits locally. It stores tokens
-only under the `cmux-localreview.github-app` system-secret service. It never
-uses `gh`, a PAT, environment token, or Copilot CLI credential fallback.
+`connect` opens GitHub’s device-flow page and waits locally. It stores only the
+optional App tokens under the `cmux-localreview.github-app` system-secret
+service. A configured and connected App overrides the corresponding `gh`
+capability; otherwise the local `gh` credential remains the default.
 The browser never stores a GitHub token. Its one-time loopback daemon
 capability is exchanged for an `HttpOnly; SameSite=Strict` cookie instead of
 localStorage, sessionStorage, IndexedDB, or a readable cookie.
@@ -111,6 +130,11 @@ exchanges that code for an HttpOnly loopback session and removes it from the
 URL; the daemon bearer token stays in the owner-only discovery file.
 
 ```sh
+# One command for a first-time local review: install managed Copilot skills,
+# start the daemon, capture a snapshot, and open the exact queued item.
+bun src/localreview-start.ts /absolute/path/to/project --setup-copilot --submit \
+  --title 'Review parser change'
+
 # Global home: local and federated queues
 bun src/localreview-open.ts --home
 

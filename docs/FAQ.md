@@ -173,7 +173,9 @@ managed remote review.
 
 ### Copilot models show unauthenticated or unavailable
 
-In Queue Home, configure and connect the dedicated **Copilot /ask** GitHub App,
+Run `gh auth login --hostname github.com` on the machine that runs the daemon.
+Queue Home uses that credential in memory by default. You may instead configure
+and connect the optional dedicated **Copilot /ask** GitHub App,
 then retry model selection. The daemon passes that App token explicitly to the
 SDK and disables stored Copilot CLI, `gh`, and environment authentication.
 Confirm Copilot CLI is installed and on `PATH` (or set `COPILOT_CLI_PATH` for
@@ -182,7 +184,8 @@ session.
 
 ### GitHub PR submission fails
 
-Connect the **PR read** GitHub App, confirm it is installed on the repository,
+Confirm `gh auth status --hostname github.com` succeeds (or connect the optional
+**PR read** GitHub App), then confirm it is installed on the repository,
 then submit or refresh again. Connect **PR publish** only before publishing a
 formal review. The queue UI should show its remote error/cache state instead
 of hiding it.

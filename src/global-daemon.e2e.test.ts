@@ -37,16 +37,16 @@ afterEach(() => {
 });
 
 describe("global daemon authenticated queue lifecycle", () => {
-  test("exposes only dedicated GitHub App capability setup, never a token or gh fallback", async () => {
+  test("reports unavailable GitHub credentials without exposing a token", async () => {
     const root = temporaryRoot();
     const previousDataDir = process.env.CMUX_LOCALREVIEW_DATA_DIR;
     process.env.CMUX_LOCALREVIEW_DATA_DIR = join(root, "daemon-data");
-    const auth = new GitHubAuthService(memorySecretStore(), fetch, async () => undefined, join(root, "github-apps.json"));
+    const auth = new GitHubAuthService(memorySecretStore(), fetch, async () => undefined, join(root, "github-apps.json"), async () => undefined);
     const daemon = await startGlobalDaemon({ token: "github-app-e2e", githubAuthService: auth });
     const authed = (path: string, init: RequestInit = {}) => fetch(`http://127.0.0.1:${daemon.discovery.port}${path}`, { ...init, headers: { authorization: "Bearer github-app-e2e", ...(init.headers ?? {}) } });
     try {
       const initial = await (await authed("/api/github/auth/status")).json() as { provider: string; capabilities: { read: { configured: boolean } } };
-      expect(initial.provider).toBe("github-app-device-flow");
+      expect(initial.provider).toBe("unavailable");
       expect(initial.capabilities.read.configured).toBe(false);
       const grant = await authed("/api/browser/grant", { method: "POST" });
       expect(grant.status).toBe(201);
@@ -66,9 +66,10 @@ describe("global daemon authenticated queue lifecycle", () => {
       const configured = await authed("/api/github/auth/configure", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ capability: "read", clientId: "Iv1.fixtureRead" }) });
       expect(configured.status).toBe(204);
       const statusText = await (await authed("/api/github/auth/status")).text();
-      expect(statusText).toContain("github-app-device-flow");
+      expect(statusText).toContain("unavailable");
       expect(statusText).not.toContain("access_token");
-      expect(statusText).not.toContain("gh auth");
+      expect(statusText).toContain("gh auth login");
+      expect(statusText).not.toContain("Token:");
     } finally {
       await daemon.close();
       if (previousDataDir === undefined) delete process.env.CMUX_LOCALREVIEW_DATA_DIR;

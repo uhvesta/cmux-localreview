@@ -29,6 +29,7 @@ function capability(value: string): GitHubCapability {
 }
 
 function guide(): void {
+  console.log("`gh` is the local default. Run `gh auth login --hostname github.com` unless you need these optional least-privilege overrides.\n");
   console.log("Create three dedicated GitHub Apps at https://github.com/settings/apps/new (or your organization’s GitHub App settings).\n");
   for (const key of capabilities) {
     const item = appGuide[key];
@@ -41,7 +42,7 @@ async function waitForAuthorization(service: GitHubAuthService, selected: GitHub
   const start = await service.start(selected);
   console.log(`Open ${start.verificationUri} and enter ${start.userCode}. Waiting for GitHub authorization…`);
   for (;;) {
-    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    await new Promise((resolve) => setTimeout(resolve, 5_000));
     const state = await service.poll(selected);
     if (state.authenticated) { console.log(`Connected ${selected} as @${state.login ?? "GitHub user"}.`); return; }
     if (state.loginState === "failed") throw new Error(state.message ?? state.error ?? "GitHub App authorization failed.");
@@ -50,8 +51,8 @@ async function waitForAuthorization(service: GitHubAuthService, selected: GitHub
 
 export async function main(argv = process.argv): Promise<void> {
   const program = new Command();
-  program.name("localreview-github-app").description("Configure dedicated GitHub App device-flow capabilities for cmux-localreview");
-  program.command("guide").description("Print the three least-privilege GitHub App registrations to create").action(guide);
+  program.name("localreview-github-app").description("Inspect local gh authentication or configure optional GitHub App device-flow overrides");
+  program.command("guide").description("Print optional least-privilege GitHub App registrations").action(guide);
   program.command("configure").requiredOption("--capability <read|write|copilot>").requiredOption("--client-id <id>").description("Save a public GitHub App client ID").action(async (options: { capability: string; clientId: string }) => {
     const selected = capability(options.capability);
     await new GitHubAuthService().configure(selected, options.clientId);

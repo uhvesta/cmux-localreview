@@ -35,7 +35,14 @@ reviewer must make that conversion deliberately.
 1. Start at **Queue Home** rather than opening a workspace reviewer by
    default. It shows local and remote items and makes selecting a reviewer an
    explicit action.
-2. Open Queue Home through the CLI, not by guessing a daemon URL:
+2. Confirm the local GitHub CLI identity once. The daemon uses it only in
+   memory for GitHub requests; do not collect, print, or pass its token:
+
+   ```sh
+   gh auth status --hostname github.com
+   localreview-github-app status
+   ```
+3. Open Queue Home through the CLI, not by guessing a daemon URL:
 
    ```sh
    bun src/localreview-open.ts --home
@@ -45,7 +52,7 @@ reviewer must make that conversion deliberately.
    short-lived browser bootstrap code in the URL fragment. It is consumed for
    an HttpOnly loopback session and removed immediately; do not paste that URL
    into tickets, logs, or chat.
-3. Treat absolute paths, snapshot IDs, branch/base/head SHAs, and queue IDs as
+4. Treat absolute paths, snapshot IDs, branch/base/head SHAs, and queue IDs as
    provenance. Preserve them in handoffs; do not replace them with a vague
    label such as “workspace root.”
 
@@ -99,9 +106,9 @@ new Git source fingerprint; it does not mutate the old snapshot.
 bun src/queue-submit.ts /path/to/repository --watch --poll-interval 5000
 ```
 
-To queue a GitHub PR, submit its URL after connecting the dedicated **PR
-read** GitHub App capability. The daemon manages the mirror/worktree cache;
-it never falls back to `gh`, a PAT, or a Copilot CLI login.
+To queue a GitHub PR, submit its URL after confirming `gh auth status`. The
+daemon manages the mirror/worktree cache and uses the local `gh` credential
+only in memory. A connected optional **PR read** GitHub App overrides it.
 
 ```sh
 bun src/queue-submit.ts https://github.com/OWNER/REPOSITORY/pull/123
