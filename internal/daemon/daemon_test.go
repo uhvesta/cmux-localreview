@@ -331,4 +331,59 @@ func TestWorkspaceActivationDiscoversNestedRepositories(t *testing.T) {
 	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "initial") {
 		t.Fatalf("revisions status=%d body=%s", response.StatusCode, body)
 	}
+	commentPayload := `{"threads":[{"id":"comment-1","filePath":"review.txt","position":{"side":"new","line":1},"messages":[{"id":"message-1","body":"Please clarify"}],"codeSnapshot":{"content":"first"}}]}`
+	req, _ = http.NewRequest(http.MethodPost, base+"/api/repos/"+childID+"/api/comments", strings.NewReader(commentPayload))
+	req.Header.Set("Authorization", "Bearer "+discovered.Token)
+	req.Header.Set("Content-Type", "application/json")
+	response, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("comment write status=%d body=%s", response.StatusCode, body)
+	}
+	req, _ = http.NewRequest(http.MethodGet, base+"/api/repos/"+childID+"/api/comments-json", nil)
+	req.Header.Set("Authorization", "Bearer "+discovered.Token)
+	response, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "Please clarify") {
+		t.Fatalf("comment read status=%d body=%s", response.StatusCode, body)
+	}
+	req, _ = http.NewRequest(http.MethodDelete, base+"/api/repos/"+childID+"/api/comments/comment-1", nil)
+	req.Header.Set("Authorization", "Bearer "+discovered.Token)
+	response, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("comment delete status=%d body=%s", response.StatusCode, body)
+	}
+	// Replaying the stale save must not resurrect the explicitly resolved thread.
+	req, _ = http.NewRequest(http.MethodPost, base+"/api/repos/"+childID+"/api/comments", strings.NewReader(commentPayload))
+	req.Header.Set("Authorization", "Bearer "+discovered.Token)
+	req.Header.Set("Content-Type", "application/json")
+	response, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	req, _ = http.NewRequest(http.MethodGet, base+"/api/repos/"+childID+"/api/comments-json", nil)
+	req.Header.Set("Authorization", "Bearer "+discovered.Token)
+	response, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || strings.Contains(string(body), "Please clarify") {
+		t.Fatalf("tombstone read status=%d body=%s", response.StatusCode, body)
+	}
 }
