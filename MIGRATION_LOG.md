@@ -555,6 +555,38 @@ Not yet claimed:
   Actions still has to install/smoke the matching archive on each OS, and the
   tagged GitHub Release remains an exit-condition gate.
 
+## 2026-07-28 — Second isolated packaged Electron local-review pass
+
+Validated with a newly rebuilt, signed macOS package copied to a unique test
+application path, a new Electron user-data profile, a new daemon data
+directory, and a disposable Git repository. No normal desktop profile, queue,
+or credential was used:
+
+- Checked the package's embedded renderer before launch: it contained the
+  current self-hosted OAuth/PKCE copy and not the retired client-secret copy.
+  `bash scripts/verify-electron-package.sh <unpacked-app>` passed against the
+  same newly built package (sidecar lifecycle idle RSS: 21,344 KB).
+- Clicked through Queue Home local submission with a stable topic, observed
+  the queued card and its absolute source path, then opened the workspace.
+  The reviewer showed the real one-file split diff from the captured immutable
+  snapshot rather than an empty/error state.
+- Added a formal inline comment on the changed line and confirmed the inline
+  thread/prompt action appeared. Quit the isolated Electron app through its
+  UI; its child sidecar stopped. Relaunched against the same disposable
+  profile/data directory and confirmed the queue item's active-review state,
+  diff, and saved inline comment persisted without being resent or duplicated.
+- Opened Review controls and completed the item. The active queued count fell
+  to zero while the item remained visibly completed with decision history and
+  a requeue action.
+
+Not yet claimed:
+
+- This is the second independent **credential-free local Electron** pass, not
+  either of the two complete Phase-3 passes. It does not replace authenticated
+  `/ask` streaming/model switching, real GitHub publishing, browser-loopback
+  OAuth, remote SSH transport, or the required fresh full browser + Electron
+  runs.
+
 ## 2026-07-28 — Frozen WebSocket diff-invalidation replay
 
 Done:
