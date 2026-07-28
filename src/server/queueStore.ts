@@ -214,6 +214,17 @@ export function openNext(db: Database): QueueItem | undefined {
   return getQueueItem(db, row.id);
 }
 
+/** Claim one explicit queue item for review without silently selecting another. */
+export function openQueueItem(db: Database, id: string): QueueItem | undefined {
+  const item = getQueueItem(db, id);
+  if (!item || item.removedAt) return undefined;
+  if (item.status === "queued") {
+    db.query(`UPDATE queue_items SET status='in_review', updated_at=? WHERE id=?`).run(Date.now(), id);
+    return getQueueItem(db, id);
+  }
+  return item.status === "in_review" ? item : undefined;
+}
+
 /** Return the same immutable snapshot to the end of the actionable queue. */
 export function requeueQueueItem(db: Database, id: string): QueueItem | undefined {
   const item = getQueueItem(db, id);

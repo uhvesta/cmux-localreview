@@ -215,14 +215,15 @@ export function QueueHome() {
   const openWorkspace = useCallback(async (item: QueueItem) => {
     setOpening(true); setError(null);
     try {
-      const response = await daemonFetch('/api/workspaces/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workspacePath: item.workspacePath }) });
+      const response = await daemonFetch(`/api/queue/${encodeURIComponent(item.id)}/open`, { method: 'POST' });
       if (!response.ok) { const body = (await response.json().catch(() => null)) as { error?: string } | null; throw new Error(body?.error ?? 'Could not open this workspace.'); }
-      window.location.assign('/review');
+      const body = await response.json() as { reviewUrl?: string };
+      window.location.assign(body.reviewUrl ?? `/review?queueItem=${encodeURIComponent(item.id)}`);
     } catch (err) { setError(err instanceof Error ? err.message : 'Could not open this workspace.'); setOpening(false); }
   }, []);
   const openNext = useCallback(async () => {
     setOpening(true); setError(null);
-    try { const response = await daemonFetch('/api/queue/open-next', { method: 'POST' }); if (!response.ok) throw new Error('There are no queued reviews to open.'); window.location.assign('/review'); }
+    try { const response = await daemonFetch('/api/queue/open-next', { method: 'POST' }); if (!response.ok) throw new Error('There are no queued reviews to open.'); const body = await response.json() as { reviewUrl?: string }; window.location.assign(body.reviewUrl ?? '/review'); }
     catch (err) { setError(err instanceof Error ? err.message : 'Could not open the next review.'); setOpening(false); }
   }, []);
 

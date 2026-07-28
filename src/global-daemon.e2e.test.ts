@@ -58,6 +58,7 @@ describe("global daemon authenticated queue lifecycle", () => {
       // A browser session authorizes Queue Home without re-sending the daemon
       // master capability, exactly as a real HttpOnly cookie would.
       expect((await fetch(`http://127.0.0.1:${daemon.discovery.port}/api/github/auth/status`, { headers: { cookie: cookieHeader } })).status).toBe(200);
+      expect((await fetch(`http://127.0.0.1:${daemon.discovery.port}/api/queue/open-next`, { method: "POST", headers: { cookie: cookieHeader, origin: "http://attacker.invalid", "sec-fetch-site": "cross-site" } })).status).toBe(403);
       const configured = await authed("/api/github/auth/configure", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ capability: "read", clientId: "Iv1.fixtureRead" }) });
       expect(configured.status).toBe(204);
       const statusText = await (await authed("/api/github/auth/status")).text();
@@ -113,6 +114,18 @@ describe("global daemon authenticated queue lifecycle", () => {
       expect(created.item.provenance).toEqual({ fixture: true, cmux: { surfaceId: "surface-fixture" } });
       expect(created.item.reviewTopic).toBe("parser-boundaries");
       expect(created.item.identityKey).toBe(`local:${workspace}:parser-boundaries`);
+
+      const secondResponse = await authed("/api/queue", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ workspacePath: workspace, title: "Second stream", topic: "separate-topic" }),
+      });
+      const second = await secondResponse.json() as { item: { id: string } };
+      const openedSpecific = await authed(`/api/queue/${second.item.id}/open`, { method: "POST" });
+      expect(openedSpecific.status).toBe(200);
+      expect(await openedSpecific.json()).toMatchObject({ item: { id: second.item.id, status: "in_review" }, reviewUrl: `/review?queueItem=${second.item.id}` });
+      const afterSpecificOpen = await (await authed("/api/queue?history=true")).json() as { items: { id: string; status: string }[] };
+      expect(afterSpecificOpen.items.find((item) => item.id === created.item.id)?.status).toBe("queued");
+      expect(afterSpecificOpen.items.find((item) => item.id === second.item.id)?.status).toBe("in_review");
 
       const queued = await (await authed("/api/queue")).json() as { items: { id: string; status: string }[] };
       expect(queued.items.some((item) => item.id === created.item.id && item.status === "queued")).toBe(true);

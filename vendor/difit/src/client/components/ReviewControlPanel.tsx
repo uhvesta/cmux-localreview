@@ -118,6 +118,7 @@ function acpLabel(item: QueueItem) {
 }
 
 export function ReviewControlPanel({ collapsed, onToggleCollapsed, refreshNonce }: ReviewControlPanelProps) {
+  const boundQueueItemId = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('queueItem');
   const [tab, setTab] = useState<PanelTab>('queue');
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -147,10 +148,12 @@ export function ReviewControlPanel({ collapsed, onToggleCollapsed, refreshNonce 
       const items = Array.isArray(queueData.items) ? queueData.items : [];
       setQueue(items);
       setAgents(Array.isArray(agentData.agents) ? agentData.agents : []);
-      setSelectedId((current) => current && items.some((item) => item.id === current) ? current : items[0]?.id ?? null);
+      setSelectedId((current) => boundQueueItemId && items.some((item) => item.id === boundQueueItemId)
+        ? boundQueueItemId
+        : current && items.some((item) => item.id === current) ? current : items[0]?.id ?? null);
     } catch (err) { setError(err instanceof Error ? err.message : 'Failed to load review controls.'); }
     finally { setLoading(false); }
-  }, []);
+  }, [boundQueueItemId]);
 
   const selected = useMemo(() => queue.find((item) => item.id === selectedId) ?? null, [queue, selectedId]);
 
@@ -280,7 +283,7 @@ export function ReviewControlPanel({ collapsed, onToggleCollapsed, refreshNonce 
           </div>
           {queue.length === 0 && <span style={{ fontSize: 12, opacity: 0.65 }}>No queue items yet. Submit a local snapshot or a remote PR URL from Queue Home.</span>}
           <div style={{ maxHeight: 180, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 5 }} aria-label="Queue items">
-            {queue.map((item) => <button key={item.id} onClick={() => setSelectedId(item.id)} style={{ ...cardStyle, textAlign: 'left', background: item.id === selectedId ? 'rgba(88,166,255,0.12)' : 'transparent', color: 'inherit', cursor: 'pointer' }}>
+            {queue.map((item) => <button key={item.id} onClick={() => { if (!boundQueueItemId) setSelectedId(item.id); }} disabled={Boolean(boundQueueItemId && item.id !== boundQueueItemId)} style={{ ...cardStyle, textAlign: 'left', background: item.id === selectedId ? 'rgba(88,166,255,0.12)' : 'transparent', color: 'inherit', cursor: boundQueueItemId && item.id !== boundQueueItemId ? 'not-allowed' : 'pointer', opacity: boundQueueItemId && item.id !== boundQueueItemId ? 0.5 : 1 }}>
               <strong>{item.title}</strong> <span style={{ color: '#58a6ff', marginLeft: 6 }}>{item.status.replace('_', ' ')}</span>
               <div style={{ ...muted, marginTop: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.kind === 'remote' ? item.remoteUrl : item.workspacePath}</div>
             </button>)}

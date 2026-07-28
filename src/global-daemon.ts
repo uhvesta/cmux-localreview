@@ -9,7 +9,7 @@ import express, { type Express, type Request, type Response } from "express";
 import { openDb } from "./server/db.ts";
 import { daemonDbPath, ensureDaemonDirectories, localreviewDataDir, newDaemonToken, writeDiscovery } from "./server/daemonPaths.ts";
 import { createWorkspaceSnapshot } from "./server/snapshots.ts";
-import { addFeedback, decideQueueItem, decisionHistoryForItem, enqueue, feedbackForItem, getQueueItem, listQueue, markFeedbackDelivered, openNext, refreshRemoteQueue, removeQueueItem, requeueQueueItem, reorderQueue, updateAcpState, type QueueFeedback, type QueueStatus } from "./server/queueStore.ts";
+import { addFeedback, decideQueueItem, decisionHistoryForItem, enqueue, feedbackForItem, getQueueItem, listQueue, markFeedbackDelivered, openNext, openQueueItem, refreshRemoteQueue, removeQueueItem, requeueQueueItem, reorderQueue, updateAcpState, type QueueFeedback, type QueueStatus } from "./server/queueStore.ts";
 import { buildWorkspaceApp, type WorkspaceApp } from "./server/app.ts";
 import { WsHub } from "./server/wsHub.ts";
 import { exportReviewPackage, materializeReviewPackage } from "./server/reviewPackage.ts";
@@ -33,6 +33,7 @@ const VERSION = "0.2.0";
 
 interface ActiveReview {
   rootPath: string;
+  queueItemId?: string;
   defaultTerminalAgentId?: string;
   workspace: WorkspaceApp;
   stop: () => Promise<void>;
@@ -79,6 +80,16 @@ function requireAuth(token: string, browserSessions: Map<string, number>) {
     if (expiresAt && expiresAt <= Date.now()) browserSessions.delete(browserSession!);
     const hasBrowserSession = Boolean(expiresAt && expiresAt > Date.now());
     if (header !== `Bearer ${token}` && !hasBrowserSession) { res.status(401).json({ error: "A local browser session or daemon capability is required" }); return; }
+    // SameSite is a site boundary, not an origin boundary (ports are not part
+    // of the site). Browser-cookie mutations must originate from this exact
+    // loopback origin; CLI/master-token requests intentionally bypass this.
+    if (header !== `Bearer ${token}` && hasBrowserSession && !["GET", "HEAD", "OPTIONS"].includes(req.method)) {
+      const expectedOrigin = `http://${req.headers.host}`;
+      if (req.header("origin") !== expectedOrigin || req.header("sec-fetch-site") === "cross-site" || req.header("sec-fetch-site") === "same-site") {
+        res.status(403).json({ error: "Browser mutations must originate from this daemon's exact loopback origin" });
+        return;
+      }
+    }
     next();
   };
 }
@@ -377,8 +388,8 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
     };
   };
 
-  const activate = async (workspacePath: string, base?: string, defaultTerminalAgentId?: string) => {
-    if (active?.rootPath === workspacePath) return active;
+  const activate = async (workspacePath: string, base?: string, defaultTerminalAgentId?: string, queueItemId?: string) => {
+    if (active?.rootPath === workspacePath && active.queueItemId === queueItemId) return active;
     if (active) await active.stop();
     // Keep review-local state next to the daemon database. In particular this
     // makes an isolated CMUX_LOCALREVIEW_DATA_DIR a complete isolation
@@ -405,7 +416,7 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
       const managed = workspace.startBtw(startedHub, "claude");
       cleanupBtw = () => { managed.btwManager.disposeAll(); managed.terminalBtw.stop(); };
     }
-    active = { rootPath: workspacePath, defaultTerminalAgentId, workspace, stop: async () => { cleanupBtw?.(); await workspace.stopAsk(); await workspace.stopWatchers(); workspaceDb.close(); } };
+    active = { rootPath: workspacePath, queueItemId, defaultTerminalAgentId, workspace, stop: async () => { cleanupBtw?.(); await workspace.stopAsk(); await workspace.stopWatchers(); workspaceDb.close(); } };
     return active;
   };
 
@@ -434,6 +445,16 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
       // a reviewer into whichever workspace happened to be active.
       res.json({ workspacePath: rootPath, repos: review.workspace.repos.map((repo) => ({ id: repo.repoId, path: repo.repo.workspaceRelativePath })), reviewUrl: "/review" });
     } catch (error) { res.status(400).json({ error: String(error) }); }
+  });
+
+  /** Open a specific queue item; never infer the target from a workspace path. */
+  api.post("/queue/:id/open", async (req, res) => {
+    const item = openQueueItem(db, req.params.id);
+    if (!item) { res.status(409).json({ error: "Only an active queued or in-review item can be opened." }); return; }
+    try {
+      const review = await activate(item.workspacePath, item.baseRef ?? undefined, item.agentId ?? undefined, item.id);
+      res.json({ item, workspacePath: item.workspacePath, repos: review.workspace.repos.map((repo) => ({ id: repo.repoId, path: repo.repo.workspaceRelativePath })), reviewUrl: `/review?queueItem=${encodeURIComponent(item.id)}` });
+    } catch (error) { res.status(500).json({ error: String(error), item }); }
   });
 
   // No daemon credential reaches the browser, and this endpoint is usable
@@ -535,7 +556,7 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
   api.post("/queue/open-next", async (_req, res) => {
     const item = openNext(db);
     if (!item) { res.status(404).json({ error: "No queued review items" }); return; }
-    try { await activate(item.workspacePath, item.baseRef ?? undefined, item.agentId ?? undefined); res.json({ item, reviewUrl: "/review" }); } catch (error) { res.status(500).json({ error: String(error), item }); }
+    try { await activate(item.workspacePath, item.baseRef ?? undefined, item.agentId ?? undefined, item.id); res.json({ item, reviewUrl: `/review?queueItem=${encodeURIComponent(item.id)}` }); } catch (error) { res.status(500).json({ error: String(error), item }); }
   });
   api.post("/queue/:id/reorder", (req, res) => { const item = reorderQueue(db, req.params.id, Number(req.body?.position)); item ? res.json({ item }) : res.status(404).json({ error: "Unknown queue item" }); });
   api.post("/queue/:id/requeue", (req, res) => {
