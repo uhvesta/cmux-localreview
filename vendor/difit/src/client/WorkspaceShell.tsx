@@ -47,6 +47,16 @@ interface RepoSummary {
   files: string[];
 }
 
+interface HistoricalReviewComment {
+  reviewSessionId: number;
+  reviewLabel: string | null;
+  workspaceRelativePath: string;
+  filePath: string;
+  position: { side: 'old' | 'new'; line: number | { start: number; end: number } };
+  messages: { body: string }[];
+  orphaned?: boolean;
+}
+
 interface WorkspaceSummary {
   workspaceRoot: string;
   repos: RepoSummary[];
@@ -208,6 +218,26 @@ export function WorkspaceShell() {
   }, [selectedRepoId]);
 
   const [newReviewStatus, setNewReviewStatus] = useState<'idle' | 'starting' | 'error'>('idle');
+  const [showPreviousComments, setShowPreviousComments] = useState(false);
+  const [previousComments, setPreviousComments] = useState<HistoricalReviewComment[]>([]);
+  const [previousCommentsStatus, setPreviousCommentsStatus] = useState<'idle' | 'loading' | 'error'>('idle');
+  const loadPreviousComments = useCallback(async () => {
+    setPreviousCommentsStatus('loading');
+    try {
+      const response = await fetch('/api/review-history/comments');
+      if (!response.ok) throw new Error('Could not load previous review comments.');
+      const data = await response.json() as { comments?: HistoricalReviewComment[] };
+      setPreviousComments(Array.isArray(data.comments) ? data.comments : []);
+      setPreviousCommentsStatus('idle');
+    } catch {
+      setPreviousCommentsStatus('error');
+    }
+  }, []);
+  const togglePreviousComments = useCallback(() => {
+    const next = !showPreviousComments;
+    setShowPreviousComments(next);
+    if (next) void loadPreviousComments();
+  }, [loadPreviousComments, showPreviousComments]);
   const startNewReview = useCallback(async () => {
     if (!window.confirm('Start a new review? Existing comments stay saved under the previous session.')) {
       return;
@@ -218,6 +248,8 @@ export function WorkspaceShell() {
       if (!res.ok) throw new Error(`Failed to start a new session: ${res.status}`);
       setReloadNonce((n) => n + 1);
       setBtwRefreshNonce((n) => n + 1);
+      setShowPreviousComments(false);
+      window.dispatchEvent(new CustomEvent('cmux-localreview:review-round-started'));
       setNewReviewStatus('idle');
     } catch (err) {
       console.error('Failed to start new review:', err);
@@ -461,6 +493,35 @@ export function WorkspaceShell() {
               </button>
               {newReviewStatus === 'error' && (
                 <div style={{ fontSize: 11, color: '#c0392b' }}>Failed to start new review.</div>
+              )}
+              <button
+                onClick={togglePreviousComments}
+                style={{
+                  fontSize: 12,
+                  padding: '6px 8px',
+                  cursor: 'pointer',
+                  border: '1px solid rgba(127,127,127,0.4)',
+                  borderRadius: 4,
+                  background: 'transparent',
+                  color: 'inherit',
+                }}
+              >
+                {showPreviousComments ? 'Hide previous comments' : 'Show previous comments'}
+              </button>
+              {showPreviousComments && (
+                <section aria-label="Previous review comments" style={{ display: 'grid', gap: 6, maxHeight: 250, overflowY: 'auto', fontSize: 11, border: '1px solid rgba(127,127,127,0.28)', borderRadius: 4, padding: 7 }}>
+                  <strong style={{ color: '#b6c2cf' }}>Previous review comments · outdated and read-only</strong>
+                  {previousCommentsStatus === 'loading' && <span>Loading previous comments…</span>}
+                  {previousCommentsStatus === 'error' && <span style={{ color: '#e5534b' }}>Could not load history. <button onClick={() => void loadPreviousComments()} style={{ marginLeft: 5, fontSize: 11, padding: '2px 5px', cursor: 'pointer' }}>Retry</button></span>}
+                  {previousCommentsStatus === 'idle' && previousComments.length === 0 && <span>No previous review comments are saved.</span>}
+                  {previousComments.map((comment) => {
+                    const line = typeof comment.position.line === 'number' ? comment.position.line : `${comment.position.line.start}-${comment.position.line.end}`;
+                    return <article key={`${comment.reviewSessionId}:${comment.workspaceRelativePath}:${comment.filePath}:${line}`} style={{ borderTop: '1px solid rgba(127,127,127,0.22)', paddingTop: 5 }}>
+                      <div style={{ opacity: 0.7 }}>Review {comment.reviewSessionId}{comment.reviewLabel ? ` · ${comment.reviewLabel}` : ''} · {comment.workspaceRelativePath}/{comment.filePath}:L{line}{comment.orphaned ? ' · outdated anchor' : ''}</div>
+                      {comment.messages.map((message, index) => <div key={index} style={{ marginTop: 3, whiteSpace: 'pre-wrap' }}>{message.body}</div>)}
+                    </article>;
+                  })}
+                </section>
               )}
               <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.7, marginTop: 6 }}>EXPORT REVIEW</div>
               <button

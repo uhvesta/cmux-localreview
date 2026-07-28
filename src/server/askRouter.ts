@@ -6,10 +6,13 @@ import express, { type Response, type Router } from "express";
 
 import {
   createAskConversation,
+  archiveActiveAskConversations,
+  getActiveAskConversation,
   getAskConversation,
   insertAskMessage,
   listAskConversations,
   listAskMessages,
+  resumeAskConversation,
   updateAskConversation,
   updateAskMessage,
 } from "./askStore.ts";
@@ -29,6 +32,10 @@ type ActiveAsk = { session: CopilotSession; model: string | null; sending: boole
 export interface AskRouterOptions {
   db: Database;
   workspaceRoot: string;
+  /** The review round currently open in the workspace reviewer. */
+  getReviewSessionId?: () => number;
+  /** Maps the mounted diff application's public repo id to its actual root. */
+  repoRoots?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -37,11 +44,20 @@ export interface AskRouterOptions {
  * conversation repeats its anchor on follow-up turns so the model never has
  * to infer what "this" refers to from an earlier answer.
  */
-export function formatAskPrompt(workspaceRoot: string, question: string, location?: AskLocation): string {
+export function formatAskPrompt(
+  workspaceRoot: string,
+  question: string,
+  location?: AskLocation,
+  repoRoots?: ReadonlyMap<string, string>,
+): string {
   if (!location?.filePath) return question;
-  const candidatePath = resolve(workspaceRoot, location.filePath);
-  const candidateRelative = relative(workspaceRoot, candidatePath);
-  const withinWorkspace = candidateRelative === "" || (!candidateRelative.startsWith("..") && !candidateRelative.includes(`${process.platform === "win32" ? "\\\\" : "/"}..`));
+  const repositoryRoot = location.repoId ? repoRoots?.get(location.repoId) : undefined;
+  const root = resolve(repositoryRoot ?? workspaceRoot);
+  const candidatePath = resolve(root, location.filePath);
+  const candidateRelative = relative(root, candidatePath);
+  const workspaceRelative = relative(workspaceRoot, candidatePath);
+  const withinRoot = candidateRelative === "" || (!candidateRelative.startsWith("..") && !candidateRelative.includes(`${process.platform === "win32" ? "\\\\" : "/"}..`));
+  const withinWorkspace = workspaceRelative === "" || (!workspaceRelative.startsWith("..") && !workspaceRelative.includes(`${process.platform === "win32" ? "\\\\" : "/"}..`));
   const lineRange = location.startLine
     ? location.endLine && location.endLine !== location.startLine
       ? `L${location.startLine}-L${location.endLine}`
@@ -50,8 +66,11 @@ export function formatAskPrompt(workspaceRoot: string, question: string, locatio
   return [
     "This is an inline code-review question. Treat the following location as authoritative context; answer the question without making edits.",
     `Workspace root: ${workspaceRoot}`,
-    `Repository: ${location.repoId ?? "current workspace repository"}`,
-    `File: ${withinWorkspace ? candidatePath : location.filePath}`,
+    `Repository id: ${location.repoId ?? "current workspace repository"}`,
+    `Repository root: ${repositoryRoot ?? workspaceRoot}`,
+    `File (repository-relative): ${location.filePath}`,
+    `File (workspace-relative): ${withinWorkspace ? workspaceRelative || "." : location.filePath}`,
+    `File (absolute): ${withinRoot && withinWorkspace ? candidatePath : "unresolved — do not read outside this workspace"}`,
     `Side: ${location.side ?? "current"}`,
     `Lines: ${lineRange}`,
     location.selectedCode ? `Selected code:\n\`\`\`\n${location.selectedCode}\n\`\`\`` : "",
@@ -71,8 +90,12 @@ export class AskService {
   private readonly realWorkspaceRoot: string;
   private readonly client: CopilotClient;
   private readonly active = new Map<string, ActiveAsk>();
+  // The browser receives SSE `started` before a cold Copilot runtime has
+  // necessarily created its session. Remember an immediate Stop so it wins
+  // once initialization completes instead of misleadingly returning false.
+  private readonly pendingAborts = new Set<string>();
 
-  constructor(private readonly db: Database, workspaceRoot: string) {
+  constructor(private readonly db: Database, workspaceRoot: string, private readonly repoRoots?: ReadonlyMap<string, string>) {
     this.workspaceRoot = resolve(workspaceRoot);
     this.realWorkspaceRoot = realpathSync(this.workspaceRoot);
     this.client = new CopilotClient({
@@ -103,12 +126,16 @@ export class AskService {
       await session.disconnect().catch(() => undefined);
     }
     this.active.clear();
+    this.pendingAborts.clear();
     await this.client.stop();
   }
 
   async abort(conversationId: string): Promise<boolean> {
     const active = this.active.get(conversationId);
-    if (!active?.sending) return false;
+    if (!active?.sending) {
+      this.pendingAborts.add(conversationId);
+      return true;
+    }
     await active.session.abort();
     return true;
   }
@@ -171,6 +198,16 @@ export class AskService {
     const conversation = getAskConversation(this.db, conversationId);
     if (!conversation) throw new Error("Unknown /ask conversation");
     const active = await this.sessionFor(conversationId);
+    if (this.pendingAborts.delete(conversationId)) {
+      const assistant = insertAskMessage(this.db, {
+        conversationId,
+        role: "assistant",
+        body: "",
+        pending: false,
+        location,
+      });
+      return { messageId: assistant.id, content: "", aborted: true };
+    }
     if (active.sending) throw new Error("This /ask conversation is already responding");
     const assistant = insertAskMessage(this.db, {
       conversationId,
@@ -196,7 +233,7 @@ export class AskService {
 
     try {
       const final = await active.session.sendAndWait({
-        prompt: formatAskPrompt(this.realWorkspaceRoot, prompt, location ?? conversation.context ?? undefined),
+        prompt: formatAskPrompt(this.realWorkspaceRoot, prompt, location ?? conversation.context ?? undefined, this.repoRoots),
       });
       if (final?.data.content) content = final.data.content;
       return { messageId: assistant.id, content, aborted };
@@ -280,6 +317,24 @@ function askLocation(value: unknown): AskLocation | undefined {
   return Object.values(location).some((part) => part !== undefined) ? location : undefined;
 }
 
+function locationError(workspaceRoot: string, repoRoots: ReadonlyMap<string, string> | undefined, location?: AskLocation): string | undefined {
+  if (!location?.filePath) return undefined;
+  const repositoryRoot = location.repoId ? repoRoots?.get(location.repoId) : undefined;
+  if (location.repoId && !repositoryRoot) return "Unknown repository for this inline /ask location";
+  const root = resolve(repositoryRoot ?? workspaceRoot);
+  const absolutePath = resolve(root, location.filePath);
+  const workspaceRelative = relative(workspaceRoot, absolutePath);
+  const repositoryRelative = relative(root, absolutePath);
+  const within = (value: string) => value === "" || (!value.startsWith("..") && !value.includes(`${process.platform === "win32" ? "\\\\" : "/"}..`));
+  return within(workspaceRelative) && within(repositoryRelative)
+    ? undefined
+    : "Inline /ask file path must remain inside its repository and workspace";
+}
+
+function isHistoricalConversation(conversation: ReturnType<typeof getAskConversation>, activeReviewSessionId: number): boolean {
+  return Boolean(conversation && (conversation.archivedAt !== null || (conversation.reviewSessionId !== null && conversation.reviewSessionId !== activeReviewSessionId)));
+}
+
 function writeSse(res: Response, event: string, data: unknown): void {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
@@ -287,7 +342,8 @@ function writeSse(res: Response, event: string, data: unknown): void {
 export function createAskRouter(options: AskRouterOptions): { router: Router; askService: AskService } {
   const router = express.Router();
   router.use(express.json({ limit: "1mb" }));
-  const askService = new AskService(options.db, options.workspaceRoot);
+  const askService = new AskService(options.db, options.workspaceRoot, options.repoRoots);
+  const reviewSessionId = () => options.getReviewSessionId?.() ?? 0;
 
   router.get("/api/ask/models", async (_req, res) => {
     try {
@@ -299,7 +355,16 @@ export function createAskRouter(options: AskRouterOptions): { router: Router; as
 
   router.get("/api/ask/conversations", (req, res) => {
     const queueItemId = bodyString(req.query.queueItemId);
-    res.json({ conversations: listAskConversations(options.db, queueItemId) });
+    const includeHistory = req.query.history === "1" || req.query.history === "true";
+    const activeReviewSessionId = reviewSessionId();
+    res.json({
+      activeReviewSessionId,
+      conversations: listAskConversations(options.db, {
+        queueItemId,
+        reviewSessionId: includeHistory || !activeReviewSessionId ? undefined : activeReviewSessionId,
+        includeArchived: includeHistory,
+      }),
+    });
   });
 
   router.get("/api/ask/question-sets", (_req, res) => {
@@ -365,6 +430,11 @@ export function createAskRouter(options: AskRouterOptions): { router: Router; as
     const tier = contextTier(req.body?.contextTier);
     const queueItemId = bodyString(req.body?.queueItemId);
     const context = askLocation(req.body?.context);
+    const invalidLocation = locationError(options.workspaceRoot, options.repoRoots, context);
+    if (invalidLocation) {
+      res.status(400).json({ error: invalidLocation });
+      return;
+    }
     try {
       if (model) {
         const available = await askService.listModels();
@@ -374,7 +444,7 @@ export function createAskRouter(options: AskRouterOptions): { router: Router; as
           return;
         }
       }
-      res.status(201).json({ conversation: createAskConversation(options.db, { model, reasoningEffort: effort, contextTier: tier, queueItemId, context }) });
+      res.status(201).json({ conversation: createAskConversation(options.db, { model, reasoningEffort: effort, contextTier: tier, queueItemId, context, reviewSessionId: reviewSessionId() || undefined }) });
     } catch (error) {
       res.status(503).json({ error: `Unable to initialize Copilot: ${String(error)}` });
     }
@@ -390,7 +460,15 @@ export function createAskRouter(options: AskRouterOptions): { router: Router; as
       res.status(400).json({ error: "An inline /ask conversation needs filePath and startLine" });
       return;
     }
-    const existing = listAskConversations(options.db).find((conversation) => !conversation.context?.filePath);
+    const invalidLocation = locationError(options.workspaceRoot, options.repoRoots, context);
+    if (invalidLocation) {
+      res.status(400).json({ error: invalidLocation });
+      return;
+    }
+    const activeReviewSessionId = reviewSessionId();
+    const existing = activeReviewSessionId
+      ? getActiveAskConversation(options.db, activeReviewSessionId)
+      : listAskConversations(options.db).find((conversation) => !conversation.context?.filePath);
     if (existing) {
       res.json({ conversation: existing, reused: true, shared: true });
       return;
@@ -404,7 +482,7 @@ export function createAskRouter(options: AskRouterOptions): { router: Router; as
           return;
         }
       }
-      res.status(201).json({ conversation: createAskConversation(options.db, { model }), reused: false, shared: true });
+      res.status(201).json({ conversation: createAskConversation(options.db, { model, reviewSessionId: activeReviewSessionId || undefined }), reused: false, shared: true });
     } catch (error) {
       res.status(503).json({ error: `Unable to initialize Copilot: ${String(error)}` });
     }
@@ -419,10 +497,52 @@ export function createAskRouter(options: AskRouterOptions): { router: Router; as
     res.json({ conversation, messages: listAskMessages(options.db, conversation.id) });
   });
 
+  // Starts a clean Copilot context for this review round. The previous
+  // transcript remains durable and browsable, but is no longer the target of
+  // new inline /ask comments.
+  router.post("/api/ask/conversations/fresh", async (req, res) => {
+    const model = bodyString(req.body?.model);
+    const effort = reasoningEffort(req.body?.reasoningEffort);
+    const tier = contextTier(req.body?.contextTier);
+    const activeReviewSessionId = reviewSessionId();
+    try {
+      if (model) {
+        const models = await askService.listModels();
+        const validation = validateModelSettings(models, model, effort);
+        if (validation) { res.status(400).json({ error: validation }); return; }
+      }
+      if (activeReviewSessionId) archiveActiveAskConversations(options.db, activeReviewSessionId);
+      res.status(201).json({
+        conversation: createAskConversation(options.db, {
+          model,
+          reasoningEffort: effort,
+          contextTier: tier,
+          reviewSessionId: activeReviewSessionId || undefined,
+        }),
+      });
+    } catch (error) {
+      res.status(503).json({ error: `Unable to initialize Copilot: ${String(error)}` });
+    }
+  });
+
+  router.post("/api/ask/conversations/:id/resume", (req, res) => {
+    const conversation = getAskConversation(options.db, req.params.id);
+    if (!conversation) { res.status(404).json({ error: "Unknown /ask conversation" }); return; }
+    if (conversation.reviewSessionId !== reviewSessionId()) {
+      res.status(409).json({ error: "This Ask session belongs to a previous review round. It remains read-only history." });
+      return;
+    }
+    res.json({ conversation: resumeAskConversation(options.db, conversation.id) });
+  });
+
   router.post("/api/ask/conversations/:id/model", async (req, res) => {
     const model = bodyString(req.body?.model);
     if (!model) {
       res.status(400).json({ error: "model is required" });
+      return;
+    }
+    if (isHistoricalConversation(getAskConversation(options.db, req.params.id), reviewSessionId())) {
+      res.status(409).json({ error: "This Ask session is historical and read-only." });
       return;
     }
     try {
@@ -444,6 +564,10 @@ export function createAskRouter(options: AskRouterOptions): { router: Router; as
     const model = bodyString(req.body?.model) ?? conversation?.model ?? "auto";
     if (!conversation) {
       res.status(404).json({ error: "Unknown /ask conversation" });
+      return;
+    }
+    if (isHistoricalConversation(conversation, reviewSessionId())) {
+      res.status(409).json({ error: "This Ask session is historical and read-only." });
       return;
     }
     const effort = Object.hasOwn(req.body ?? {}, "reasoningEffort")
@@ -480,6 +604,15 @@ export function createAskRouter(options: AskRouterOptions): { router: Router; as
     const location = askLocation(req.body?.location);
     if (!conversation) {
       res.status(404).json({ error: "Unknown /ask conversation" });
+      return;
+    }
+    if (isHistoricalConversation(conversation, reviewSessionId())) {
+      res.status(409).json({ error: "This Ask session is historical. Start a fresh session or resume it before asking again." });
+      return;
+    }
+    const invalidLocation = locationError(options.workspaceRoot, options.repoRoots, location);
+    if (invalidLocation) {
+      res.status(400).json({ error: invalidLocation });
       return;
     }
     if (!prompt) {
@@ -527,6 +660,10 @@ export function createAskRouter(options: AskRouterOptions): { router: Router; as
     }
     if (!conversation) {
       res.status(404).json({ error: "Unknown /ask conversation" });
+      return;
+    }
+    if (isHistoricalConversation(conversation, reviewSessionId())) {
+      res.status(409).json({ error: "This Ask session is historical. Start a fresh session or resume it before asking again." });
       return;
     }
     const questions = questionSet.questions.map((question) => question.body);

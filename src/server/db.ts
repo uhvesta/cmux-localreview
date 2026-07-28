@@ -369,6 +369,17 @@ const MIGRATIONS: Migration[] = [
       db.run(`ALTER TABLE ask_conversations ADD COLUMN context_tier TEXT`);
     },
   },
+  {
+    // `/ask` follows review rounds too. New Review creates a new active
+    // formal session, so its Copilot research must start clean while the
+    // previous round remains available as historical context.
+    version: 16,
+    up: (db) => {
+      db.run(`ALTER TABLE ask_conversations ADD COLUMN review_session_id INTEGER REFERENCES sessions(id)`);
+      db.run(`ALTER TABLE ask_conversations ADD COLUMN archived_at INTEGER`);
+      db.run(`CREATE INDEX idx_ask_conversations_session_state ON ask_conversations(review_session_id, archived_at, updated_at DESC)`);
+    },
+  },
 ];
 
 export function runMigrations(db: Database): void {

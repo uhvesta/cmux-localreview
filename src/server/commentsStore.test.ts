@@ -12,6 +12,7 @@ import {
   startNewSession,
   freezeActiveSession,
   listSessions,
+  listHistoricalReviewThreads,
   type DiffCommentThread,
 } from "./commentsStore.ts";
 
@@ -211,6 +212,21 @@ describe("sessions", () => {
 
     expect(listThreads(db, first, repoId)).toHaveLength(1);
     expect(listThreads(db, second, repoId)).toHaveLength(0);
+  });
+
+  test("previous review comments are separately available as read-only history", () => {
+    const db = makeDb();
+    const repoId = upsertRepoRow(db, fakeRepo);
+    const first = getActiveSessionId(db);
+    upsertThread(db, first, repoId, makeThread());
+    const second = startNewSession(db, "current review");
+
+    expect(listHistoricalReviewThreads(db, second)).toMatchObject([{
+      reviewSessionId: first,
+      workspaceRelativePath: "repo-a",
+      filePath: "a.txt",
+      messages: [{ body: "please fix this" }],
+    }]);
   });
 
   test("freezeActiveSession is idempotent (no active session left to freeze twice)", () => {

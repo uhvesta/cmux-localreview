@@ -62,6 +62,20 @@ from. It installs these project-local Copilot CLI skills under
 | `/localreview-feedback` | Keep formal feedback separate from `/ask`; copy it or deliver it through the retained ACP session. |
 | `/localreview-reproduce` | Materialize a saved snapshot and start a fresh Copilot ACP setup when a prior session is no longer live. |
 
+## Persistent inline Copilot `/ask`
+
+Inline `/ask` sends Copilot the workspace root, selected repository root,
+repository-relative/workspace-relative/absolute file paths, diff side, exact
+line or range, and highlighted source text. Every inline question in the
+active review round uses one retained Copilot SDK session. The inline card and
+**Open full /ask chat** show the same saved conversation, including questions
+asked on other files.
+
+Use **Start fresh** in `/ask` for a clean context while retaining the old one
+under **Show previous Ask sessions**. Starting **New Review** creates a new
+formal and Ask round; previous Ask sessions and review comments are hidden by
+default but remain available as read-only, explicitly outdated history.
+
 The setup command defaults to this checkout's `bun src/queue-submit.ts` entry
 so it works immediately without a global package install. Set
 `--command localreview-submit` after installing the package's executable (for

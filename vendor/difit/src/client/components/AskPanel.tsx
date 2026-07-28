@@ -14,7 +14,7 @@ interface AskModel {
   defaultReasoningEffort?: ReasoningEffort;
 }
 interface AskMessage { id: string; role: 'user' | 'assistant' | 'system'; body: string; pending: boolean; createdAt: number; location?: { filePath?: string; startLine?: number } | null; }
-interface AskConversation { id: string; model?: string | null; reasoningEffort?: ReasoningEffort | null; contextTier?: ContextTier | null; context?: { filePath?: string } | null; updatedAt?: number; }
+interface AskConversation { id: string; model?: string | null; reasoningEffort?: ReasoningEffort | null; contextTier?: ContextTier | null; context?: { filePath?: string } | null; reviewSessionId?: number | null; archivedAt?: number | null; updatedAt?: number; }
 interface QuestionSet { id: string; name: string; questions: { body: string }[]; }
 
 interface AskPanelProps {
@@ -38,6 +38,8 @@ function storedDraft(): string {
 export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId, onRequestedConversationOpened }: AskPanelProps) {
   const [models, setModels] = useState<AskModel[]>([]);
   const [conversations, setConversations] = useState<AskConversation[]>([]);
+  const [activeReviewSessionId, setActiveReviewSessionId] = useState<number | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<AskMessage[]>([]);
   const [questionSets, setQuestionSets] = useState<QuestionSet[]>([]);
@@ -77,7 +79,7 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
     try {
       const [modelsResult, conversationsResult] = await Promise.allSettled([
         daemonFetch('/api/ask/models'),
-        daemonFetch('/api/ask/conversations'),
+        daemonFetch('/api/ask/conversations?history=1'),
       ]);
       const modelsResponse = modelsResult.status === 'fulfilled' ? modelsResult.value : null;
       const conversationsResponse = conversationsResult.status === 'fulfilled' ? conversationsResult.value : null;
@@ -92,16 +94,20 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
         }
       }
       if (!conversationsResponse?.ok) throw new Error('Open this review with localreview-open to use saved /ask conversations.');
-      const conversationData = (await conversationsResponse.json()) as { conversations?: AskConversation[] };
+      const conversationData = (await conversationsResponse.json()) as { conversations?: AskConversation[]; activeReviewSessionId?: number };
       const nextConversations = Array.isArray(conversationData.conversations) ? conversationData.conversations : [];
       setConversations(nextConversations);
-      const selected = conversationId && nextConversations.some((item) => item.id === conversationId)
-        ? conversationId : nextConversations.find((item) => !item.context?.filePath)?.id ?? nextConversations[0]?.id;
+      const nextReviewSessionId = typeof conversationData.activeReviewSessionId === 'number' ? conversationData.activeReviewSessionId : null;
+      setActiveReviewSessionId(nextReviewSessionId);
+      const active = nextConversations.filter((item) => !item.archivedAt && item.reviewSessionId === nextReviewSessionId);
+      const selected = conversationId && (showHistory || active.some((item) => item.id === conversationId)) && nextConversations.some((item) => item.id === conversationId)
+        ? conversationId : active.find((item) => !item.context?.filePath)?.id ?? active[0]?.id;
       if (selected) await loadConversation(selected);
+      else { setConversationId(null); setMessages([]); }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to load /ask.');
     }
-  }, [conversationId, loadConversation]);
+  }, [conversationId, loadConversation, showHistory]);
 
   useEffect(() => {
     if (!requestedConversationId || collapsed) return;
@@ -118,6 +124,12 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
     window.addEventListener('cmux-localreview:ask-updated', refreshTranscript);
     return () => window.removeEventListener('cmux-localreview:ask-updated', refreshTranscript);
   }, [conversationId, loadConversation]);
+
+  useEffect(() => {
+    const refreshForNewReview = () => { setShowHistory(false); void refresh(); };
+    window.addEventListener('cmux-localreview:review-round-started', refreshForNewReview);
+    return () => window.removeEventListener('cmux-localreview:review-round-started', refreshForNewReview);
+  }, [refresh]);
 
   const refreshQuestionSets = useCallback(async () => {
     const response = await daemonFetch('/api/ask/question-sets');
@@ -141,17 +153,31 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
   useEffect(() => () => activeResponseRef.current?.abort(), []);
 
   const createConversation = useCallback(async (): Promise<string> => {
-    const response = await daemonFetch('/api/ask/conversations', {
+    const response = await daemonFetch('/api/ask/conversations/fresh', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: model || undefined, reasoningEffort: reasoningEffort || undefined, contextTier }),
     });
     if (!response.ok) throw new Error('Could not start a /ask conversation.');
     const data = (await response.json()) as { conversation?: AskConversation };
     if (!data.conversation?.id) throw new Error('The /ask server did not return a conversation id.');
-    setConversations((current) => [data.conversation!, ...current.filter((item) => item.id !== data.conversation!.id)]);
+    setConversations((current) => [
+      data.conversation!,
+      ...current
+        .map((item) => item.reviewSessionId === activeReviewSessionId && !item.archivedAt ? { ...item, archivedAt: Date.now() } : item)
+        .filter((item) => item.id !== data.conversation!.id),
+    ]);
     setConversationId(data.conversation.id);
     setMessages([]);
     return data.conversation.id;
-  }, [contextTier, model, reasoningEffort]);
+  }, [activeReviewSessionId, contextTier, model, reasoningEffort]);
+
+  const resumeConversation = useCallback(async () => {
+    if (!conversationId) return;
+    try {
+      const response = await daemonFetch(`/api/ask/conversations/${encodeURIComponent(conversationId)}/resume`, { method: 'POST' });
+      if (!response.ok) throw new Error('This historical Ask session cannot be resumed for the current review.');
+      await refresh();
+    } catch (err) { setError(err instanceof Error ? err.message : 'Unable to resume this Ask session.'); }
+  }, [conversationId, refresh]);
 
   const updateSettings = useCallback(async (next: { model?: string; reasoningEffort?: ReasoningEffort | ''; contextTier?: ContextTier }) => {
     const nextModel = next.model ?? model;
@@ -281,27 +307,34 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
       : selected?.defaultReasoningEffort ?? '';
     void updateSettings({ model: nextModel, reasoningEffort: nextEffort });
   };
+  const activeConversations = conversations.filter((item) => !item.archivedAt && item.reviewSessionId === activeReviewSessionId);
+  const historicalConversations = conversations.filter((item) => item.archivedAt || item.reviewSessionId !== activeReviewSessionId);
+  const visibleConversations = showHistory ? conversations : activeConversations;
+  const selectedConversation = conversations.find((item) => item.id === conversationId);
+  const historicalConversation = Boolean(selectedConversation && (selectedConversation.archivedAt || selectedConversation.reviewSessionId !== activeReviewSessionId));
 
   if (collapsed) return <button onClick={onToggleCollapsed} title="Open /ask panel" style={{ ...panelButton, position: 'fixed', right: 86, bottom: 12, zIndex: 60, borderRadius: 20 }}>/ask</button>;
 
   return <section style={{ position: 'fixed', right: 0, top: 0, bottom: 0, width: 390, zIndex: 56, display: 'flex', flexDirection: 'column', background: 'var(--bg-primary, #161b22)', borderLeft: '1px solid rgba(127,127,127,0.35)' }} aria-label="Copilot ask">
     <div style={{ display: 'flex', gap: 7, alignItems: 'center', padding: '9px 11px', borderBottom: '1px solid rgba(127,127,127,0.3)' }}>
       <strong style={{ fontSize: 13 }}>/ask</strong><span title="Fresh Copilot SDK chat, separate from ACP review feedback" style={{ fontSize: 10, opacity: 0.6 }}>fresh SDK chat</span>
-      <select aria-label="Copilot model" value={model} onChange={(event) => chooseModel(event.target.value)} style={{ marginLeft: 'auto', maxWidth: 210, fontSize: 11, background: 'transparent', color: 'inherit' }}>
+      <select aria-label="Copilot model" disabled={historicalConversation} value={model} onChange={(event) => chooseModel(event.target.value)} style={{ marginLeft: 'auto', maxWidth: 210, fontSize: 11, background: 'transparent', color: 'inherit' }}>
         {models.length === 0 && <option value="">{modelStatus === 'loading' ? 'Checking Copilot…' : 'Copilot unavailable'}</option>}
         {models.map((item) => <option key={item.id} value={item.id}>{item.name ?? item.id}</option>)}
       </select>
       {questionSets.length > 0 && <select aria-label="Question set" value={questionSetId} onChange={(event) => selectQuestionSet(event.target.value)} style={{ maxWidth: 120, fontSize: 11, background: 'transparent', color: 'inherit' }}>{questionSets.map((set) => <option key={set.id} value={set.id}>{set.name}</option>)}</select>}
-      <button onClick={() => void createConversation()} style={panelButton}>New</button>
+      <button onClick={() => void createConversation()} style={panelButton}>Start fresh</button>
       <button onClick={onToggleCollapsed} style={panelButton}>✕</button>
     </div>
     <div aria-label="Copilot model settings" style={{ padding: '6px 10px', display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', borderBottom: '1px solid rgba(127,127,127,0.22)', fontSize: 10 }}>
-      {supportedEfforts.length > 0 ? <label>Thinking <select aria-label="Thinking level" value={reasoningEffort || selectedModel?.defaultReasoningEffort || supportedEfforts[0]} onChange={(event) => void updateSettings({ reasoningEffort: event.target.value as ReasoningEffort })} style={{ marginLeft: 3, fontSize: 10, background: 'transparent', color: 'inherit' }}>{supportedEfforts.map((effort) => <option key={effort} value={effort}>{effort}</option>)}</select></label> : <span title="This model does not expose a reasoning-effort control">Thinking: model default</span>}
-      <label>Context <select aria-label="Context window tier" value={contextTier} onChange={(event) => void updateSettings({ contextTier: event.target.value as ContextTier })} style={{ marginLeft: 3, fontSize: 10, background: 'transparent', color: 'inherit' }}><option value="default">Default</option><option value="long_context">Long (if supported)</option></select></label>
+      {supportedEfforts.length > 0 ? <label>Thinking <select aria-label="Thinking level" disabled={historicalConversation} value={reasoningEffort || selectedModel?.defaultReasoningEffort || supportedEfforts[0]} onChange={(event) => void updateSettings({ reasoningEffort: event.target.value as ReasoningEffort })} style={{ marginLeft: 3, fontSize: 10, background: 'transparent', color: 'inherit' }}>{supportedEfforts.map((effort) => <option key={effort} value={effort}>{effort}</option>)}</select></label> : <span title="This model does not expose a reasoning-effort control">Thinking: model default</span>}
+      <label>Context <select aria-label="Context window tier" disabled={historicalConversation} value={contextTier} onChange={(event) => void updateSettings({ contextTier: event.target.value as ContextTier })} style={{ marginLeft: 3, fontSize: 10, background: 'transparent', color: 'inherit' }}><option value="default">Default</option><option value="long_context">Long (if supported)</option></select></label>
       <span title="The maximum context window is reported by the installed Copilot runtime">{maxContext && maxContext > 0 ? `${Math.round(maxContext / 1000)}k max context` : 'Context limit reported by runtime'}</span>
     </div>
-    {conversations.length > 1 && <select aria-label="Ask conversation" value={conversationId ?? ''} onChange={(event) => void loadConversation(event.target.value)} style={{ margin: '7px 10px 0', fontSize: 11, background: 'transparent', color: 'inherit' }}>{conversations.map((item) => <option key={item.id} value={item.id}>{item.id.slice(0, 8)} {item.model ? `· ${item.model}` : ''}</option>)}</select>}
+    {historicalConversations.length > 0 && <label style={{ margin: '7px 10px 0', fontSize: 11, opacity: 0.78 }}><input type="checkbox" checked={showHistory} onChange={(event) => setShowHistory(event.target.checked)} /> Show previous Ask sessions ({historicalConversations.length})</label>}
+    {visibleConversations.length > 0 && <select aria-label="Ask conversation" value={conversationId ?? ''} onChange={(event) => void loadConversation(event.target.value)} style={{ margin: '7px 10px 0', fontSize: 11, background: 'transparent', color: 'inherit' }}>{visibleConversations.map((item) => <option key={item.id} value={item.id}>{item.archivedAt || item.reviewSessionId !== activeReviewSessionId ? 'Previous · ' : 'Current · '}{item.id.slice(0, 8)} {item.model ? `· ${item.model}` : ''}</option>)}</select>}
     {error && <div role="alert" style={{ padding: '7px 10px', color: '#e5534b', fontSize: 11 }}>{error} <button onClick={() => void refresh()} style={{ ...panelButton, marginLeft: 5 }}>Retry</button></div>}
+    {historicalConversation && <div role="status" style={{ padding: '7px 10px', color: '#b6c2cf', fontSize: 11, borderBottom: '1px solid rgba(127,127,127,0.25)' }}>Previous Ask session — read-only so it does not clutter or alter this review round.{selectedConversation?.reviewSessionId === activeReviewSessionId && <button onClick={() => void resumeConversation()} style={{ ...panelButton, marginLeft: 6 }}>Resume this session</button>}</div>}
     {editingQuestionSet && <div style={{ padding: 9, borderBottom: '1px solid rgba(127,127,127,0.3)', display: 'grid', gap: 5 }}>
       <label style={{ fontSize: 10, opacity: 0.7 }}>Named question set — separate questions with a blank line; order is preserved.</label>
       <input aria-label="Question set name" value={questionSetName} onChange={(event) => setQuestionSetName(event.target.value)} style={{ fontSize: 12, padding: 5, background: 'transparent', color: 'inherit', border: '1px solid rgba(127,127,127,0.4)' }} />
@@ -313,12 +346,12 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
       {messages.map((message) => <article key={message.id} style={{ alignSelf: message.role === 'user' ? 'flex-end' : 'stretch', maxWidth: message.role === 'user' ? '88%' : undefined, border: '1px solid rgba(127,127,127,0.28)', borderRadius: 6, padding: '7px 9px', fontSize: 12, background: message.role === 'user' ? 'rgba(127,127,127,0.12)' : 'transparent' }}><div style={{ fontSize: 10, opacity: 0.58, marginBottom: 4 }}>{message.role === 'assistant' ? 'Copilot · shared SDK chat' : message.role}{message.location?.filePath ? ` · ${message.location.filePath}:${message.location.startLine ?? '?'}` : ''}{message.pending ? ' · thinking…' : ''}</div><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.body || (message.pending ? '_thinking…_' : '')}</ReactMarkdown></article>)}
     </div>
     <div style={{ padding: 10, borderTop: '1px solid rgba(127,127,127,0.3)' }}>
-      <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') void send(); }} rows={3} placeholder="Ask about this review…" disabled={sending} style={{ width: '100%', resize: 'vertical', fontSize: 12, padding: 6, background: 'transparent', border: '1px solid rgba(127,127,127,0.4)', borderRadius: 4, color: 'inherit' }} />
+      <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') void send(); }} rows={3} placeholder={historicalConversation ? 'Resume this previous Ask session or start fresh to continue…' : 'Ask about this review…'} disabled={sending || historicalConversation} style={{ width: '100%', resize: 'vertical', fontSize: 12, padding: 6, background: 'transparent', border: '1px solid rgba(127,127,127,0.4)', borderRadius: 4, color: 'inherit' }} />
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
-        <button onClick={() => { setQuestionSetName(''); setQuestionSetDraft(prompt); setEditingQuestionSet(true); }} disabled={!prompt.trim()} style={panelButton}>Save as set</button>
+        <button onClick={() => { setQuestionSetName(''); setQuestionSetDraft(prompt); setEditingQuestionSet(true); }} disabled={!prompt.trim() || historicalConversation} style={panelButton}>Save as set</button>
         {questionSetId && <button onClick={() => setEditingQuestionSet((value) => !value)} style={panelButton}>{editingQuestionSet ? 'Hide set' : 'Edit set'}</button>}
-        {questionSetId && <><button onClick={() => void sendQuestionSet('combined')} disabled={sending} style={panelButton}>Ask set</button><button onClick={() => void sendQuestionSet('sequential')} disabled={sending} style={panelButton}>Ask one-by-one</button></>}
-        {sending && <button onClick={() => void cancel()} style={panelButton}>Cancel</button>}<button onClick={() => void send()} disabled={sending || !prompt.trim()} style={panelButton}>{sending ? 'Asking…' : 'Ask'}</button></div>
+        {questionSetId && <><button onClick={() => void sendQuestionSet('combined')} disabled={sending || historicalConversation} style={panelButton}>Ask set</button><button onClick={() => void sendQuestionSet('sequential')} disabled={sending || historicalConversation} style={panelButton}>Ask one-by-one</button></>}
+        {sending && <button onClick={() => void cancel()} style={panelButton}>Cancel</button>}<button onClick={() => void send()} disabled={sending || historicalConversation || !prompt.trim()} style={panelButton}>{sending ? 'Asking…' : 'Ask'}</button></div>
     </div>
   </section>;
 }

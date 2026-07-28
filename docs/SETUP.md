@@ -98,6 +98,19 @@ picker, transcript, question sets, and inline code anchors. It is deliberately
 separate from formal review feedback unless a reviewer explicitly converts an
 answer into a comment.
 
+For an inline question such as `/ask why could this be risky?`, the retained
+Copilot session receives the workspace root, selected repository root,
+repository-relative/workspace-relative/absolute file paths, diff side, exact
+line or range, and selected source text. This makes follow-ups reliable across
+files and in multi-repository workspaces. The inline card and full `/ask`
+panel are two views of the same saved transcript.
+
+Use **Start fresh** in `/ask` for a clean Copilot context. Older Ask sessions
+remain available through **Show previous Ask sessions** but are read-only, so
+they cannot accidentally affect new review work. **New Review** also starts a
+new Ask round. Older formal comments are hidden by default; **Show previous
+comments** exposes them as explicitly outdated, read-only history.
+
 For feedback to reach an existing Copilot CLI agent, run that agent in ACP TCP
 mode, retain the session ID returned by its ACP client, then submit all ACP
 coordinates together:

@@ -7,7 +7,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runMigrations } from "./db.ts";
-import { createAskRouter, formatAskPrompt } from "./askRouter.ts";
+import { AskService, createAskRouter, formatAskPrompt } from "./askRouter.ts";
+import { createAskConversation } from "./askStore.ts";
+import { getActiveSessionId, startNewSession } from "./commentsStore.ts";
 
 const roots: string[] = [];
 const servers: Server[] = [];
@@ -45,18 +47,39 @@ describe("/ask HTTP integration with an injected Copilot boundary", () => {
       selectedCode: "if (!input) throw new Error('missing');",
     });
     expect(formatted).toContain("Workspace root: /review/workspace");
-    expect(formatted).toContain("File: /review/workspace/src/parser.ts");
+    expect(formatted).toContain("File (repository-relative): src/parser.ts");
+    expect(formatted).toContain("File (workspace-relative): src/parser.ts");
+    expect(formatted).toContain("File (absolute): /review/workspace/src/parser.ts");
     expect(formatted).toContain("Side: current");
     expect(formatted).toContain("Lines: L20-L23");
     expect(formatted).toContain("if (!input) throw new Error('missing');");
     expect(formatted).toEndWith("Could this throw path be simplified?");
   });
 
+  test("resolves nested repositories before giving Copilot a file path", () => {
+    const formatted = formatAskPrompt("/review/workspace", "Is this safe?", {
+      repoId: "nested-repo",
+      filePath: "src/nested.ts",
+      side: "base",
+      startLine: 3,
+      selectedCode: "throw new Error('no');",
+    }, new Map([["nested-repo", "/review/workspace/packages/nested"]]));
+    expect(formatted).toContain("Repository root: /review/workspace/packages/nested");
+    expect(formatted).toContain("File (workspace-relative): packages/nested/src/nested.ts");
+    expect(formatted).toContain("File (absolute): /review/workspace/packages/nested/src/nested.ts");
+    expect(formatted).toContain("Side: base");
+  });
+
   test("persists question sets and one shared inline conversation without requiring a real Copilot login", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
     const app = express();
-    const { router, askService } = createAskRouter({ db, workspaceRoot: temporaryWorkspace() });
+    const workspaceRoot = temporaryWorkspace();
+    const { router, askService } = createAskRouter({
+      db,
+      workspaceRoot,
+      repoRoots: new Map([["repo-fixture", workspaceRoot]]),
+    });
     const sentPrompts: string[] = [];
     // Keep this at the public service boundary: routes, persistence, SSE, and
     // model validation are exercised exactly as production uses them while no
@@ -171,6 +194,77 @@ describe("/ask HTTP integration with an injected Copilot boundary", () => {
       expect((db.query("SELECT COUNT(*) AS count FROM queue_feedback").get() as { count: number }).count).toBe(0);
     } finally {
       await askService.close().catch(() => undefined);
+      db.close();
+    }
+  });
+
+  test("keeps Ask history per review round and makes prior contexts read-only", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    let activeReviewSessionId = getActiveSessionId(db);
+    const workspaceRoot = temporaryWorkspace();
+    const app = express();
+    const { router, askService } = createAskRouter({
+      db,
+      workspaceRoot,
+      getReviewSessionId: () => activeReviewSessionId,
+      repoRoots: new Map([["repo-fixture", workspaceRoot]]),
+    });
+    Object.assign(askService as unknown as Record<string, unknown>, {
+      listModels: async () => [{ id: "fixture-model", name: "Fixture model" }],
+      send: async () => ({ messageId: 1, content: "fixture", aborted: false }),
+    });
+    app.use(router);
+    const baseUrl = await listen(app);
+    const context = { repoId: "repo-fixture", filePath: "src/a.ts", side: "current", startLine: 4, endLine: 4, selectedCode: "return ok;" };
+    try {
+      const firstResponse = await fetch(`${baseUrl}/api/ask/inline-conversations`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ context }) });
+      const first = (await firstResponse.json() as { conversation: { id: string; reviewSessionId: number } }).conversation;
+      expect(first.reviewSessionId).toBe(activeReviewSessionId);
+
+      const freshResponse = await fetch(`${baseUrl}/api/ask/conversations/fresh`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: "fixture-model" }) });
+      const fresh = (await freshResponse.json() as { conversation: { id: string; reviewSessionId: number } }).conversation;
+      expect(fresh.id).not.toBe(first.id);
+      const current = await (await fetch(`${baseUrl}/api/ask/conversations`)).json() as { conversations: { id: string }[] };
+      expect(current.conversations.map((conversation) => conversation.id)).toEqual([fresh.id]);
+      const history = await (await fetch(`${baseUrl}/api/ask/conversations?history=1`)).json() as { conversations: { id: string; archivedAt: number | null }[] };
+      expect(history.conversations.find((conversation) => conversation.id === first.id)?.archivedAt).toBeNumber();
+
+      const historicalSend = await fetch(`${baseUrl}/api/ask/conversations/${first.id}/messages`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ prompt: "still there?", location: context }) });
+      expect(historicalSend.status).toBe(409);
+      const resumed = await fetch(`${baseUrl}/api/ask/conversations/${first.id}/resume`, { method: "POST" });
+      expect(resumed.status).toBe(200);
+
+      activeReviewSessionId = startNewSession(db, "next review");
+      const newRound = await fetch(`${baseUrl}/api/ask/inline-conversations`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ context }) });
+      const next = (await newRound.json() as { conversation: { id: string; reviewSessionId: number } }).conversation;
+      expect(next).toMatchObject({ reviewSessionId: activeReviewSessionId });
+      expect(next.id).not.toBe(first.id);
+      expect((await (await fetch(`${baseUrl}/api/ask/conversations`)).json() as { conversations: { id: string }[] }).conversations.map((conversation) => conversation.id)).toEqual([next.id]);
+      expect((await fetch(`${baseUrl}/api/ask/conversations/${first.id}/resume`, { method: "POST" })).status).toBe(409);
+    } finally {
+      await askService.close().catch(() => undefined);
+      db.close();
+    }
+  });
+
+  test("honors Stop when it arrives before a cold Copilot session is ready", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const conversation = createAskConversation(db, {});
+    const service = new AskService(db, temporaryWorkspace());
+    let resolveSession: ((value: unknown) => void) | undefined;
+    Object.assign(service as unknown as Record<string, unknown>, {
+      sessionFor: () => new Promise((resolve) => { resolveSession = resolve; }),
+    });
+    try {
+      const pending = service.send(conversation.id, "Will be cancelled", () => undefined);
+      await Promise.resolve();
+      expect(await service.abort(conversation.id)).toBe(true);
+      resolveSession!({ sending: false, session: {} });
+      expect(await pending).toMatchObject({ content: "", aborted: true });
+    } finally {
+      await service.close().catch(() => undefined);
       db.close();
     }
   });

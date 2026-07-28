@@ -158,6 +158,37 @@ export function listThreads(db: Database, sessionId: number, repoDbId: number): 
   return rows.map(rowToThread);
 }
 
+export interface HistoricalReviewThread extends DiffCommentThread {
+  reviewSessionId: number;
+  reviewLabel: string | null;
+  workspaceRelativePath: string;
+}
+
+/**
+ * Older formal-review threads remain immutable history. They are fetched
+ * separately from the active difit comment state so a client save can never
+ * copy them into the current review round.
+ */
+export function listHistoricalReviewThreads(db: Database, activeSessionId: number): HistoricalReviewThread[] {
+  const rows = db.query(
+    `SELECT c.thread_id, c.file_path, c.side, c.start_line, c.end_line,
+            c.messages_json, c.anchor_content, c.orphaned, c.created_at,
+            c.updated_at, c.session_id, s.label AS session_label,
+            r.workspace_relative_path
+       FROM comments c
+       JOIN sessions s ON s.id = c.session_id
+       JOIN repos r ON r.id = c.repo_id
+      WHERE c.session_id != ?
+      ORDER BY c.session_id DESC, c.created_at ASC`,
+  ).all(activeSessionId) as (CommentRow & { session_id: number; session_label: string | null; workspace_relative_path: string })[];
+  return rows.map((row) => ({
+    ...rowToThread(row),
+    reviewSessionId: row.session_id,
+    reviewLabel: row.session_label,
+    workspaceRelativePath: row.workspace_relative_path,
+  }));
+}
+
 export function upsertThread(
   db: Database,
   sessionId: number,

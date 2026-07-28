@@ -20,6 +20,7 @@ import {
   startNewSession,
   listSessions,
   listThreads,
+  listHistoricalReviewThreads,
 } from "./commentsStore.ts";
 import { createCommentsRouter } from "./commentsRouter.ts";
 import { createFullFileRouter } from "./fullFileRouter.ts";
@@ -200,6 +201,13 @@ export async function buildWorkspaceApp(options: WorkspaceServerOptions): Promis
     res.json({ sessionId: id });
   });
 
+  // Keep previous review comments out of the active editable diff state. The
+  // UI can show this dedicated, read-only history when the reviewer asks for
+  // it, clearly marked as outdated rather than silently mixing review rounds.
+  app.get("/api/review-history/comments", (_req, res) => {
+    res.json({ comments: listHistoricalReviewThreads(db, getSessionId()) });
+  });
+
   // Small optimistic-concurrency store for browser review state.  A key can
   // represent a session/file pane, a draft, or a scroll position; rejecting a
   // stale revision prevents an older tab's unload handler from overwriting a
@@ -224,7 +232,12 @@ export async function buildWorkspaceApp(options: WorkspaceServerOptions): Promis
 
   // This mounts before the SPA fallback and never shares /btw's ACP transport
   // or lifecycle.
-  const ask = createAskRouter({ db, workspaceRoot: options.workspaceRoot });
+  const ask = createAskRouter({
+    db,
+    workspaceRoot: options.workspaceRoot,
+    getReviewSessionId: getSessionId,
+    repoRoots: new Map(mounted.map((item) => [item.repoId, item.repo.absolutePath])),
+  });
   app.use(ask.router);
 
   const clientDist = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "vendor", "difit", "dist", "client");

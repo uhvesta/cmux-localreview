@@ -20,6 +20,8 @@ export interface AskLocation {
 export interface AskConversation {
   id: string;
   queueItemId: string | null;
+  reviewSessionId: number | null;
+  archivedAt: number | null;
   model: string | null;
   reasoningEffort: "low" | "medium" | "high" | "xhigh" | null;
   contextTier: "default" | "long_context" | null;
@@ -42,6 +44,8 @@ export interface AskMessage {
 interface AskConversationRow {
   id: string;
   queue_item_id: string | null;
+  review_session_id: number | null;
+  archived_at: number | null;
   model: string | null;
   reasoning_effort: "low" | "medium" | "high" | "xhigh" | null;
   context_tier: "default" | "long_context" | null;
@@ -65,6 +69,8 @@ function conversationFromRow(row: AskConversationRow): AskConversation {
   return {
     id: row.id,
     queueItemId: row.queue_item_id,
+    reviewSessionId: row.review_session_id,
+    archivedAt: row.archived_at,
     model: row.model,
     reasoningEffort: row.reasoning_effort,
     contextTier: row.context_tier,
@@ -99,14 +105,14 @@ function messageFromRow(row: AskMessageRow): AskMessage {
 
 export function createAskConversation(
   db: Database,
-  input: { queueItemId?: string; model?: string; reasoningEffort?: AskConversation["reasoningEffort"]; contextTier?: AskConversation["contextTier"]; copilotSessionId?: string; context?: AskLocation },
+  input: { queueItemId?: string; reviewSessionId?: number; model?: string; reasoningEffort?: AskConversation["reasoningEffort"]; contextTier?: AskConversation["contextTier"]; copilotSessionId?: string; context?: AskLocation },
 ): AskConversation {
   const now = Date.now();
   const id = randomUUID();
   db.query(
-    `INSERT INTO ask_conversations(id, queue_item_id, model, reasoning_effort, context_tier, copilot_session_id, context_json, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(id, input.queueItemId ?? null, input.model ?? null, input.reasoningEffort ?? null, input.contextTier ?? null, input.copilotSessionId ?? null, input.context ? JSON.stringify(input.context) : null, now, now);
+    `INSERT INTO ask_conversations(id, queue_item_id, review_session_id, model, reasoning_effort, context_tier, copilot_session_id, context_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(id, input.queueItemId ?? null, input.reviewSessionId ?? null, input.model ?? null, input.reasoningEffort ?? null, input.contextTier ?? null, input.copilotSessionId ?? null, input.context ? JSON.stringify(input.context) : null, now, now);
   return getAskConversation(db, id)!;
 }
 
@@ -117,15 +123,38 @@ export function getAskConversation(db: Database, id: string): AskConversation | 
   return row ? conversationFromRow(row) : undefined;
 }
 
-export function listAskConversations(db: Database, queueItemId?: string): AskConversation[] {
-  const rows = db
-    .query(
-      queueItemId
-        ? `SELECT * FROM ask_conversations WHERE queue_item_id = ? ORDER BY updated_at DESC`
-        : `SELECT * FROM ask_conversations ORDER BY updated_at DESC`,
-    )
-    .all(...(queueItemId ? [queueItemId] : [])) as AskConversationRow[];
+export function listAskConversations(
+  db: Database,
+  options: { queueItemId?: string; reviewSessionId?: number; includeArchived?: boolean } = {},
+): AskConversation[] {
+  const conditions: string[] = [];
+  const args: (string | number)[] = [];
+  if (options.queueItemId) { conditions.push("queue_item_id = ?"); args.push(options.queueItemId); }
+  if (options.reviewSessionId !== undefined) { conditions.push("review_session_id = ?"); args.push(options.reviewSessionId); }
+  if (!options.includeArchived) conditions.push("archived_at IS NULL");
+  const rows = db.query(
+    `SELECT * FROM ask_conversations${conditions.length ? ` WHERE ${conditions.join(" AND ")}` : ""} ORDER BY updated_at DESC`,
+  ).all(...args) as AskConversationRow[];
   return rows.map(conversationFromRow);
+}
+
+/** One review round has one live shared Copilot context. */
+export function getActiveAskConversation(db: Database, reviewSessionId: number): AskConversation | undefined {
+  return listAskConversations(db, { reviewSessionId })
+    .find((conversation) => !conversation.context?.filePath);
+}
+
+export function archiveActiveAskConversations(db: Database, reviewSessionId: number): void {
+  db.query(`UPDATE ask_conversations SET archived_at = ?, updated_at = ? WHERE review_session_id = ? AND archived_at IS NULL`)
+    .run(Date.now(), Date.now(), reviewSessionId);
+}
+
+export function resumeAskConversation(db: Database, id: string): AskConversation | undefined {
+  const conversation = getAskConversation(db, id);
+  if (!conversation) return undefined;
+  if (conversation.reviewSessionId !== null) archiveActiveAskConversations(db, conversation.reviewSessionId);
+  db.query(`UPDATE ask_conversations SET archived_at = NULL, updated_at = ? WHERE id = ?`).run(Date.now(), id);
+  return getAskConversation(db, id);
 }
 
 export function updateAskConversation(
