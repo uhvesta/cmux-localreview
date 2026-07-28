@@ -19,10 +19,18 @@ import (
 	"github.com/uhvesta/cmux-localreview/internal/store"
 )
 
-type askRouteBackend struct{ session *askRouteSession }
+type askRouteBackend struct {
+	session *askRouteSession
+	models  []copilotsdk.ModelInfo
+}
 
-func (b askRouteBackend) ListModels(context.Context) ([]copilotsdk.ModelInfo, error) { return nil, nil }
-func (b askRouteBackend) OpenSession(context.Context, copilot.SessionConfig) (askruntime.Session, error) {
+func (b askRouteBackend) ListModels(context.Context) ([]copilotsdk.ModelInfo, error) {
+	return b.models, nil
+}
+func (b askRouteBackend) OpenSession(_ context.Context, config copilot.SessionConfig) (askruntime.Session, error) {
+	b.session.mu.Lock()
+	b.session.configs = append(b.session.configs, config)
+	b.session.mu.Unlock()
 	return b.session, nil
 }
 
@@ -30,8 +38,66 @@ type askRouteSession struct {
 	mu       sync.Mutex
 	callback func(askruntime.RuntimeEvent)
 	prompts  []string
+	configs  []copilot.SessionConfig
 	aborted  bool
 	emit     bool
+}
+
+func TestWorkspaceModelDefaultsAreExposedAndAppliedOnlyWhenConversationIsUnset(t *testing.T) {
+	d := askRouteDaemon(t)
+	if _, err := d.db.Exec(`INSERT INTO sessions(id,label,started_at) VALUES(1,'review',1)`); err != nil {
+		t.Fatal(err)
+	}
+	d.review = &workspaceReview{Root: "/workspace", SessionID: 1}
+	session := &askRouteSession{emit: true}
+	d.askFactory = &AskRuntimeFactory{Source: daemonTokenSource{token: "dedicated"}, Build: func(context.Context, copilot.ClientConfig) (*askruntime.Runtime, func() error, error) {
+		return askruntime.New(askRouteBackend{session: session, models: []copilotsdk.ModelInfo{{ID: "gpt-5", Name: "GPT-5"}}}), nil, nil
+	}}
+	updated := askRequest(t, d, http.MethodPut, "/ask/settings", `{"model":"gpt-5","reasoningEffort":"high","contextTier":"long_context"}`)
+	if updated.Code != http.StatusOK || !bytes.Contains(updated.Body.Bytes(), []byte(`"model":"gpt-5"`)) {
+		t.Fatalf("settings=%d %s", updated.Code, updated.Body.String())
+	}
+	models := askRequest(t, d, http.MethodGet, "/ask/models", "")
+	if models.Code != http.StatusOK || !bytes.Contains(models.Body.Bytes(), []byte(`"source":"sdk"`)) || !bytes.Contains(models.Body.Bytes(), []byte(`"id":"gpt-5"`)) {
+		t.Fatalf("models=%d %s", models.Code, models.Body.String())
+	}
+	conversation, err := ask.CreateConversation(context.Background(), d.db, ask.CreateConversationInput{ReviewSessionID: d.askSessionID()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := askRequest(t, d, http.MethodPost, "/ask/conversations/"+conversation.ID+"/messages", `{"body":"why?"}`)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("send=%d %s", response.Code, response.Body.String())
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		session.mu.Lock()
+		configs := append([]copilot.SessionConfig(nil), session.configs...)
+		session.mu.Unlock()
+		if len(configs) > 0 {
+			if configs[0].Model != "gpt-5" || configs[0].ReasoningEffort != "high" || configs[0].ContextTier != copilotsdk.ContextTierLongContext {
+				t.Fatalf("config=%#v", configs[0])
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("model defaults were not sent")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// An explicit override always wins over the workspace setting.
+	explicit := "other-model"
+	if _, err := ask.UpdateConversation(context.Background(), d.db, conversation.ID, ask.UpdateConversationInput{Model: &explicit}); err != nil {
+		t.Fatal(err)
+	}
+	overridden, err := ask.GetConversation(context.Background(), d.db, conversation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := d.askTurnConfig(overridden, "/workspace")
+	if err != nil || config.Model != "other-model" {
+		t.Fatalf("override config=%#v err=%v", config, err)
+	}
 }
 
 func (s *askRouteSession) SendPrompt(_ context.Context, prompt string) (string, error) {

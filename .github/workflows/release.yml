@@ -33,6 +33,56 @@ jobs:
         run: |
           mkdir -p release-out
           cp bazel-bin/release/*.tar.gz bazel-bin/release/checksums.txt release-out/
+      - name: Upload native release payload
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-archives
+          path: release-out/*
+          if-no-files-found: error
+
+  desktop-artifacts:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            electron_args: --mac dmg
+            artifact_name: desktop-macos
+            artifact_glob: desktop/dist/*.dmg
+          - runner: ubuntu-latest
+            electron_args: --linux AppImage
+            artifact_name: desktop-linux
+            artifact_glob: desktop/dist/*.AppImage
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bazel-contrib/setup-bazel@0.15.0
+        with:
+          bazelisk-version: "1.28.1"
+      - name: Build host sidecar
+        run: bazel build //cmd/localreviewd:localreviewd
+      - name: Install desktop packaging dependencies
+        run: npm --prefix desktop install --no-audit --no-fund
+      - name: Package desktop application
+        run: npm --prefix desktop run package -- ${{ matrix.electron_args }}
+      - name: Upload desktop release payload
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_glob }}
+          if-no-files-found: error
+
+  publish:
+    needs: [native-archives, desktop-artifacts]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download release payloads
+        uses: actions/download-artifact@v4
+        with:
+          path: release-out
+          merge-multiple: true
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:

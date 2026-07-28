@@ -79,6 +79,27 @@ func askSessionConfig(conversation *ask.Conversation, workingDirectory string) c
 	return copilot.SessionConfig{ID: conversation.ID, Model: model, ReasoningEffort: reasoning, ContextTier: tier, WorkingDirectory: workingDirectory, Streaming: true}
 }
 
+// askTurnConfig merges the active workspace picker defaults only into unset
+// conversation fields. An explicit conversation selection remains stable when
+// the workspace default changes, and a transcript GET never calls this path.
+func (d *Daemon) askTurnConfig(conversation *ask.Conversation, workingDirectory string) (copilot.SessionConfig, error) {
+	defaults, err := d.askWorkspaceDefaults(context.Background())
+	if err != nil {
+		return copilot.SessionConfig{}, err
+	}
+	merged := *conversation
+	if merged.Model == nil {
+		merged.Model = defaults.Model
+	}
+	if merged.ReasoningEffort == nil {
+		merged.ReasoningEffort = defaults.ReasoningEffort
+	}
+	if merged.ContextTier == nil {
+		merged.ContextTier = defaults.ContextTier
+	}
+	return askSessionConfig(&merged, workingDirectory), nil
+}
+
 // askPrompt is deliberately a fresh, self-contained turn envelope. The SDK
 // session retains prior explicit turns itself; reopening the page does not
 // reconstruct or resend them. WorkspacePath is the unambiguous path the user
@@ -198,7 +219,10 @@ func (d *Daemon) startAskTurn(conversation *ask.Conversation, user *ask.Message,
 		return err
 	}
 	prompt := askPrompt(user.Body, user.Location, conversation.Context)
-	config := askSessionConfig(conversation, workingDirectory)
+	config, err := d.askTurnConfig(conversation, workingDirectory)
+	if err != nil {
+		return err
+	}
 	go func() {
 		_, sendErr := runtime.Send(context.Background(), conversation.ID, config, prompt, func(event askruntime.Delta) {
 			d.persistAskEvent(conversation.ID, assistant.ID, event)

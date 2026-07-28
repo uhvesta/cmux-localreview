@@ -76,10 +76,15 @@ one polling interval; normal quit also sends it `SIGTERM`.
 bazel build //cmd/localreviewd:localreviewd
 cd desktop
 npm install
-LOCALREVIEWD_PATH="$PWD/../bazel-bin/cmd/localreviewd/localreviewd" npm run dev
+LOCALREVIEWD_PATH="$PWD/../bazel-bin/cmd/localreviewd/localreviewd_/localreviewd" npm run dev
 ```
 
 The packaged application bundles `localreviewd` as an Electron resource. The
+tag-release pipeline publishes the native `tar.gz` archives plus a macOS DMG
+and Linux AppImage. For a local unpacked desktop smoke artifact, install the
+desktop package dependencies and run `bazel build //desktop:app`; this target
+is deliberately host-local and manual because Electron's runtime is
+platform-specific.
 browser UI receives the daemon capability only in a URL fragment and trades it
 for the same local HttpOnly cookie described above.
 

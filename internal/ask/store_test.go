@@ -128,3 +128,25 @@ func TestSettleInterruptedMessagesAndQuestionSetReplacement(t *testing.T) {
 		t.Fatalf("deleted=%v err=%v", deleted, err)
 	}
 }
+
+func TestWorkspaceModelDefaultsPersistAndCanBeCleared(t *testing.T) {
+	db, ctx := openTestDB(t), context.Background()
+	initial, err := GetWorkspaceSettings(ctx, db, "/workspaces/reviewer")
+	if err != nil || initial.Model != nil || initial.UpdatedAt != 0 {
+		t.Fatalf("initial=%#v err=%v", initial, err)
+	}
+	model, effort, tier := "gpt-5", ReasoningHigh, ContextLong
+	updated, err := UpdateWorkspaceSettings(ctx, db, "/workspaces/reviewer", UpdateWorkspaceSettingsInput{Model: &model, ReasoningEffort: &effort, ContextTier: &tier})
+	if err != nil || updated.Model == nil || *updated.Model != "gpt-5" || updated.ReasoningEffort == nil || *updated.ReasoningEffort != ReasoningHigh || updated.ContextTier == nil || *updated.ContextTier != ContextLong || updated.UpdatedAt == 0 {
+		t.Fatalf("updated=%#v err=%v", updated, err)
+	}
+	empty := ""
+	cleared, err := UpdateWorkspaceSettings(ctx, db, "/workspaces/reviewer", UpdateWorkspaceSettingsInput{Model: &empty})
+	if err != nil || cleared.Model != nil || cleared.ReasoningEffort == nil || *cleared.ReasoningEffort != ReasoningHigh {
+		t.Fatalf("cleared=%#v err=%v", cleared, err)
+	}
+	invalid := ReasoningEffort("turbo")
+	if _, err := UpdateWorkspaceSettings(ctx, db, "/workspaces/reviewer", UpdateWorkspaceSettingsInput{ReasoningEffort: &invalid}); err == nil {
+		t.Fatal("invalid reasoning effort was accepted")
+	}
+}

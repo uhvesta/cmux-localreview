@@ -25,6 +25,8 @@ interface FederationRuntime {
   cachedResponses: number;
   lastConnectedAt: number | null;
   lastError: string | null;
+  available?: boolean;
+  message?: string;
 }
 interface FederationNode {
   id: string;
@@ -35,7 +37,7 @@ interface FederationNode {
   lastConnectedAt?: number | null;
   lastError?: string | null;
 }
-interface FederationQueue { node: FederationNode; items: QueueItem[]; error?: string; }
+interface FederationQueue { node: FederationNode; items: QueueItem[]; error?: string; runtime?: FederationRuntime; }
 
 interface FederationNodeWithRuntime extends FederationNode { runtime?: FederationRuntime; }
 
@@ -49,7 +51,10 @@ interface GitHubCapabilityStatus {
   message?: string;
 }
 interface GitHubAuthStatus {
-  provider: 'github-app-device-flow';
+  // The Go daemon's browser-loopback flow is the primary flow.  Keep this a
+  // string instead of a stale device-only literal so an older daemon can
+  // still render its status without making Queue Home unusable.
+  provider: string;
   capabilities: Record<GitHubCapability, GitHubCapabilityStatus>;
 }
 
@@ -127,7 +132,9 @@ export function QueueHome() {
   const [githubCapability, setGithubCapability] = useState<GitHubCapability>('read');
   const [githubClientId, setGithubClientId] = useState('');
   const [githubAction, setGithubAction] = useState<GitHubCapability | null>(null);
+  const [githubFlow, setGithubFlow] = useState<'loopback' | 'device'>('loopback');
   const [deviceCode, setDeviceCode] = useState<{ capability: GitHubCapability; userCode: string; verificationUri: string } | null>(null);
+  const [loopbackLogin, setLoopbackLogin] = useState<{ capability: GitHubCapability; authorizationUrl: string } | null>(null);
   const [showHistory, setShowHistory] = useState(true);
 
   useEffect(() => { captureDaemonTokenFromLocation(); }, []);
@@ -171,15 +178,21 @@ export function QueueHome() {
   }, []);
   useEffect(() => { void refreshGitHubAuth(); }, [refreshGitHubAuth]);
   useEffect(() => {
-    const waiting = githubAuth && (Object.keys(githubAuth.capabilities) as GitHubCapability[]).some((capability) => githubAuth.capabilities[capability].loginState === 'waiting');
+    if (loopbackLogin && githubAuth?.capabilities[loopbackLogin.capability]?.authenticated) setLoopbackLogin(null);
+  }, [githubAuth, loopbackLogin]);
+  useEffect(() => {
+    const waiting = loopbackLogin !== null || githubAuth && (Object.keys(githubAuth.capabilities) as GitHubCapability[]).some((capability) => githubAuth.capabilities[capability].loginState === 'waiting');
     if (!waiting) return;
     const timer = window.setInterval(() => {
+      // Device flow needs a poll request.  Browser-loopback flow completes in
+      // its dedicated listener, so only refresh durable status here.
       if (githubAuth) for (const capability of Object.keys(githubAuth.capabilities) as GitHubCapability[]) {
         if (githubAuth.capabilities[capability].loginState === 'waiting') void daemonFetch(`/api/github/auth/${capability}/poll`, { method: 'POST' }).then(() => refreshGitHubAuth());
       }
+      void refreshGitHubAuth();
     }, 2_000);
     return () => window.clearInterval(timer);
-  }, [githubAuth, refreshGitHubAuth]);
+  }, [githubAuth, loopbackLogin, refreshGitHubAuth]);
 
   const configureGitHubApp = useCallback(async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -198,14 +211,24 @@ export function QueueHome() {
   const startGitHubAuth = useCallback(async (capability: GitHubCapability) => {
     setGithubAction(capability); setError(null);
     try {
-      const response = await daemonFetch(`/api/github/auth/${capability}/start`, { method: 'POST' });
-      const body = (await response.json().catch(() => null)) as { userCode?: string; verificationUri?: string; error?: string } | null;
-      if (!response.ok || !body?.userCode || !body?.verificationUri) throw new Error(body?.error ?? 'Could not start GitHub App authorization.');
-      setDeviceCode({ capability, userCode: body.userCode, verificationUri: body.verificationUri });
+      const response = await daemonFetch(`/api/github/auth/${capability}/start`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ flow: githubFlow }) });
+      const body = (await response.json().catch(() => null)) as { flow?: 'loopback' | 'device'; authorizationUrl?: string; userCode?: string; verificationUri?: string; error?: string } | null;
+      if (!response.ok || !body?.flow) throw new Error(body?.error ?? 'Could not start GitHub App authorization.');
+      setDeviceCode(null); setLoopbackLogin(null);
+      if (body.flow === 'loopback') {
+        if (!body.authorizationUrl) throw new Error('The daemon did not return a GitHub browser authorization URL.');
+        setLoopbackLogin({ capability, authorizationUrl: body.authorizationUrl });
+        // Opening is a convenience only: the durable link below is the
+        // recovery path for popup blockers and makes the flow transparent.
+        window.open(body.authorizationUrl, '_blank', 'noopener,noreferrer');
+      } else {
+        if (!body.userCode || !body.verificationUri) throw new Error('The daemon did not return a GitHub device code.');
+        setDeviceCode({ capability, userCode: body.userCode, verificationUri: body.verificationUri });
+      }
       await refreshGitHubAuth();
     } catch (err) { setError(err instanceof Error ? err.message : 'Could not start GitHub App authorization.'); }
     finally { setGithubAction(null); }
-  }, [refreshGitHubAuth]);
+  }, [githubFlow, refreshGitHubAuth]);
 
   const disconnectGitHubApp = useCallback(async (capability: GitHubCapability) => {
     setGithubAction(capability);
@@ -327,7 +350,7 @@ export function QueueHome() {
       <button type="submit" disabled={!daemonToken.trim()} style={buttonStyle}>Connect</button>
     </form>}
     {githubAuth && <section aria-label="GitHub App connections" style={{ margin: '0 0 18px', padding: 12, border: '1px solid rgba(127,127,127,0.42)', borderRadius: 8 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}><div><strong>GitHub App connections</strong><p style={{ margin: '4px 0 0', fontSize: 12, opacity: 0.74 }}>Separate, least-privilege App grants. Tokens stay in this daemon’s system secret store; the browser receives only a device code.</p></div><button onClick={() => void refreshGitHubAuth()} disabled={githubAuthLoading} style={buttonStyle}>{githubAuthLoading ? 'Checking…' : 'Refresh status'}</button></div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}><div><strong>GitHub App connections</strong><p style={{ margin: '4px 0 0', fontSize: 12, opacity: 0.74 }}>Separate, least-privilege App grants. Browser OAuth is the default; the daemon keeps tokens and client secrets in the system secret store, never in this page.</p></div><button onClick={() => void refreshGitHubAuth()} disabled={githubAuthLoading} style={buttonStyle}>{githubAuthLoading ? 'Checking…' : 'Refresh status'}</button></div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(225px, 1fr))', gap: 9, marginTop: 10 }}>
         {(Object.keys(capabilityLabels) as GitHubCapability[]).map((capability) => {
           const status = githubAuth.capabilities[capability];
@@ -336,17 +359,26 @@ export function QueueHome() {
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 7 }}><strong style={{ fontSize: 13 }}>{capabilityLabels[capability].title}</strong><span style={{ fontSize: 11, color: status.authenticated ? '#2ea043' : status.configured ? '#d29922' : '#8b949e' }}>{status.authenticated ? `Connected${status.login ? ` @${status.login}` : ''}` : status.configured ? (waiting ? 'Waiting…' : 'Not connected') : 'Not configured'}</span></div>
             <p style={{ margin: '5px 0 9px', fontSize: 11, opacity: 0.7 }}>{status.message ?? status.error ?? capabilityLabels[capability].description}</p>
             <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
-              {status.configured && !status.authenticated && <button onClick={() => void startGitHubAuth(capability)} disabled={githubAction !== null} style={{ ...buttonStyle, borderColor: '#2ea043' }}>{githubAction === capability ? 'Opening…' : waiting ? 'Restart device flow' : 'Connect'}</button>}
+              {status.configured && !status.authenticated && <button onClick={() => void startGitHubAuth(capability)} disabled={githubAction !== null} style={{ ...buttonStyle, borderColor: '#2ea043' }}>{githubAction === capability ? 'Opening…' : waiting ? `Restart ${githubFlow === 'loopback' ? 'browser login' : 'device flow'}` : 'Connect'}</button>}
               {status.authenticated && <button onClick={() => void disconnectGitHubApp(capability)} disabled={githubAction !== null} style={buttonStyle}>{githubAction === capability ? 'Disconnecting…' : 'Disconnect'}</button>}
             </div>
           </article>;
         })}
       </div>
+      <label style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 11, fontSize: 12 }}>
+        Authorization method
+        <select value={githubFlow} onChange={(event) => setGithubFlow(event.target.value as 'loopback' | 'device')} style={{ ...buttonStyle, padding: '5px 7px' }} aria-label="GitHub authorization method">
+          <option value="loopback">Browser OAuth (recommended)</option>
+          <option value="device">Device code fallback</option>
+        </select>
+      </label>
       <form onSubmit={configureGitHubApp} style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginTop: 11 }} aria-label="Configure GitHub App client ID">
         <select value={githubCapability} onChange={(event) => setGithubCapability(event.target.value as GitHubCapability)} aria-label="GitHub App capability" style={{ ...buttonStyle, padding: '6px 7px' }}>{(Object.keys(capabilityLabels) as GitHubCapability[]).map((capability) => <option key={capability} value={capability}>{capabilityLabels[capability].title}</option>)}</select>
         <input value={githubClientId} onChange={(event) => setGithubClientId(event.target.value)} placeholder="GitHub App client ID (Iv1.… )" autoComplete="off" aria-label="GitHub App client ID" style={{ flex: 1, minWidth: 220, padding: '6px 8px', borderRadius: 5, border: '1px solid rgba(127,127,127,0.45)', background: 'transparent', color: 'inherit' }} />
         <button type="submit" disabled={!githubClientId.trim() || githubAction !== null} style={buttonStyle}>{githubAction === githubCapability ? 'Saving…' : 'Save App'}</button>
       </form>
+      <p style={{ margin: '7px 0 0', fontSize: 11, opacity: 0.68 }}>Browser OAuth also requires that capability’s confidential client secret. Set it from the native CLI using <code>localreview auth login --client-secret-stdin …</code>; this UI intentionally never accepts or stores secrets.</p>
+      {loopbackLogin && <div role="status" style={{ marginTop: 10, padding: 10, border: '1px solid rgba(88,166,255,0.5)', borderRadius: 6, fontSize: 12 }}>Continue <strong>{capabilityLabels[loopbackLogin.capability].title}</strong> in the GitHub browser tab. If it did not open, <a href={loopbackLogin.authorizationUrl} target="_blank" rel="noreferrer">open the secure authorization page</a>. This page will refresh after the loopback callback completes.</div>}
       {deviceCode && <div role="status" style={{ marginTop: 10, padding: 10, border: '1px solid rgba(88,166,255,0.5)', borderRadius: 6, fontSize: 12 }}>Authorize <strong>{capabilityLabels[deviceCode.capability].title}</strong> at <a href={deviceCode.verificationUri} target="_blank" rel="noreferrer">github.com/login/device</a> with code <code style={{ fontWeight: 700, fontSize: 14 }}>{deviceCode.userCode}</code>. This page checks automatically; no token is shown or pasted.</div>}
     </section>}
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 22, alignItems: 'start' }}>
@@ -372,7 +404,7 @@ export function QueueHome() {
         {!loading && remoteItems.length === 0 && <div style={{ padding: 14, border: '1px dashed rgba(127,127,127,0.45)', borderRadius: 8, opacity: 0.76 }}>No remote pull requests are queued on this daemon.</div>}
         <div style={{ display: 'grid', gap: 10 }}>{remoteItems.map((item) => <QueueCard key={item.id} item={item} onOpenWorkspace={openWorkspace} onRemove={removeQueueItem} />)}</div>
         <section style={{ marginTop: 16, display: 'grid', gap: 10 }} aria-label="Remote daemon nodes">
-          <div><h3 style={{ margin: 0, fontSize: 13 }}>Remote daemon nodes</h3><p style={{ margin: '4px 0 0', fontSize: 11, opacity: 0.65 }}>Connections stay loopback-only: Queue Home opens an SSH tunnel only when it needs a remote queue.</p></div>
+          <div><h3 style={{ margin: 0, fontSize: 13 }}>Remote daemon nodes</h3><p style={{ margin: '4px 0 0', fontSize: 11, opacity: 0.65 }}>Save loopback-only SSH node details here. This native build clearly marks SSH federation unavailable until a transport-enabled release is installed; it does not fabricate a tunnel or remote queue.</p></div>
           <form onSubmit={addNode} style={{ display: 'grid', gridTemplateColumns: 'minmax(100px, 1fr) minmax(120px, 1fr) 72px minmax(120px, 1fr) auto', gap: 6 }} aria-label="Add remote daemon">
             <input value={nodeLabel} onChange={(event) => setNodeLabel(event.target.value)} placeholder="Name" aria-label="Remote daemon name" required style={{ minWidth: 0, padding: '7px 8px', borderRadius: 5, border: '1px solid rgba(127,127,127,0.45)', background: 'transparent', color: 'inherit' }} />
             <input value={nodeTarget} onChange={(event) => setNodeTarget(event.target.value)} placeholder="user@host" aria-label="SSH target" required style={{ minWidth: 0, padding: '7px 8px', borderRadius: 5, border: '1px solid rgba(127,127,127,0.45)', background: 'transparent', color: 'inherit' }} />
@@ -380,16 +412,18 @@ export function QueueHome() {
             <input value={nodeToken} onChange={(event) => setNodeToken(event.target.value)} type="password" placeholder="Daemon token" aria-label="Remote daemon token" required autoComplete="off" style={{ minWidth: 0, padding: '7px 8px', borderRadius: 5, border: '1px solid rgba(127,127,127,0.45)', background: 'transparent', color: 'inherit' }} />
             <button type="submit" disabled={savingNode} style={{ ...buttonStyle, whiteSpace: 'nowrap' }}>{savingNode ? 'Saving…' : 'Add node'}</button>
           </form>
-          {nodes.length === 0 && !loading && <div style={{ padding: 11, border: '1px dashed rgba(127,127,127,0.38)', borderRadius: 8, fontSize: 12, opacity: 0.72 }}>No remote daemon is configured. On the remote machine run <code>global-daemon</code>, then add its SSH target, loopback port, and discovery token here.</div>}
+          {nodes.length === 0 && !loading && <div style={{ padding: 11, border: '1px dashed rgba(127,127,127,0.38)', borderRadius: 8, fontSize: 12, opacity: 0.72 }}>No remote daemon is configured. On the remote machine run <code>localreviewd</code>, then add its SSH target, loopback port, and discovery token here. A transport-enabled release is required before this daemon can connect.</div>}
           {nodes.map((node) => {
             const aggregate = federation.find((entry) => entry.node.id === node.id);
             const actionIs = (action: string) => nodeAction === `${node.id}:${action}`;
-            const state = node.runtime?.state ?? (aggregate?.error ? 'error' : 'disconnected');
+            const runtime = node.runtime ?? aggregate?.runtime;
+            const state = runtime?.state ?? (aggregate?.error ? 'error' : 'disconnected');
+            const transportAvailable = runtime?.available === true;
             return <section key={node.id} style={{ padding: 11, border: '1px solid rgba(127,127,127,0.28)', borderRadius: 8 }}>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap', marginBottom: 5 }}><strong style={{ fontSize: 12 }}>{node.label || node.sshTarget}</strong><span style={{ fontSize: 11, opacity: 0.65 }}>{node.sshTarget} · remote port {node.remotePort}</span><span style={{ fontSize: 11, color: state === 'connected' ? '#2ea043' : state === 'error' ? '#f85149' : undefined }}>{runtimeLabel(node.runtime)}</span></div>
-              {(node.runtime?.lastError || aggregate?.error) && <div role="alert" style={{ color: '#f85149', fontSize: 11, marginBottom: 7 }}>{node.runtime?.lastError || aggregate?.error}</div>}
+              <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap', marginBottom: 5 }}><strong style={{ fontSize: 12 }}>{node.label || node.sshTarget}</strong><span style={{ fontSize: 11, opacity: 0.65 }}>{node.sshTarget} · remote port {node.remotePort}</span><span style={{ fontSize: 11, color: state === 'connected' ? '#2ea043' : state === 'error' ? '#f85149' : undefined }}>{runtimeLabel(runtime)}</span></div>
+              {(runtime?.lastError || aggregate?.error || runtime?.message) && <div role="alert" style={{ color: transportAvailable ? '#d29922' : '#f85149', fontSize: 11, marginBottom: 7 }}>{runtime?.lastError || aggregate?.error || runtime?.message}</div>}
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: aggregate?.items.length ? 9 : 0 }}>
-                {state !== 'connected' && <button onClick={() => void actOnNode(node, 'connect')} disabled={!!nodeAction} style={buttonStyle}>{actionIs('connect') ? 'Connecting…' : state === 'error' ? 'Retry tunnel' : 'Connect'}</button>}
+                {transportAvailable && state !== 'connected' && <button onClick={() => void actOnNode(node, 'connect')} disabled={!!nodeAction} style={buttonStyle}>{actionIs('connect') ? 'Connecting…' : state === 'error' ? 'Retry tunnel' : 'Connect'}</button>}
                 {state === 'connected' && <button onClick={() => void actOnNode(node, 'disconnect')} disabled={!!nodeAction} style={buttonStyle}>{actionIs('disconnect') ? 'Disconnecting…' : 'Disconnect'}</button>}
                 <button onClick={() => void actOnNode(node, 'delete')} disabled={!!nodeAction} style={buttonStyle}>{actionIs('delete') ? 'Removing…' : 'Remove node'}</button>
               </div>

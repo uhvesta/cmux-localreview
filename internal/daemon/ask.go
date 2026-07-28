@@ -34,10 +34,59 @@ func askError(w http.ResponseWriter, err error) {
 func (d *Daemon) handleAsk(w http.ResponseWriter, r *http.Request, path string) bool {
 	ctx := r.Context()
 	if path == "/ask/models" && r.Method == http.MethodGet {
-		// A model catalogue can be read without constructing a Copilot runtime.
-		// Until the authenticated SDK client is connected, expose one explicit
-		// offline choice rather than pretending a live model is available.
-		writeJSON(w, http.StatusOK, map[string]any{"models": []map[string]any{{"id": "auto", "name": "Copilot default (connect to load models)", "capabilities": map[string]any{"supports": map[string]bool{"reasoningEffort": true, "contextTier": true}}}}, "state": "unauthenticated"})
+		defaults, defaultsErr := d.askWorkspaceDefaults(ctx)
+		if defaultsErr != nil {
+			askError(w, defaultsErr)
+			return true
+		}
+		result, err := d.askModels(ctx)
+		if err != nil {
+			// Keep the model picker usable while clearly identifying this as an
+			// offline choice—not an SDK-provided model list.
+			writeJSON(w, http.StatusOK, map[string]any{"models": []map[string]any{{"id": "auto", "name": "Copilot default (connect to load models)", "capabilities": map[string]any{"supports": map[string]bool{"reasoningEffort": true, "contextTier": true}}}}, "state": "unavailable", "source": "fallback", "warning": err.Error(), "workspaceDefaults": defaults})
+			return true
+		}
+		models := make([]map[string]any, 0, len(result.Models))
+		for _, model := range result.Models {
+			models = append(models, map[string]any{"id": model.ID, "name": model.Name, "capabilities": map[string]any{"supports": map[string]bool{"reasoningEffort": true, "contextTier": true}}})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"models": models, "state": "ready", "source": result.Source, "warning": result.Warning, "workspaceDefaults": defaults})
+		return true
+	}
+	if path == "/ask/settings" && r.Method == http.MethodGet {
+		settings, err := d.askWorkspaceDefaults(ctx)
+		if err != nil {
+			askError(w, err)
+		} else {
+			writeJSON(w, http.StatusOK, map[string]any{"workspaceDefaults": settings})
+		}
+		return true
+	}
+	if path == "/ask/settings" && (r.Method == http.MethodPut || r.Method == http.MethodPost) {
+		var in struct {
+			Model           *string              `json:"model"`
+			ReasoningEffort *ask.ReasoningEffort `json:"reasoningEffort"`
+			ContextTier     *ask.ContextTier     `json:"contextTier"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil {
+			askError(w, errors.New("invalid /ask workspace settings"))
+			return true
+		}
+		current, err := d.askWorkspaceDefaults(ctx)
+		if err != nil {
+			askError(w, err)
+			return true
+		}
+		if strings.TrimSpace(current.WorkspacePath) == "" {
+			askError(w, errors.New("open a workspace before saving /ask defaults"))
+			return true
+		}
+		settings, err := ask.UpdateWorkspaceSettings(ctx, d.db, current.WorkspacePath, ask.UpdateWorkspaceSettingsInput{Model: in.Model, ReasoningEffort: in.ReasoningEffort, ContextTier: in.ContextTier})
+		if err != nil {
+			askError(w, err)
+		} else {
+			writeJSON(w, http.StatusOK, map[string]any{"workspaceDefaults": settings})
+		}
 		return true
 	}
 	if path == "/ask/inline-conversations" && r.Method == http.MethodPost {

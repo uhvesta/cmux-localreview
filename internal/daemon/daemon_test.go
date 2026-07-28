@@ -798,6 +798,52 @@ func TestWorkspaceActivationDiscoversNestedRepositories(t *testing.T) {
 	}
 }
 
+func TestDaemonRestartRestoresActiveWorkspaceAndReviewSession(t *testing.T) {
+	workspace := t.TempDir()
+	for _, arguments := range [][]string{{"init", "-q"}, {"config", "user.email", "test@example.invalid"}, {"config", "user.name", "test"}} {
+		if output, err := exec.Command("git", append([]string{"-C", workspace}, arguments...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", arguments, err, output)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "main.go"), []byte("package main\nconst v = 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, arguments := range [][]string{{"add", "main.go"}, {"commit", "-qm", "initial"}} {
+		if output, err := exec.Command("git", append([]string{"-C", workspace}, arguments...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", arguments, err, output)
+		}
+	}
+	data := t.TempDir()
+	first, err := Start(context.Background(), Options{DataDir: data, UIDir: filepath.Join(data, "missing-ui")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.activateWorkspace(workspace, "restart fixture"); err != nil {
+		t.Fatal(err)
+	}
+	canonicalWorkspace, err := safeWorkspacePath(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.mu.Lock()
+	sessionID := first.review.SessionID
+	first.mu.Unlock()
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := Start(context.Background(), Options{DataDir: data, UIDir: filepath.Join(data, "missing-ui")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	second.mu.Lock()
+	restored := second.review
+	second.mu.Unlock()
+	if restored == nil || restored.Root != canonicalWorkspace || restored.SessionID != sessionID || len(restored.Repos) != 1 {
+		t.Fatalf("restored review=%#v, want workspace=%q session=%d", restored, canonicalWorkspace, sessionID)
+	}
+}
+
 func TestCommentImportValidationAndStableGeneratedID(t *testing.T) {
 	entry := commentImport{Type: "thread", FilePath: "pkg/example.go", Body: "looks risky", Author: "octo"}
 	entry.Position.Side = "new"

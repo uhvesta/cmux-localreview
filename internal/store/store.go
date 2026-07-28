@@ -13,7 +13,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const SchemaVersion = 20
+const SchemaVersion = 21
 
 // Open configures the SQLite durability settings shared by both daemon
 // implementations. The migration history is an on-disk compatibility
@@ -169,6 +169,12 @@ var legacyMigrations = map[int][]string{
 		`DROP TABLE btw_threads_legacy_v20`,
 		`CREATE INDEX idx_btw_threads_target_agent ON btw_threads(target_agent_id)`,
 	},
+	// v21 keeps the model picker durable at the workspace boundary. A
+	// conversation may still carry an explicit override; NULL conversation
+	// settings inherit these values at send time.
+	21: {
+		`CREATE TABLE ask_workspace_settings (workspace_path TEXT PRIMARY KEY, model TEXT, reasoning_effort TEXT, context_tier TEXT, updated_at INTEGER NOT NULL)`,
+	},
 }
 
 // currentSchema is intentionally explicit instead of an ORM model: database
@@ -202,6 +208,7 @@ var currentSchema = []string{
 	`CREATE INDEX idx_btw_threads_target_agent ON btw_threads(target_agent_id)`,
 	`CREATE TABLE ask_conversations (id TEXT PRIMARY KEY, queue_item_id TEXT, model TEXT, copilot_session_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, context_json TEXT, reasoning_effort TEXT, context_tier TEXT, review_session_id INTEGER REFERENCES sessions(id), archived_at INTEGER)`,
 	`CREATE INDEX idx_ask_conversations_session_state ON ask_conversations(review_session_id, archived_at, updated_at DESC)`,
+	`CREATE TABLE ask_workspace_settings (workspace_path TEXT PRIMARY KEY, model TEXT, reasoning_effort TEXT, context_tier TEXT, updated_at INTEGER NOT NULL)`,
 	`CREATE TABLE ask_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id TEXT NOT NULL REFERENCES ask_conversations(id) ON DELETE CASCADE, role TEXT NOT NULL CHECK(role IN ('user','assistant','system')), body TEXT NOT NULL, pending INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, location_json TEXT)`,
 	`CREATE INDEX idx_ask_messages_conversation ON ask_messages(conversation_id, id)`,
 	`CREATE TABLE question_sets (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`,

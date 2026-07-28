@@ -619,6 +619,46 @@ func (d *Daemon) activateWorkspaceWithBase(workspace, label, base string) ([]rev
 	return repos, nil
 }
 
+// restoreActiveWorkspace rebuilds the in-memory reviewer projection after a
+// daemon restart without creating a new review session.  Comments, /ask
+// transcripts, and queue provenance are keyed to that durable session, so
+// calling activateWorkspace here would silently make a restart look like a
+// new review round. A missing/moved workspace is deliberately non-fatal: Queue
+// Home remains usable and tells the user to open an available item instead.
+func (d *Daemon) restoreActiveWorkspace() error {
+	var workspace string
+	var label sql.NullString
+	err := d.db.QueryRow(`SELECT root_path,label FROM workspace_registry WHERE active=1 ORDER BY last_opened_at DESC LIMIT 1`).Scan(&workspace, &label)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	workspace, err = safeWorkspacePath(workspace)
+	if err != nil {
+		return err
+	}
+	repos, err := discoverReviewRepos(workspace)
+	if err != nil {
+		return err
+	}
+	for index := range repos {
+		if err := d.db.QueryRow(`SELECT id FROM repos WHERE git_dir=?`, repos[index].AbsolutePath).Scan(&repos[index].DBID); err != nil {
+			return err
+		}
+	}
+	var sessionID int64
+	if err := d.db.QueryRow(`SELECT id FROM sessions ORDER BY started_at DESC,id DESC LIMIT 1`).Scan(&sessionID); err != nil {
+		return err
+	}
+	d.mu.Lock()
+	d.review = &workspaceReview{Root: workspace, SessionID: sessionID, Repos: repos}
+	d.mu.Unlock()
+	d.startDiffWatcher(repos)
+	return nil
+}
+
 // startDiffWatcher treats the Git working tree as the source of truth for a
 // rendered review.  It never pushes a diff (or any prompt) to Copilot: the
 // browser simply receives an invalidation and decides whether to refetch.
@@ -1908,6 +1948,12 @@ func Start(ctx context.Context, options Options) (*Daemon, error) {
 		github = githubauth.New(secrets, githubauth.NewFileConfigStore(filepath.Join(dir, "github-apps.json")), http.DefaultClient, browserOpener)
 	}
 	d := &Daemon{listener: listener, dataDir: dir, token: token, sessions: make(map[string]time.Time), watches: make(map[chan string]struct{}), queueWatches: make(map[string]context.CancelFunc), authFlows: make(map[githubauth.Capability]*githubauth.LoopbackFlow), askRuntime: options.AskRuntime, askFactory: options.AskRuntimeFactory, askWatchers: make(map[string]map[chan askruntime.Delta]struct{}), db: db, github: github, ws: wshub.New(wshub.Options{Path: "/ws"})}
+	if err := d.restoreActiveWorkspace(); err != nil {
+		// Persisted active workspace state is best-effort at startup. An absent
+		// worktree must not prevent Queue Home from recovering it or opening a
+		// different queue item.
+		fmt.Fprintln(os.Stderr, "localreviewd: restore active workspace:", err)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

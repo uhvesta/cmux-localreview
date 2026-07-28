@@ -4,8 +4,10 @@
   "type": "module",
   "main": "main.mjs",
   "scripts": {
-    "dev": "LOCALREVIEWD_PATH=../bazel-bin/cmd/localreviewd/localreviewd electron .",
-    "check": "node --check main.mjs"
+    "dev": "LOCALREVIEWD_PATH=../bazel-bin/cmd/localreviewd/localreviewd_/localreviewd electron .",
+    "check": "node --check main.mjs",
+    "package": "electron-builder",
+    "package:dir": "electron-builder --dir"
   },
   "devDependencies": {
     "electron": "^40.0.0",
@@ -15,6 +17,6 @@
     "appId": "com.uhvesta.cmuxlocalreview",
     "productName": "CMUX Local Review",
     "files": ["main.mjs", "package.json"],
-    "extraResources": [{ "from": "../bazel-bin/cmd/localreviewd/localreviewd", "to": "localreviewd" }]
+    "extraResources": [{ "from": "../bazel-bin/cmd/localreviewd/localreviewd_/localreviewd", "to": "localreviewd" }]
   }
 }

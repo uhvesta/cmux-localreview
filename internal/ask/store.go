@@ -70,6 +70,24 @@ type Conversation struct {
 	UpdatedAt        int64            `json:"updatedAt"`
 }
 
+// WorkspaceSettings is the durable picker default for one review workspace.
+// Empty fields mean "let Copilot decide". Conversation fields remain explicit
+// overrides, so changing this record affects only conversations that have not
+// picked their own value.
+type WorkspaceSettings struct {
+	WorkspacePath   string           `json:"workspacePath"`
+	Model           *string          `json:"model"`
+	ReasoningEffort *ReasoningEffort `json:"reasoningEffort"`
+	ContextTier     *ContextTier     `json:"contextTier"`
+	UpdatedAt       int64            `json:"updatedAt"`
+}
+
+type UpdateWorkspaceSettingsInput struct {
+	Model           *string
+	ReasoningEffort *ReasoningEffort
+	ContextTier     *ContextTier
+}
+
 type Message struct {
 	ID             int64     `json:"id"`
 	ConversationID string    `json:"conversationId"`
@@ -112,6 +130,70 @@ type UpdateConversationInput struct {
 	ReasoningEffort  *ReasoningEffort
 	ContextTier      *ContextTier
 	CopilotSessionID *string
+}
+
+// GetWorkspaceSettings returns a stable, empty default record when the
+// workspace has never configured /ask. That lets callers render a picker
+// without treating first use as an error or silently persisting a selection.
+func GetWorkspaceSettings(ctx context.Context, db *sql.DB, workspacePath string) (*WorkspaceSettings, error) {
+	workspacePath = strings.TrimSpace(workspacePath)
+	if workspacePath == "" {
+		return nil, errors.New("/ask workspace path is required")
+	}
+	var model, reasoning, tier sql.NullString
+	item := &WorkspaceSettings{WorkspacePath: workspacePath}
+	err := db.QueryRowContext(ctx, `SELECT model,reasoning_effort,context_tier,updated_at FROM ask_workspace_settings WHERE workspace_path=?`, workspacePath).Scan(&model, &reasoning, &tier, &item.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return item, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	item.Model = optionalString(model)
+	if reasoning.Valid && strings.TrimSpace(reasoning.String) != "" {
+		value := ReasoningEffort(reasoning.String)
+		item.ReasoningEffort = &value
+	}
+	if tier.Valid && strings.TrimSpace(tier.String) != "" {
+		value := ContextTier(tier.String)
+		item.ContextTier = &value
+	}
+	if err := validateModelSettings(item.ReasoningEffort, item.ContextTier); err != nil {
+		return nil, fmt.Errorf("stored /ask workspace settings: %w", err)
+	}
+	return item, nil
+}
+
+// UpdateWorkspaceSettings patches only supplied picker defaults. Passing an
+// empty model explicitly clears the default and restores Copilot's auto mode.
+func UpdateWorkspaceSettings(ctx context.Context, db *sql.DB, workspacePath string, input UpdateWorkspaceSettingsInput) (*WorkspaceSettings, error) {
+	current, err := GetWorkspaceSettings(ctx, db, workspacePath)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateModelSettings(input.ReasoningEffort, input.ContextTier); err != nil {
+		return nil, err
+	}
+	if input.Model != nil {
+		if strings.TrimSpace(*input.Model) == "" {
+			current.Model = nil
+		} else {
+			value := strings.TrimSpace(*input.Model)
+			current.Model = &value
+		}
+	}
+	if input.ReasoningEffort != nil {
+		current.ReasoningEffort = input.ReasoningEffort
+	}
+	if input.ContextTier != nil {
+		current.ContextTier = input.ContextTier
+	}
+	now := time.Now().UnixMilli()
+	_, err = db.ExecContext(ctx, `INSERT INTO ask_workspace_settings(workspace_path,model,reasoning_effort,context_tier,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(workspace_path) DO UPDATE SET model=excluded.model,reasoning_effort=excluded.reasoning_effort,context_tier=excluded.context_tier,updated_at=excluded.updated_at`, current.WorkspacePath, nullablePointerString(current.Model), optionalReasoning(current.ReasoningEffort), optionalTier(current.ContextTier), now)
+	if err != nil {
+		return nil, err
+	}
+	return GetWorkspaceSettings(ctx, db, workspacePath)
 }
 
 func CreateConversation(ctx context.Context, db *sql.DB, input CreateConversationInput) (*Conversation, error) {
@@ -561,6 +643,19 @@ func nullString(value string) any {
 		return nil
 	}
 	return value
+}
+func optionalString(value sql.NullString) *string {
+	if !value.Valid || strings.TrimSpace(value.String) == "" {
+		return nil
+	}
+	trimmed := strings.TrimSpace(value.String)
+	return &trimmed
+}
+func nullablePointerString(value *string) any {
+	if value == nil || strings.TrimSpace(*value) == "" {
+		return nil
+	}
+	return strings.TrimSpace(*value)
 }
 func optionalReasoning(value *ReasoningEffort) any {
 	if value == nil {

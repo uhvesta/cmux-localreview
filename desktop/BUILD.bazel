@@ -1,0 +1,32 @@
+# Electron is bundled by electron-builder, not as a Bazel toolchain. This is
+# consequently an explicit host-local packaging target, outside `bazel test`.
+genrule(
+    name = "app",
+    srcs = [
+        "README.md",
+        "main.mjs",
+        "package.json",
+        "//cmd/localreviewd:localreviewd",
+    ],
+    outs = ["cmux-localreview-desktop.tar.gz"],
+    local = True,
+    tags = ["manual", "no-sandbox"],
+    cmd = """
+set -euo pipefail
+command -v npm >/dev/null || { echo 'npm is required to package Electron' >&2; exit 1; }
+test -x desktop/node_modules/.bin/electron-builder || { echo 'run npm --prefix desktop install before bazel build //desktop:app' >&2; exit 1; }
+stage=\"$(@D)/desktop-stage\"
+rm -rf \"$$stage\"
+mkdir -p \"$$stage\"
+cp $(location main.mjs) \"$$stage/main.mjs\"
+cp $(location package.json) \"$$stage/package.json\"
+cp $(location //cmd/localreviewd:localreviewd) \"$$stage/localreviewd\"
+chmod 0755 \"$$stage/localreviewd\"
+cd desktop
+./node_modules/.bin/electron-builder --project \"$$stage\" --dir --config.extraResources.from=\"$$stage/localreviewd\" --config.extraResources.to=localreviewd
+artifact=$$(find \"$$stage/dist\" -maxdepth 1 -type d -name '*unpacked' -print -quit)
+test -n \"$$artifact\"
+tar -C \"$$(dirname \"$$artifact\")\" -czf \"$@\" \"$$(basename \"$$artifact\")\"
+""",
+    visibility = ["//visibility:public"],
+)
