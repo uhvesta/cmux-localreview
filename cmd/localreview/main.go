@@ -671,18 +671,39 @@ func openHome(args []string) error {
 	flags := flag.NewFlagSet("open", flag.ContinueOnError)
 	noOpen := flags.Bool("no-open", false, "print the Queue Home or workspace-review URL without launching a browser")
 	queueItem := flags.String("queue-item", "", "open one persisted queue item directly in the reviewer")
+	pullRequest := flags.String("pr", "", "open a GitHub pull request for local read-only review and /ask (never queues or publishes it)")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if flags.NArg() > 1 || (*queueItem != "" && flags.NArg() != 0) {
-		return errors.New("usage: localreview open [--no-open] [--queue-item ID] [workspace-path]")
+	if flags.NArg() > 1 || (*queueItem != "" && flags.NArg() != 0) || (*pullRequest != "" && (flags.NArg() != 0 || *queueItem != "")) {
+		return errors.New("usage: localreview open [--no-open] [--queue-item ID | --pr URL] [workspace-path]")
 	}
 	d, err := discovered()
 	if err != nil {
 		return err
 	}
 	path := "/"
-	if strings.TrimSpace(*queueItem) != "" {
+	if strings.TrimSpace(*pullRequest) != "" {
+		value := strings.TrimSpace(*pullRequest)
+		parsed, parseErr := url.Parse(value)
+		if parseErr != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || !strings.Contains(parsed.Path, "/pull/") {
+			return errors.New("--pr must be a GitHub pull-request URL, for example https://github.com/owner/repo/pull/123")
+		}
+		_, body, callErr := daemonCall(http.MethodPost, "/local-review/pr", map[string]string{"remoteUrl": value})
+		if callErr != nil {
+			return fmt.Errorf("open local PR review: %w", callErr)
+		}
+		var opened struct {
+			ReviewURL string `json:"reviewUrl"`
+		}
+		if err := json.Unmarshal(body, &opened); err != nil || opened.ReviewURL == "" {
+			return errors.New("localreviewd returned an invalid local PR review response")
+		}
+		path = opened.ReviewURL
+		if !strings.Contains(path, "localOnly=1") {
+			return errors.New("localreviewd refused to open a local-only PR review")
+		}
+	} else if strings.TrimSpace(*queueItem) != "" {
 		path = "/review?queueItem=" + url.QueryEscape(strings.TrimSpace(*queueItem))
 	}
 	if flags.NArg() == 1 {

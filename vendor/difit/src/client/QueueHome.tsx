@@ -117,6 +117,7 @@ export function QueueHome() {
   const [opening, setOpening] = useState(false);
   const [remoteUrl, setRemoteUrl] = useState('');
   const [submittingRemote, setSubmittingRemote] = useState(false);
+  const [openingLocalPR, setOpeningLocalPR] = useState(false);
   const [localPath, setLocalPath] = useState('');
   const [localTitle, setLocalTitle] = useState('');
   const [localTopic, setLocalTopic] = useState('');
@@ -276,6 +277,32 @@ export function QueueHome() {
     } finally { setSubmittingRemote(false); }
   }, [refresh, remoteUrl]);
 
+  // This is deliberately not a queue operation. It materializes the PR in
+  // the daemon-owned cache and opens a local-only reviewer, where /ask can
+  // inspect the diff. Formal comments, queue feedback, and GitHub publishing
+  // remain unavailable unless the reviewer explicitly chooses Add PR later.
+  const reviewRemoteLocally = useCallback(async () => {
+    const value = remoteUrl.trim();
+    if (!value) return;
+    try {
+      const parsed = new URL(value);
+      if (!/^https?:$/.test(parsed.protocol) || !/\/pull\/\d+\/?$/.test(parsed.pathname)) {
+        throw new Error('Enter a GitHub pull-request URL, for example https://github.com/owner/repo/pull/123.');
+      }
+      setOpeningLocalPR(true); setError(null);
+      const response = await daemonFetch('/api/local-review/pr', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ remoteUrl: value }),
+      });
+      const body = (await response.json().catch(() => null)) as { reviewUrl?: string; error?: string } | null;
+      if (!response.ok || !body?.reviewUrl) throw new Error(body?.error ?? 'Could not open that pull request for local review.');
+      if (!body.reviewUrl.includes('localOnly=1')) throw new Error('The daemon did not create a local-only review.');
+      window.location.assign(body.reviewUrl);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not open that pull request for local review.');
+      setOpeningLocalPR(false);
+    }
+  }, [remoteUrl]);
+
   const submitLocal = useCallback(async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const workspacePath = localPath.trim();
@@ -398,12 +425,13 @@ export function QueueHome() {
       </section>
       <section aria-label="Remote pull-request queue">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10 }}><h2 style={{ fontSize: 16, margin: 0 }}>Remote</h2><span style={{ fontSize: 12, opacity: 0.62 }}>{remoteItems.length} pull request{remoteItems.length === 1 ? '' : 's'}</span></div>
-        <form onSubmit={submitRemote} style={{ display: 'flex', gap: 7, marginBottom: 10 }} aria-label="Add remote pull request">
+        <form onSubmit={submitRemote} style={{ display: 'flex', gap: 7, marginBottom: 7 }} aria-label="Add remote pull request">
           <label style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clipPath: 'inset(50%)' }} htmlFor="remote-pr-url">Pull request URL</label>
           <input id="remote-pr-url" type="url" value={remoteUrl} onChange={(event) => setRemoteUrl(event.target.value)} placeholder="https://github.com/owner/repo/pull/123" style={{ minWidth: 0, flex: 1, padding: '7px 8px', borderRadius: 5, border: '1px solid rgba(127,127,127,0.45)', background: 'transparent', color: 'inherit' }} />
-          <button type="submit" disabled={submittingRemote || !remoteUrl.trim()} style={{ ...buttonStyle, whiteSpace: 'nowrap' }}>{submittingRemote ? 'Adding…' : 'Add PR'}</button>
+          <button type="submit" disabled={submittingRemote || openingLocalPR || !remoteUrl.trim()} style={{ ...buttonStyle, whiteSpace: 'nowrap' }}>{submittingRemote ? 'Adding…' : 'Add PR'}</button>
+          <button type="button" onClick={() => void reviewRemoteLocally()} disabled={submittingRemote || openingLocalPR || !remoteUrl.trim()} style={{ ...buttonStyle, borderColor: '#58a6ff', whiteSpace: 'nowrap' }}>{openingLocalPR ? 'Opening…' : 'Review locally'}</button>
         </form>
-        <p style={{ margin: '0 0 10px', fontSize: 12, opacity: 0.68 }}>Add a PR here or run <code>queue-submit &lt;PR URL&gt;</code> from the CLI.</p>
+        <p style={{ margin: '0 0 10px', fontSize: 12, opacity: 0.68 }}><strong>Review locally</strong> mirrors the PR for diff and <code>/ask</code> only: it creates no queue item and cannot publish feedback. <strong>Add PR</strong> is the separate formal queue action. CLI: <code>localreview open --pr &lt;PR URL&gt;</code> or <code>localreview queue-submit &lt;PR URL&gt;</code>.</p>
         {!loading && remoteItems.length === 0 && <div style={{ padding: 14, border: '1px dashed rgba(127,127,127,0.45)', borderRadius: 8, opacity: 0.76 }}>No remote pull requests are queued on this daemon.</div>}
         <div style={{ display: 'grid', gap: 10 }}>{remoteItems.map((item) => <QueueCard key={item.id} item={item} onOpenWorkspace={openWorkspace} onRemove={removeQueueItem} />)}</div>
         <section style={{ marginTop: 16, display: 'grid', gap: 10 }} aria-label="Remote daemon nodes">

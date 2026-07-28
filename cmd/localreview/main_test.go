@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -112,5 +114,65 @@ func TestShellQuoteCLI(t *testing.T) {
 		if got := shellQuoteCLI(input); got != expected {
 			t.Fatalf("shellQuoteCLI(%q)=%q, want %q", input, got, expected)
 		}
+	}
+}
+
+func TestOpenPullRequestUsesReadOnlyEndpointAndNeverQueues(t *testing.T) {
+	requests := make([]string, 0, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.URL.Path)
+		if r.URL.Path != "/api/local-review/pr" {
+			http.Error(w, "queue insertion is forbidden for --pr", http.StatusInternalServerError)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer private" {
+			http.Error(w, "missing daemon capability", http.StatusUnauthorized)
+			return
+		}
+		var input struct {
+			RemoteURL string `json:"remoteUrl"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil || input.RemoteURL != "https://github.com/acme/widget/pull/7" {
+			http.Error(w, "bad pull request", http.StatusBadRequest)
+			return
+		}
+		_, _ = io.WriteString(w, `{"reviewUrl":"/review?localOnly=1"}`)
+	}))
+	defer server.Close()
+
+	data := t.TempDir()
+	t.Setenv("CMUX_LOCALREVIEW_DATA_DIR", data)
+	var port int
+	if _, err := fmt.Sscanf(strings.TrimPrefix(server.URL, "http://127.0.0.1:"), "%d", &port); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(data, "daemon.json"), []byte(fmt.Sprintf(`{"port":%d,"token":"private","pid":1234}`, port)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// --no-open keeps the assertion browser-independent and lets the test
+	// verify the same capability URL that a user can paste into Firefox.
+	originalStdout := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writer
+	callErr := openHome([]string{"--no-open", "--pr", "https://github.com/acme/widget/pull/7"})
+	_ = writer.Close()
+	os.Stdout = originalStdout
+	output, readErr := io.ReadAll(reader)
+	_ = reader.Close()
+	if callErr != nil {
+		t.Fatal(callErr)
+	}
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if got := string(output); !strings.Contains(got, "/review?localOnly=1#daemonToken=private") {
+		t.Fatalf("unexpected local-only review URL %q", got)
+	}
+	if len(requests) != 1 || requests[0] != "POST /api/local-review/pr" {
+		t.Fatalf("--pr made unexpected daemon requests: %v", requests)
 	}
 }
