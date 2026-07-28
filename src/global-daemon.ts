@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import type { Socket } from "node:net";
 import { fileURLToPath } from "node:url";
 import express, { type Express, type Request, type Response } from "express";
 
@@ -737,12 +738,52 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
   const server = await new Promise<ReturnType<Express["listen"]>>((resolvePromise) => {
     const listener = app.listen(options.port ?? 0, options.host ?? "127.0.0.1", () => resolvePromise(listener));
   });
+  // `server.close()` waits for every keep-alive/SSE browser connection. A
+  // review page deliberately keeps an EventSource open, so retain sockets in
+  // order to make Ctrl-C and scripted restarts deterministic instead of
+  // waiting forever for a browser tab to disappear.
+  const sockets = new Set<Socket>();
+  server.on("connection", (socket: Socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+  });
   hub = new WsHub(server, "/ws");
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : options.port ?? 0;
   const discovery = { port, token, pid: process.pid, version: VERSION, createdAt: new Date().toISOString() };
   writeDiscovery(discovery);
-  return { app, server, db, discovery, close: async () => { for (const workspacePath of watcherTimers.keys()) stopWatcher(workspacePath); if (active) await active.stop(); federation.stopAll(); hub?.close(); await new Promise<void>((resolvePromise) => server.close(() => resolvePromise())); db.close(); } };
+  return {
+    app,
+    server,
+    db,
+    discovery,
+    close: async () => {
+      for (const workspacePath of watcherTimers.keys()) stopWatcher(workspacePath);
+      // A Copilot runtime can be in the middle of a transport shutdown. Give
+      // it a chance to clean up, but never let it prevent the daemon from
+      // restarting; the process exit below reaps remaining children.
+      if (active) {
+        await Promise.race([
+          active.stop().catch((error) => console.warn("Workspace shutdown failed:", error)),
+          new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 2_000)),
+        ]);
+      }
+      federation.stopAll();
+      hub?.close();
+      const closed = new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
+      for (const socket of sockets) socket.destroy();
+      // A platform-level half-open stream can still keep Node/Bun's close
+      // callback from firing even after all tracked sockets are destroyed.
+      // This daemon is loopback-only and the signal handler exits the process
+      // immediately afterwards, so bound the wait rather than making restart
+      // depend on a browser TCP teardown.
+      await Promise.race([
+        closed,
+        new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 1_000)),
+      ]);
+      db.close();
+    },
+  };
 }
 
 if (import.meta.main) {

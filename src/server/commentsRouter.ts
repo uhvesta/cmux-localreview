@@ -6,6 +6,8 @@ import {
   listThreads,
   upsertThread,
   deleteThread,
+  isThreadTombstoned,
+  tombstoneThread,
   refreshOrphanFlags,
   type DiffCommentThread,
   type CommentMessage,
@@ -163,7 +165,13 @@ export function createCommentsRouter(deps: CommentsRouterDeps): Router {
         });
         return;
       }
-      const nextThreads = parseThreadsPayload(req.body);
+      const requestedThreads = parseThreadsPayload(req.body);
+      // A tab may be fresh enough to have the current version but still hold
+      // an old local thread array. Tombstones make a reviewer’s explicit
+      // resolve/delete authoritative across every open tab.
+      const nextThreads = requestedThreads.filter(
+        (thread) => !isThreadTombstoned(deps.db, sessionId, deps.repoDbId, thread.id),
+      );
       const existingIds = new Set(listThreads(deps.db, sessionId, deps.repoDbId).map((t) => t.id));
       const nextIds = new Set(nextThreads.map((t) => t.id));
 
@@ -171,7 +179,13 @@ export function createCommentsRouter(deps: CommentsRouterDeps): Router {
         upsertThread(deps.db, sessionId, deps.repoDbId, thread);
       }
       for (const id of existingIds) {
-        if (!nextIds.has(id)) deleteThread(deps.db, sessionId, deps.repoDbId, id);
+        if (!nextIds.has(id)) {
+          deleteThread(deps.db, sessionId, deps.repoDbId, id);
+          // A full snapshot that omits a thread is a reviewer deletion too
+          // (for example, “Delete all comments”), so protect it from another
+          // tab's cached snapshot just like an explicit DELETE request.
+          tombstoneThread(deps.db, sessionId, deps.repoDbId, id);
+        }
       }
 
       version += 1;
@@ -190,14 +204,12 @@ export function createCommentsRouter(deps: CommentsRouterDeps): Router {
   });
 
   router.delete("/api/comments/:threadId", (req, res) => {
-    const deleted = deleteThread(deps.db, deps.getSessionId(), deps.repoDbId, req.params.threadId);
-    if (!deleted) {
-      res.status(404).json({ error: `Thread not found: ${req.params.threadId}` });
-      return;
-    }
+    const sessionId = deps.getSessionId();
+    const deleted = deleteThread(deps.db, sessionId, deps.repoDbId, req.params.threadId);
+    tombstoneThread(deps.db, sessionId, deps.repoDbId, req.params.threadId);
     version += 1;
     deps.onChange?.();
-    res.json({ success: true, threadId: req.params.threadId, version });
+    res.json({ success: true, deleted, threadId: req.params.threadId, version });
   });
 
   router.post("/api/comment-imports", (req, res) => {
@@ -209,6 +221,7 @@ export function createCommentsRouter(deps: CommentsRouterDeps): Router {
       );
       const sessionId = deps.getSessionId();
       for (const thread of imported) {
+        if (isThreadTombstoned(deps.db, sessionId, deps.repoDbId, thread.id)) continue;
         upsertThread(deps.db, sessionId, deps.repoDbId, thread);
       }
       version += 1;

@@ -344,6 +344,21 @@ const MIGRATIONS: Migration[] = [
       db.run(`CREATE INDEX idx_queue_decisions_item_created ON queue_decisions(queue_item_id, created_at, id)`);
     },
   },
+  {
+    // Browser tabs can retain an old full-comment snapshot. Resolving a
+    // thread must win permanently over that stale state, rather than letting
+    // a later POST recreate the same client-generated thread id.
+    version: 14,
+    up: (db) => {
+      db.run(`CREATE TABLE comment_tombstones (
+        session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        repo_id INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+        thread_id TEXT NOT NULL,
+        deleted_at INTEGER NOT NULL,
+        PRIMARY KEY(session_id, repo_id, thread_id)
+      )`);
+    },
+  },
 ];
 
 export function runMigrations(db: Database): void {

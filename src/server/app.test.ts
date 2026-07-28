@@ -135,11 +135,18 @@ describe("buildWorkspaceApp", () => {
 
     const removed = await fetch(`${commentsUrl}/stale-thread`, { method: "DELETE" });
     expect(removed.status).toBe(200);
+    const removedJson = (await removed.json()) as { version: number };
 
     const staleRetry = await fetch(commentsUrl, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ threads: initial, baseVersion: savedJson.version }),
     });
     expect(staleRetry.status).toBe(409);
+    // Even a tab that has caught up with the server version cannot recreate a
+    // resolved client-generated thread from its old local snapshot.
+    const currentVersionRetry = await fetch(commentsUrl, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ threads: initial, baseVersion: removedJson.version }),
+    });
+    expect(currentVersionRetry.status).toBe(200);
     const current = (await (await fetch(`${commentsUrl}-json`)).json()) as { threads: unknown[] };
     expect(current.threads).toHaveLength(0);
   });

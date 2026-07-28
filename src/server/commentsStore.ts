@@ -213,6 +213,21 @@ export function deleteThread(
   return result.changes > 0;
 }
 
+/** Prevent an already-resolved client-generated id from being revived by a stale tab. */
+export function tombstoneThread(db: Database, sessionId: number, repoDbId: number, threadId: string): void {
+  db.query(
+    `INSERT INTO comment_tombstones(session_id, repo_id, thread_id, deleted_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(session_id, repo_id, thread_id) DO NOTHING`,
+  ).run(sessionId, repoDbId, threadId, Date.now());
+}
+
+export function isThreadTombstoned(db: Database, sessionId: number, repoDbId: number, threadId: string): boolean {
+  return db.query(
+    `SELECT 1 AS present FROM comment_tombstones WHERE session_id = ? AND repo_id = ? AND thread_id = ?`,
+  ).get(sessionId, repoDbId, threadId) !== null;
+}
+
 /**
  * Re-anchoring check (SPEC.md §3): a comment survives a diff refresh as long
  * as its anchored snapshot text still matches the corresponding line range

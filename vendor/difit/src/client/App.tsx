@@ -12,7 +12,6 @@ import {
   type RevisionsResponse,
 } from '../types/diff';
 import { DEFAULT_DIFF_VIEW_MODE, normalizeDiffViewMode } from '../utils/diffMode';
-import { mergeCommentThreads } from '../utils/commentImports';
 import {
   createDiffSelection,
   diffSelectionsEqual,
@@ -284,7 +283,6 @@ function App() {
   const commentWriteChainRef = useRef<Promise<void>>(Promise.resolve());
   // Last server comment version seen; echoed back as baseVersion so the server can detect concurrent writes.
   const serverCommentVersionRef = useRef<number | null>(null);
-  const pendingBootstrapAfterLocalResetRef = useRef(false);
 
   useEffect(() => {
     if (commentsContextKey !== bootstrappedCommentsKey) {
@@ -1003,7 +1001,6 @@ function App() {
   useEffect(() => {
     if (diffData?.clearComments && !hasCleanedRef.current) {
       hasCleanedRef.current = true;
-      pendingBootstrapAfterLocalResetRef.current = true;
       clearAllComments({ resetAppliedCommentImportIds: true });
       clearViewedFiles();
       console.log(
@@ -1025,18 +1022,20 @@ function App() {
       return;
     }
 
-    const shouldReplaceFromServer = pendingBootstrapAfterLocalResetRef.current;
-    pendingBootstrapAfterLocalResetRef.current = false;
-
     bootstrappingCommentsKeyRef.current = commentsContextKey;
     let cancelled = false;
 
     const bootstrapComments = async () => {
       try {
         const serverThreads = await fetchServerThreads();
-        const nextThreads = shouldReplaceFromServer
-          ? serverThreads
-          : mergeCommentThreads(serverThreads, threads).threads;
+        // The daemon owns review threads.  Browser storage is useful as a
+        // short-lived optimistic cache, but it must never win over a fresh
+        // server response: otherwise a tab that still has a resolved thread
+        // in localStorage makes it appear to come back after reload.
+        //
+        // Imports are applied deliberately through their own endpoint, so
+        // there is no legitimate local-only state to merge at bootstrap.
+        const nextThreads = serverThreads;
         if (cancelled) {
           return;
         }
@@ -1044,12 +1043,6 @@ function App() {
         skipNextCommentSyncRef.current = true;
         replaceThreads(nextThreads);
 
-        if (
-          !shouldReplaceFromServer &&
-          JSON.stringify(serverThreads) !== JSON.stringify(nextThreads)
-        ) {
-          await syncThreadsToServer(nextThreads);
-        }
       } catch (commentsError) {
         if (!cancelled) {
           console.error('Failed to bootstrap comments from server:', commentsError);
