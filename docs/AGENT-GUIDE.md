@@ -39,6 +39,14 @@ the only prompt/delivery triggers.
 2. Verify its path/PR, branch/base/head, snapshot ID, and current status.
 3. Use the diff to create formal comments. Use `/ask` for investigation and
    keep its questions anchored to a selected file and line/range.
+   For a large diff, optionally choose a model and explicitly **Generate
+   plan** in Review order. The resulting Copilot hunk order is immutable,
+   model/settings-specific navigation guidance: compare it with canonical
+   **File order**, and use its plan context only for an explicit `/ask`
+   follow-up. Do not treat a hunk plan or `/ask` answer as formal feedback.
+   Reopen, toggle, navigation, and context reads never prompt Copilot. A
+   changed diff makes the plan stale; only explicit **Recompute plan** creates
+   a new one.
 4. Check the feedback prompt before copying or selecting **Send through
    Copilot**. That action batches undelivered formal feedback, shows state,
    and prevents duplicate concurrent delivery. Use `queue` normally;

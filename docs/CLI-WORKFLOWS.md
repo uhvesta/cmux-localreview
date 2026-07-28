@@ -183,6 +183,42 @@ accept a PR URL.
 `localreview queue-submit` remains a compatible alias for `localreview submit`
 while existing skills and automation are migrated.
 
+## Optional Copilot-guided hunk plan
+
+Use a saved hunk plan when a large diff needs a deliberate inspection order.
+It is optional guidance, not a review decision and not an autonomous Copilot
+run:
+
+1. Open the intended workspace reviewer and start in **File order** (the
+   canonical Git diff order).
+2. In **Review order**, choose the `/ask` model. The saved workspace reasoning
+   level and context tier are included when configured.
+3. Select **Generate plan** (the explicit compute action). Copilot receives a
+   structured, read-only request for stable hunk IDs, a ranked order,
+   rationales, and optional investigation questions.
+4. Switch between **File order** and **Copilot plan** at any time. The latter
+   only changes hunk navigation; it does not change the diff, comments, or
+   formal-review order. Use the previous/next controls or a ranked hunk to
+   navigate the saved plan.
+5. Use the saved plan as context for an explicit `/ask` follow-up when you
+   want to investigate a rationale or suggested question. This remains an
+   `/ask` conversation: it is not exported, queued, delivered through ACP,
+   or published as formal feedback unless you deliberately convert a response
+   into a review comment.
+
+Each result is immutable and keyed to the review session, repository, exact
+diff fingerprint, selected model, and saved settings. Opening a reviewer,
+reloading the diff, toggling File order/Copilot plan, navigating hunks, or
+reading plan context never sends Copilot a prompt. A normal explicit Generate
+on the same exact input returns the saved plan rather than duplicating a turn.
+
+When the diff changes, the former plan is marked **stale** and is never used
+to reorder the new diff. Review the canonical order, then select **Recompute
+plan** only if you want a new Copilot request. Recompute creates a separate
+immutable plan; it never mutates or reuses the earlier one. If Copilot returns
+invalid structured output or is unavailable, the saved error is visible and
+retrying requires the same explicit Recompute action.
+
 ## Reproduce a saved snapshot
 
 ```sh
