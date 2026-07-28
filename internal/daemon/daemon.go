@@ -545,6 +545,11 @@ func shellQuote(value string) string {
 // explicitly; they never fall back to a Node process behind the caller.
 func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api")
+	if strings.HasPrefix(path, "/ask/") {
+		if d.handleAsk(w, r, path) {
+			return
+		}
+	}
 	if path == "/github/auth/status" && r.Method == http.MethodGet {
 		capabilities := map[string]githubauth.Status{}
 		for _, capability := range []githubauth.Capability{githubauth.Read, githubauth.Write, githubauth.Copilot} {

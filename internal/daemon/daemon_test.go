@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -153,6 +154,59 @@ func TestGitHubAuthHTTPContract(t *testing.T) {
 	response, body = request(http.MethodDelete, "/api/github/auth/read", "")
 	if response.StatusCode != http.StatusNoContent || len(body) != 0 {
 		t.Fatalf("disconnect=%d %s", response.StatusCode, body)
+	}
+}
+
+func TestAskMetadataRoutesDoNotCreateMessagesOnRead(t *testing.T) {
+	dir := t.TempDir()
+	ui := filepath.Join(dir, "ui")
+	if err := os.MkdirAll(ui, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ui, "index.html"), []byte("ok"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d, err := Start(ctx, Options{DataDir: dir, UIDir: ui, GitHubAuth: githubauth.New(authSecrets{}, authConfig{}, authTransport(func(*http.Request) (*http.Response, error) { return nil, errors.New("not used") }), func(string) error { return nil })})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	base := "http://127.0.0.1:" + strconv.Itoa(d.Port())
+	request := func(method, path, body string) ([]byte, int) {
+		req, _ := http.NewRequest(method, base+path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+d.token)
+		if body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		response, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		contents, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		return contents, response.StatusCode
+	}
+	body, status := request(http.MethodPost, "/api/ask/conversations", `{"model":"auto","reasoningEffort":"medium","contextTier":"long_context"}`)
+	if status != http.StatusCreated {
+		t.Fatalf("create %d %s", status, body)
+	}
+	var created struct {
+		Conversation struct {
+			ID string `json:"id"`
+		} `json:"conversation"`
+	}
+	if json.Unmarshal(body, &created) != nil || created.Conversation.ID == "" {
+		t.Fatalf("invalid create %s", body)
+	}
+	body, status = request(http.MethodGet, "/api/ask/conversations/"+created.Conversation.ID, "")
+	if status != http.StatusOK || !strings.Contains(string(body), `"messages":[]`) {
+		t.Fatalf("read %d %s", status, body)
+	}
+	_, status = request(http.MethodPost, "/api/ask/question-sets", `{"name":"Review","questions":["What changed?","Any risks?"]}`)
+	if status != http.StatusCreated {
+		t.Fatalf("question set=%d", status)
 	}
 }
 
