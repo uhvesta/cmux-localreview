@@ -81,7 +81,7 @@ function QueueCard({ item, remoteNode, onOpenWorkspace, onRemove }: { item: Queu
     {item.body && <details style={{ marginTop: 7, fontSize: 12, opacity: 0.8 }}><summary style={{ cursor: 'pointer' }}>Description</summary><p style={{ margin: '6px 0 0', whiteSpace: 'pre-wrap', maxHeight: 180, overflowY: 'auto' }}>{item.body}</p></details>}
     <div style={{ marginTop: 8, fontFamily: 'monospace', fontSize: 11, overflowWrap: 'anywhere', opacity: 0.78 }} title={item.workspacePath}>{item.workspacePath}</div>
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginTop: 9, fontSize: 11, opacity: 0.76 }}>
-      <span>ACP: {item.acpState}</span>{item.agentProvider && <span>agent: {item.agentProvider}</span>}{remoteNode && <span>node: {remoteNode.label || remoteNode.sshTarget}</span>}
+      <span>Copilot feedback: {item.acpState === 'unavailable' ? 'not connected' : item.acpState}</span>{item.agentProvider && <span>originating agent: {item.agentProvider}</span>}{remoteNode && <span>node: {remoteNode.label || remoteNode.sshTarget}</span>}
     </div>
     {item.acpLastError && <div style={{ marginTop: 6, color: '#f85149', fontSize: 11 }}>{item.acpLastError}</div>}
     {(onOpenWorkspace || onRemove) && <div style={{ display: 'flex', gap: 7, marginTop: 12 }}>

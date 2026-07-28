@@ -64,6 +64,8 @@ type Daemon struct {
 	github    *githubauth.ServiceClient
 	ws        *wshub.Hub
 	watchStop context.CancelFunc
+	watchMu   sync.Mutex
+	watches   map[chan string]struct{}
 }
 
 func browserOpener(rawURL string) error {
@@ -611,7 +613,7 @@ func (d *Daemon) startDiffWatcher(repos []reviewRepo) {
 	go func() {
 		fingerprints := make(map[string]string, len(repos))
 		for _, repo := range repos {
-			value, err := gitOutput(repo.AbsolutePath, "status", "--porcelain=v1", "--untracked-files=all")
+			value, err := repoFingerprint(repo.AbsolutePath)
 			if err == nil {
 				fingerprints[repo.ID] = value
 			}
@@ -624,22 +626,86 @@ func (d *Daemon) startDiffWatcher(repos []reviewRepo) {
 				return
 			case <-ticker.C:
 				for _, repo := range repos {
-					value, err := gitOutput(repo.AbsolutePath, "status", "--porcelain=v1", "--untracked-files=all")
+					value, err := repoFingerprint(repo.AbsolutePath)
 					if err != nil || value == fingerprints[repo.ID] {
 						continue
 					}
 					fingerprints[repo.ID] = value
 					d.ws.BroadcastDiffUpdated(repo.ID)
+					d.broadcastWatch("reload")
 				}
 			}
 		}
 	}()
 }
 
+// repoFingerprint includes the diff payload, not only porcelain status. A
+// tracked file remains `M` while its content changes, which is precisely the
+// change a reviewer needs to reload. The output is never persisted or sent to
+// a browser; it is used only as a watcher comparison value.
+func repoFingerprint(path string) (string, error) {
+	status, err := gitOutput(path, "status", "--porcelain=v1", "--untracked-files=all")
+	if err != nil {
+		return "", err
+	}
+	diff, err := gitOutput(path, "diff", "--no-ext-diff", "--binary")
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256([]byte(status + "\x00" + diff))
+	return base64.RawURLEncoding.EncodeToString(sum[:]), nil
+}
+
+func (d *Daemon) broadcastWatch(kind string) {
+	d.watchMu.Lock()
+	defer d.watchMu.Unlock()
+	for watcher := range d.watches {
+		select {
+		case watcher <- kind:
+		default:
+		}
+	}
+}
+
+func (d *Daemon) serveWatch(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming is unavailable"})
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	watcher := make(chan string, 4)
+	d.watchMu.Lock()
+	d.watches[watcher] = struct{}{}
+	d.watchMu.Unlock()
+	defer func() {
+		d.watchMu.Lock()
+		delete(d.watches, watcher)
+		d.watchMu.Unlock()
+	}()
+	_, _ = fmt.Fprint(w, "data: {\"type\":\"connected\",\"diffMode\":\"default\"}\n\n")
+	flusher.Flush()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case kind := <-watcher:
+			_, _ = fmt.Fprintf(w, "data: {\"type\":%q,\"changeType\":\"git\"}\n\n", kind)
+			flusher.Flush()
+		}
+	}
+}
+
 // apiHandler ports the queue control plane first. Unported routes fail
 // explicitly; they never fall back to a Node process behind the caller.
 func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api")
+	if path == "/watch" && r.Method == http.MethodGet {
+		d.serveWatch(w, r)
+		return
+	}
 	if strings.HasPrefix(path, "/ask/") {
 		if d.handleAsk(w, r, path) {
 			return
@@ -1743,7 +1809,7 @@ func Start(ctx context.Context, options Options) (*Daemon, error) {
 		}
 		github = githubauth.New(secrets, githubauth.NewFileConfigStore(filepath.Join(dir, "github-apps.json")), http.DefaultClient, browserOpener)
 	}
-	d := &Daemon{listener: listener, dataDir: dir, token: token, sessions: make(map[string]time.Time), db: db, github: github, ws: wshub.New(wshub.Options{Path: "/ws"})}
+	d := &Daemon{listener: listener, dataDir: dir, token: token, sessions: make(map[string]time.Time), watches: make(map[chan string]struct{}), db: db, github: github, ws: wshub.New(wshub.Options{Path: "/ws"})}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

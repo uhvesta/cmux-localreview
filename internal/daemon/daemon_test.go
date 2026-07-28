@@ -373,6 +373,41 @@ func TestQueueHomeReadModelsAreAvailableBeforeWorkspaceActivation(t *testing.T) 
 	}
 }
 
+func TestRepoFingerprintChangesWhenModifiedFileContentChanges(t *testing.T) {
+	repo := t.TempDir()
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"config", "user.email", "localreview-test@example.invalid"}, {"config", "user.name", "localreview-test"}} {
+		if output, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, output)
+		}
+	}
+	file := filepath.Join(repo, "review.txt")
+	if err := os.WriteFile(file, []byte("before\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "review.txt"}, {"commit", "-qm", "initial"}} {
+		if output, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, output)
+		}
+	}
+	if err := os.WriteFile(file, []byte("first change\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	first, err := repoFingerprint(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte("second change\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	second, err := repoFingerprint(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatal("fingerprint did not change for content-only edit while porcelain status stayed modified")
+	}
+}
+
 func TestWorkspaceActivationDiscoversNestedRepositories(t *testing.T) {
 	workspace := t.TempDir()
 	for _, relative := range []string{".", "tools/child"} {
