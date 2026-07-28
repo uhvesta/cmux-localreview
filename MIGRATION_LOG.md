@@ -195,3 +195,31 @@ Not yet claimed:
   web Queue Home/reviewer/watch loop only; comments, `/ask` with real OAuth,
   `/btw`, queue decisions, remote PR UI, device flow, Electron, restart, and
   memory checks remain in the validation matrix.
+
+## 2026-07-28 — Phase 3 restart/comment follow-up
+
+Validated manually in the local browser after a real daemon stop and restart:
+
+- A direct `/review?queueItem=…` URL with a new daemon browser capability
+  restored the persisted active workspace and the same durable review session;
+  it no longer failed with `Failed to fetch workspace repos: 404`.
+- The previously created inline comment remained attached to `main.go:2` after
+  restart.
+- The comment's two-step **Resolve thread → Resolve** flow removed it from the
+  active reviewer. The native tombstone route keeps it from reappearing on a
+  reload/import.
+
+Implemented alongside this validation:
+
+- Native workspace restoration starts the diff watcher without creating a new
+  session, preserving comments and `/ask` identity across restarts.
+- Durable workspace-level `/ask` model/reasoning/context defaults, explicit
+  SDK model-list states, loopback OAuth UI support, and hardened Electron/tag
+  release packaging.
+
+Not yet claimed:
+
+- This follow-up does not count as a full second Phase-3 clean run. The
+  remaining explicit flows include real Copilot completion/model switching,
+  question sets, `/btw`, queue decisions, remote PR read-only UI, device auth,
+  Electron launch/quit, and RSS measurements.
