@@ -397,12 +397,13 @@ func authCommand(args []string) error {
 		clientID := flags.String("client-id", "", "public GitHub App client ID to configure before login")
 		device := flags.Bool("device", false, "use device OAuth for a headless or SSH-only machine")
 		loopback := flags.Bool("loopback", false, "use the default browser OAuth callback http://127.0.0.1:8787/oauth/callback")
+		noOpen := flags.Bool("no-open", false, "do not launch the browser authorization URL automatically")
 		noWait := flags.Bool("no-wait", false, "print authorization instructions without polling")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
 		if flags.NArg() != 0 {
-			return errors.New("usage: localreview auth login [--capability CAPABILITY] [--client-id ID] [--device|--loopback] [--no-wait]")
+			return errors.New("usage: localreview auth login [--capability CAPABILITY] [--client-id ID] [--device|--loopback] [--no-open] [--no-wait]")
 		}
 		if *capability != "read" && *capability != "write" && *capability != "copilot" {
 			return errors.New("capability must be read, write, or copilot")
@@ -434,6 +435,14 @@ func authCommand(args []string) error {
 		}
 		if start.Flow == "loopback" {
 			fmt.Printf("Open %s to authorize GitHub %s.\n", start.AuthorizationURL, *capability)
+			if !*noOpen {
+				// The URL contains only the short-lived OAuth state and PKCE
+				// challenge.  Opening it is a convenience: consent remains in
+				// GitHub's browser UI, and the printed URL is the recovery path.
+				if err := openExternalURL(start.AuthorizationURL); err != nil {
+					fmt.Fprintf(os.Stderr, "Could not open a browser automatically; open the URL above instead: %v\n", err)
+				}
+			}
 		} else {
 			fmt.Printf("Open %s and enter code %s.\n", start.VerificationURI, start.UserCode)
 		}
@@ -465,6 +474,22 @@ func authCommand(args []string) error {
 	default:
 		return errors.New("usage: localreview auth <login|status|logout> [options]")
 	}
+}
+
+// openExternalURL is deliberately best-effort. Authentication remains usable
+// over SSH, with popup blockers, or on machines without a desktop because the
+// caller always prints the URL/code before invoking this helper.
+func openExternalURL(value string) error {
+	var command *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		command = exec.Command("open", value)
+	case "windows":
+		command = exec.Command("rundll32", "url.dll,FileProtocolHandler", value)
+	default:
+		command = exec.Command("xdg-open", value)
+	}
+	return command.Start()
 }
 
 // githubAppCommand preserves the old setup-oriented vocabulary while routing
@@ -519,11 +544,12 @@ func githubAppCommand(args []string) error {
 		capability := flags.String("capability", "", "GitHub App capability: read, write, or copilot")
 		device := flags.Bool("device", false, "use device OAuth for a headless or SSH-only machine")
 		loopback := flags.Bool("loopback", false, "use the default registered browser OAuth callback http://127.0.0.1:8787/oauth/callback")
+		noOpen := flags.Bool("no-open", false, "print the browser authorization URL without launching it")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
 		if flags.NArg() != 0 || *capability == "" {
-			return errors.New("usage: localreview github-app connect --capability <read|write|copilot> [--device|--loopback]")
+			return errors.New("usage: localreview github-app connect --capability <read|write|copilot> [--device|--loopback] [--no-open]")
 		}
 		if *device && *loopback {
 			return errors.New("choose only one of --device or --loopback")
@@ -533,6 +559,9 @@ func githubAppCommand(args []string) error {
 			loginArgs = append(loginArgs, "--device")
 		} else if *loopback {
 			loginArgs = append(loginArgs, "--loopback")
+		}
+		if *noOpen {
+			loginArgs = append(loginArgs, "--no-open")
 		}
 		return authCommand(loginArgs)
 	default:

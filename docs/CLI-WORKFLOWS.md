@@ -232,6 +232,10 @@ unavailable, the picker reports an unauthenticated/fallback state instead of
 pretending a prompt was delivered. Once connected, turns stream through the
 selected persistent conversation; loading a transcript never starts a turn.
 
+On a desktop, `auth login` opens the GitHub consent page automatically after
+printing its URL. Use `--no-open` when another browser/profile should handle
+approval; the printed URL remains the recovery path and contains no token.
+
 For operators migrating from the former `localreview-github-app` executable,
 the native CLI retains its setup vocabulary as a thin, secure alias:
 
