@@ -88,8 +88,10 @@ LOCALREVIEWD_PATH="$PWD/../bazel-bin/cmd/localreviewd/localreviewd_/localreviewd
 ```
 
 The packaged application bundles `localreviewd` as an Electron resource. The
-tag-release pipeline publishes the native `tar.gz` archives plus a macOS DMG
-and Linux AppImage. For a local unpacked desktop smoke artifact, install the
+tag-release pipeline publishes the native `tar.gz` archives, their
+`checksums.txt` manifest, the matching `install.sh`, plus a macOS DMG and Linux
+AppImage. The archive is SHA-256 verified by the installer; it is not presented
+as a signed artifact. For a local unpacked desktop smoke artifact, install the
 desktop package dependencies and run `bazel build //desktop:app`; this target
 is deliberately host-local and manual because Electron's runtime is
 platform-specific.

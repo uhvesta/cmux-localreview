@@ -27,18 +27,49 @@ jobs:
           bash scripts/stage-ui-assets.sh
           go test ./...
           bazel test //...
-      - name: Build signed-checksum native archives
-        run: bazel build //release:archives //release:checksums
+      - name: Build and verify checksummed native archives
+        run: bash scripts/verify-release-archives.sh
       - name: Collect release files
         run: |
           mkdir -p release-out
-          cp bazel-bin/release/*.tar.gz bazel-bin/release/checksums.txt release-out/
+          cp bazel-bin/release/*.tar.gz bazel-bin/release/checksums.txt install.sh release-out/
+          cmp install.sh release-out/install.sh
       - name: Upload native release payload
         uses: actions/upload-artifact@v4
         with:
           name: native-archives
           path: release-out/*
           if-no-files-found: error
+
+  native-archive-smoke:
+    needs: native-archives
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            platform: darwin_arm64
+          - runner: macos-15-intel
+            platform: darwin_amd64
+          - runner: ubuntu-latest
+            platform: linux_amd64
+          - runner: ubuntu-24.04-arm
+            platform: linux_arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download exact native release payload
+        uses: actions/download-artifact@v4
+        with:
+          name: native-archives
+          path: release-out
+      - name: Verify release installer asset
+        run: cmp install.sh release-out/install.sh
+      - name: Install and execute host-native release archive
+        run: |
+          bash scripts/verify-native-installer.sh \
+            "release-out/localreview_${{ matrix.platform }}.tar.gz" \
+            release-out/checksums.txt
 
   desktop-artifacts:
     strategy:
@@ -89,7 +120,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [native-archives, desktop-artifacts]
+    needs: [native-archives, native-archive-smoke, desktop-artifacts]
     runs-on: ubuntu-latest
     permissions:
       contents: write

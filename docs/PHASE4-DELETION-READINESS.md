@@ -35,7 +35,12 @@ The expected corpus is intentionally retained:
 
 `verify-release-archives.sh` also rejects an archive containing anything other
 than the two promised Go executables. It is intentionally not a substitute for
-executing each foreign-architecture binary on its native release runner.
+executing each foreign-architecture binary on its native release runner. The
+tag workflow closes that gap with `native-archive-smoke`: macOS arm64/amd64 and
+Linux amd64/arm64 runners download the exact uploaded archive and checksum
+manifest, exercise `install.sh` without network access, then run the installed
+CLI and daemon. It also checks that `install.sh` is itself an uploaded release
+asset before publication.
 
 For Electron, `npm --prefix desktop run verify:package -- <unpacked-app>` is
 the matching package-boundary check: it validates `app.asar`, the bundled

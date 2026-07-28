@@ -110,7 +110,10 @@ timestamps, then compare:
 
 The release matrix also includes macOS arm64/amd64 and Linux amd64/arm64
 Bazel builds, install smoke tests, and a browser test against the production
-static artifact.
+static artifact. On a version tag, each native runner downloads the exact
+release artifact (archive, `checksums.txt`, and `install.sh`), verifies the
+installer asset is byte-for-byte the checked-in script, and installs/runs its
+host-native archive through the same checksum path users receive.
 
 ## Data and rollback
 

@@ -14,7 +14,7 @@ usage() {
   cat <<'EOF'
 Usage: sh install.sh [options]
 
-Install the signed native release for this macOS or Linux host.
+Install the SHA-256-checksummed native release for this macOS or Linux host.
 
 Options:
   --prefix PATH       Install launchers in PATH (default: ~/.local/bin)
