@@ -252,36 +252,34 @@ The Go daemon accepts only its dedicated Copilot credential source. It does
 not fall back to `gh`, a PAT, environment variables, or an existing Copilot
 CLI login. The compatibility command is named `github-app`, but the current
 implementation uses a dedicated **GitHub OAuth App client registration** for
-each capability; it is not a GitHub App installation flow. The native browser
-flow uses PKCE, so setup needs only the public client ID:
+each capability; it is not a GitHub App installation flow. The supported
+desktop flow uses Device Flow, so setup needs only the public client ID:
 
 Create it under GitHub **Settings → Developer settings → OAuth apps**, not the
-GitHub Apps page. Register exactly `http://127.0.0.1:8787/oauth/callback`.
-GitHub displays a client secret, but localreview deliberately has no way to
-accept or use it: this is a public PKCE flow. Enable Device Flow only if this
-registration will be used on a headless/SSH host. See
+GitHub Apps page. Enable Device Flow for the registration. GitHub displays a
+client secret, but localreview deliberately has no way to accept or use it.
+See
 [GitHub OAuth setup](GITHUB-OAUTH-SETUP.md) for the operator checklist and
 recovery table.
 
 ```sh
-localreview auth login --capability copilot --client-id "$COPILOT_APP_CLIENT_ID" --no-wait
+localreview auth login --capability copilot --client-id "$COPILOT_APP_CLIENT_ID" --device
 
 localreview auth status
 localreview auth logout copilot
 ```
 
-The default flow is state-verified browser OAuth through the registered stable
-callback `http://127.0.0.1:8787/oauth/callback`; PKCE protects the exchange
-without shipping or storing an OAuth client secret. Use `--device` for an
-SSH/headless host. Tokens are stored only through the OS secret store and
-never returned to the browser or CLI output. When credentials or the Copilot SDK are
+The supported Electron flow displays a short-lived Device Flow code and opens
+GitHub's consent page externally; no callback listener or OAuth client secret
+is required. Tokens are stored only through the OS secret store and never
+returned to the browser or CLI output. When credentials or the Copilot SDK are
 unavailable, the picker reports an unauthenticated/fallback state instead of
 pretending a prompt was delivered. Once connected, turns stream through the
 selected persistent conversation; loading a transcript never starts a turn.
 
-On a desktop, `auth login` opens the GitHub consent page automatically after
-printing its URL. Use `--no-open` when another browser/profile should handle
-approval; the printed URL remains the recovery path and contains no token.
+On a desktop, `auth login --device` opens GitHub's device page and displays the
+short-lived code. Use `--no-open` when another browser/profile should handle
+approval; the printed device code remains a short-lived recovery path.
 
 For operators migrating from the former `localreview-github-app` executable,
 the native CLI retains its setup vocabulary as a thin, secure alias:
@@ -289,15 +287,13 @@ the native CLI retains its setup vocabulary as a thin, secure alias:
 ```sh
 localreview github-app guide
 localreview github-app configure --capability copilot --client-id "$COPILOT_APP_CLIENT_ID"
-localreview github-app connect --capability copilot       # browser loopback (default)
 localreview github-app connect --capability copilot --device
 localreview github-app status
 localreview github-app disconnect --capability copilot
 ```
 
-`github-app configure` saves only the public client ID. The loopback flow uses
-PKCE; neither the UI nor the native daemon accepts, stores, or ships an OAuth
-client secret.
+`github-app configure` saves only the public client ID. Neither the desktop UI
+nor the native daemon accepts, stores, or ships an OAuth client secret.
 
 ### Deterministic `/ask` and `/btw` acceptance fixture (source checkouts only)
 

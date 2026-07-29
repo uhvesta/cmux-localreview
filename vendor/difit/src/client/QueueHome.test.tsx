@@ -83,7 +83,7 @@ describe('Queue Home lifecycle recovery', () => {
     expect(alert.textContent).toContain('The review is still queued');
   });
 
-  it('guides a configured OAuth client through the PKCE browser setup without asking for a secret', async () => {
+  it('guides a configured OAuth client through desktop device flow without asking for a secret', async () => {
     const auth = {
       provider: 'github-oauth-pkce',
       capabilities: {
@@ -104,9 +104,11 @@ describe('Queue Home lifecycle recovery', () => {
 
     expect(await screen.findByRole('region', { name: 'GitHub OAuth connections' })).not.toBeNull();
     expect(screen.getByText('Iv1.readclient')).not.toBeNull();
-    fireEvent.click(screen.getByText('Set up browser OAuth safely'));
-    expect(screen.getByText(/The loopback flow uses PKCE/)).not.toBeNull();
-    // PKCE is explained, but Queue Home has no secret input or paste flow.
+    fireEvent.click(screen.getByText('Set up desktop GitHub access safely'));
+    expect(screen.getByText(/desktop sign-in does not use it/)).not.toBeNull();
+    expect(screen.getByText(/Device Flow/)).not.toBeNull();
+    // Desktop device flow is explained, but Queue Home has no secret input or
+    // paste flow and never borrows the user's general gh credential.
     expect(screen.queryByRole('textbox', { name: /secret/i })).toBeNull();
     expect(screen.getByText(/gh login/i)).not.toBeNull();
   });

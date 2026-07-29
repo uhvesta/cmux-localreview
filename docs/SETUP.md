@@ -119,25 +119,22 @@ The native daemon has three separate capabilities:
 Create the appropriate dedicated GitHub **OAuth App** client registrations and
 configure their public client IDs. `localreview github-app` is a retained
 compatibility command name; it configures OAuth clients rather than GitHub App
-installations. The default browser loopback flow requires the registered
-`http://127.0.0.1:8787/oauth/callback` URI and uses PKCE, so it needs only the
-public client ID—no OAuth client secret is accepted, stored, or shipped. Use
-`--device` for a headless or SSH-only host after enabling Device Flow on the
-OAuth App registration.
+installations. The supported Electron desktop flow uses GitHub **Device Flow**:
+it shows a short-lived code, opens `github.com/login/device`, and saves the
+approved credential only in the system secret store. It needs only the public
+client ID—no OAuth client secret is accepted, stored, or shipped.
 
 Create the registration under GitHub **Settings → Developer settings → OAuth
 apps**, not GitHub Apps. GitHub displays a client secret after registration;
 localreview uses PKCE and intentionally has no place to enter, store, or send
-it. Enable Device Flow only for a registration used from a headless/SSH host.
-See [GitHub OAuth setup](GITHUB-OAUTH-SETUP.md) for the exact callback,
-per-capability registrations, and recovery steps.
+it. Enable Device Flow for the desktop registration. See [GitHub OAuth
+setup](GITHUB-OAUTH-SETUP.md) for per-capability registrations and recovery
+steps.
 
 ```sh
 localreview github-app guide
 localreview github-app configure --capability read --client-id YOUR_CLIENT_ID
-localreview github-app connect --capability read
-
-# Browser loopback is the default. Use device flow only for headless/SSH hosts.
+localreview github-app connect --capability read --device
 localreview github-app connect --capability copilot --device
 localreview auth status
 ```
