@@ -1931,22 +1931,31 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Open-next must follow the same immutable path as an explicitly opened
-		// card. Opening the mutable source worktree here made the two Queue Home
-		// controls disagree and could silently review a later edit instead of the
-		// submitted snapshot.
-		workspace, _, openErr := d.materializeQueueWorkspace(item)
-		if openErr != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": openErr.Error(), "recovery": "The item is now marked in review, but its immutable snapshot could not be opened. Requeue it after restoring the snapshot, then open the card again."})
-			return
-		}
-		bases, baseErr := d.snapshotBases(item)
-		if baseErr != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": baseErr.Error(), "recovery": "The item remains in review but its snapshot metadata is unavailable. Requeue it from its source workspace to capture a fresh immutable snapshot."})
-			return
-		}
-		if _, err := d.activateWorkspaceWithBases(workspace, item.Title, "", bases); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
+		// card when the item has a retained snapshot. Opening the mutable source
+		// worktree here made the two Queue Home controls disagree and could
+		// silently review a later edit instead of the submitted snapshot. Legacy
+		// queue metadata without a retained snapshot still supports the existing
+		// remote/unavailable lifecycle transition without activating a reviewer.
+		if item.SnapshotManifestPath != nil && strings.TrimSpace(*item.SnapshotManifestPath) != "" {
+			workspace, _, openErr := d.materializeQueueWorkspace(item)
+			if openErr != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"error": openErr.Error(), "recovery": "The item is now marked in review, but its immutable snapshot could not be opened. Requeue it after restoring the snapshot, then open the card again."})
+				return
+			}
+			bases, baseErr := d.snapshotBases(item)
+			if baseErr != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"error": baseErr.Error(), "recovery": "The item remains in review but its snapshot metadata is unavailable. Requeue it from its source workspace to capture a fresh immutable snapshot."})
+				return
+			}
+			if _, err := d.activateWorkspaceWithBases(workspace, item.Title, "", bases); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+		} else if _, err := os.Stat(item.WorkspacePath); err == nil {
+			if _, err := d.activateWorkspace(item.WorkspacePath, item.Title); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"item": item, "reviewUrl": "/review?queueItem=" + item.ID})
 		return

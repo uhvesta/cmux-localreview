@@ -509,6 +509,114 @@ func TestQueueOpenFailureKeepsItemQueuedAndRecoverable(t *testing.T) {
 	}
 }
 
+func TestQueuedSnapshotOpensAndRestoresItsImmutableDiff(t *testing.T) {
+	workspace := t.TempDir()
+	for _, args := range [][]string{{"init"}, {"config", "user.email", "test@example.com"}, {"config", "user.name", "Test"}} {
+		if output, err := exec.Command("git", append([]string{"-C", workspace}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, output)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "tracked.txt"), []byte("before\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := exec.Command("git", "-C", workspace, "add", "tracked.txt").CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v %s", err, output)
+	}
+	if output, err := exec.Command("git", "-C", workspace, "commit", "-m", "initial").CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v %s", err, output)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "tracked.txt"), []byte("after\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "untracked.txt"), []byte("new\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	data := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d, err := Start(ctx, Options{DataDir: data, UIDir: filepath.Join(data, "missing-ui")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	openAndRead := func(instance *Daemon, queueID string) (string, string) {
+		base := "http://127.0.0.1:" + strconv.Itoa(instance.Port())
+		request := func(method, path, body string) (int, []byte) {
+			req, requestErr := http.NewRequest(method, base+path, strings.NewReader(body))
+			if requestErr != nil {
+				t.Fatal(requestErr)
+			}
+			req.Header.Set("Authorization", "Bearer "+instance.token)
+			if body != "" {
+				req.Header.Set("Content-Type", "application/json")
+			}
+			response, requestErr := http.DefaultClient.Do(req)
+			if requestErr != nil {
+				t.Fatal(requestErr)
+			}
+			defer response.Body.Close()
+			payload, readErr := io.ReadAll(response.Body)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			return response.StatusCode, payload
+		}
+		if queueID == "" {
+			status, payload := request(http.MethodPost, "/api/queue/hook", `{"workspacePath":`+strconv.Quote(workspace)+`,"title":"snapshot diff","topic":"snapshot-diff"}`)
+			if status != http.StatusCreated {
+				t.Fatalf("snapshot hook=%d body=%s", status, payload)
+			}
+			var created struct {
+				Item struct {
+					ID string `json:"id"`
+				} `json:"item"`
+			}
+			if err := json.Unmarshal(payload, &created); err != nil || created.Item.ID == "" {
+				t.Fatalf("hook payload=%s err=%v", payload, err)
+			}
+			queueID = created.Item.ID
+			status, payload = request(http.MethodPost, "/api/queue/"+queueID+"/open", "")
+			if status != http.StatusOK {
+				t.Fatalf("open=%d body=%s", status, payload)
+			}
+		}
+		status, payload := request(http.MethodGet, "/api/repos", "")
+		if status != http.StatusOK {
+			t.Fatalf("repos=%d body=%s", status, payload)
+		}
+		var repos struct {
+			Repos []struct {
+				ID                    string `json:"id"`
+				WorkspaceRelativePath string `json:"workspaceRelativePath"`
+			} `json:"repos"`
+		}
+		if err := json.Unmarshal(payload, &repos); err != nil {
+			t.Fatal(err)
+		}
+		for _, repo := range repos.Repos {
+			if repo.WorkspaceRelativePath == "." {
+				status, payload = request(http.MethodGet, "/api/repos/"+repo.ID+"/api/diff", "")
+				if status != http.StatusOK || !strings.Contains(string(payload), "tracked.txt") || !strings.Contains(string(payload), "untracked.txt") {
+					t.Fatalf("immutable diff=%d body=%s", status, payload)
+				}
+				return queueID, repo.ID
+			}
+		}
+		t.Fatalf("root repo missing: %s", payload)
+		return "", ""
+	}
+	queueID, _ := openAndRead(d, "")
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := Start(ctx, Options{DataDir: data, UIDir: filepath.Join(data, "missing-ui")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	openAndRead(restarted, queueID)
+}
+
 // An explicit GitHub App publication first verifies the immutable snapshot
 // head with read authority, then publishes exactly once with write authority,
 // and only then records the local transition.
