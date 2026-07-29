@@ -48,7 +48,7 @@ async function exchangeBrowserSession(): Promise<void> {
     headers: { Authorization: `Bearer ${capability}` },
     credentials: 'same-origin',
   });
-  if (!response.ok) throw new Error('Could not create a local browser session. Open Queue Home again with localreview-open.');
+  if (!response.ok) throw new Error('Could not create the desktop app’s private session. Quit and reopen CMUX Local Review, then try again.');
   // Clear it only after the exchange succeeded. A failed exchange can be
   // retried without putting the capability into persistent web storage.
   if (pendingDaemonCapability === capability) pendingDaemonCapability = undefined;

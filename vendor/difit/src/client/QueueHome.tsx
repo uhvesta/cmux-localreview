@@ -514,7 +514,7 @@ export function QueueHome() {
           <button type="submit" disabled={submittingLocal || !localPath.trim()} style={{ ...buttonStyle, whiteSpace: 'nowrap' }}>{submittingLocal ? 'Snapshotting…' : 'Submit local'}</button>
         </form>
         <p style={{ margin: '0 0 10px', fontSize: 12, opacity: 0.68 }}>Immutable snapshots submitted from this machine. Use a stable topic when one workspace carries more than one review stream.</p>
-        {loading ? <p role="status" style={{ opacity: 0.65 }}>Loading queue…</p> : localItems.length === 0 ? <div style={{ padding: 14, border: '1px dashed rgba(127,127,127,0.45)', borderRadius: 8, opacity: 0.76 }}>Nothing local is queued. Submit a path above, or run <code>localreview-submit &lt;path&gt; --topic &lt;name&gt;</code> to capture cmux and Copilot metadata atomically.</div> : <div style={{ display: 'grid', gap: 10 }}>{localItems.map((item) => <QueueCard key={item.id} item={item} onOpenWorkspace={openWorkspace} onRequeue={requeueItem} onRemove={removeQueueItem} />)}</div>}
+        {loading ? <p role="status" style={{ opacity: 0.65 }}>Loading queue…</p> : localItems.length === 0 ? <div style={{ padding: 14, border: '1px dashed rgba(127,127,127,0.45)', borderRadius: 8, opacity: 0.76 }}>Nothing local is queued. Submit a workspace path above to capture its immutable snapshot and cmux/Copilot metadata atomically.</div> : <div style={{ display: 'grid', gap: 10 }}>{localItems.map((item) => <QueueCard key={item.id} item={item} onOpenWorkspace={openWorkspace} onRequeue={requeueItem} onRemove={removeQueueItem} />)}</div>}
       </section>
       <section aria-label="Remote pull-request queue">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10 }}><h2 style={{ fontSize: 16, margin: 0 }}>Remote</h2><span style={{ fontSize: 12, opacity: 0.62 }}>{remoteItems.length} pull request{remoteItems.length === 1 ? '' : 's'}</span></div>
@@ -524,7 +524,7 @@ export function QueueHome() {
           <button type="submit" disabled={submittingRemote || openingLocalPR || !remoteUrl.trim()} style={{ ...buttonStyle, whiteSpace: 'nowrap' }}>{submittingRemote ? 'Adding…' : 'Add PR'}</button>
           <button type="button" onClick={() => void reviewRemoteLocally()} disabled={submittingRemote || openingLocalPR || !remoteUrl.trim()} style={{ ...buttonStyle, borderColor: '#58a6ff', whiteSpace: 'nowrap' }}>{openingLocalPR ? 'Opening…' : 'Review locally'}</button>
         </form>
-        <p style={{ margin: '0 0 10px', fontSize: 12, opacity: 0.68 }}><strong>Review locally</strong> mirrors the PR for diff and <code>/ask</code> only: it creates no queue item and cannot publish feedback. <strong>Add PR</strong> is the separate formal queue action. CLI: <code>localreview open --pr &lt;PR URL&gt;</code> or <code>localreview queue-submit &lt;PR URL&gt;</code>.</p>
+        <p style={{ margin: '0 0 10px', fontSize: 12, opacity: 0.68 }}><strong>Review locally</strong> mirrors the PR for diff and <code>/ask</code> only: it creates no queue item and cannot publish feedback. <strong>Add PR</strong> is the separate formal queue action.</p>
         {!loading && remoteItems.length === 0 && <div style={{ padding: 14, border: '1px dashed rgba(127,127,127,0.45)', borderRadius: 8, opacity: 0.76 }}>No remote pull requests are queued on this daemon.</div>}
         <div style={{ display: 'grid', gap: 10 }}>{remoteItems.map((item) => <QueueCard key={item.id} item={item} onOpenWorkspace={openWorkspace} onRequeue={requeueItem} onRemove={removeQueueItem} />)}</div>
         <section style={{ marginTop: 16, display: 'grid', gap: 10 }} aria-label="Remote daemon nodes">
@@ -537,7 +537,7 @@ export function QueueHome() {
             <input value={nodeToken} onChange={(event) => setNodeToken(event.target.value)} type="password" placeholder="Daemon token" aria-label="Remote daemon token" required autoComplete="off" style={{ minWidth: 0, padding: '7px 8px', borderRadius: 5, border: '1px solid rgba(127,127,127,0.45)', background: 'transparent', color: 'inherit' }} />
             <button type="submit" disabled={savingNode} style={{ ...buttonStyle, whiteSpace: 'nowrap' }}>{savingNode ? 'Saving…' : 'Add node'}</button>
           </form>
-          {nodes.length === 0 && !loading && <div style={{ padding: 11, border: '1px dashed rgba(127,127,127,0.38)', borderRadius: 8, fontSize: 12, opacity: 0.72 }}>No remote daemon is configured. On the remote machine run <code>localreviewd</code>, then add its SSH target, loopback port, and discovery token here. Use Connect to verify the SSH forward before relying on a remote queue.</div>}
+          {nodes.length === 0 && !loading && <div style={{ padding: 11, border: '1px dashed rgba(127,127,127,0.38)', borderRadius: 8, fontSize: 12, opacity: 0.72 }}>No remote daemon is configured. Follow the remote-machine setup guide to install the companion service, then add its SSH target, loopback port, and discovery token here. Use Connect to verify the SSH forward before relying on a remote queue.</div>}
           {nodes.map((node) => {
             const aggregate = federation.find((entry) => entry.node.id === node.id);
             const actionIs = (action: string) => nodeAction === `${node.id}:${action}`;
