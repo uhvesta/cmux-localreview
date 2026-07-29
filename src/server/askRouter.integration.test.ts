@@ -37,12 +37,12 @@ afterEach(async () => {
 });
 
 describe("/ask HTTP integration with an injected Copilot boundary", () => {
-  test("refuses to fall back to a local Copilot or gh login when the App capability is absent", async () => {
+  test("explains how to authenticate when no GitHub credential is available", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
     const service = new AskService(db, temporaryWorkspace());
     try {
-      await expect(service.listModels()).rejects.toThrow("Copilot GitHub App is not connected");
+      await expect(service.listModels()).rejects.toThrow("No GitHub credential is available for Copilot");
     } finally {
       await service.close();
       db.close();

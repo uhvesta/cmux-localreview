@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import open from "open";
@@ -16,10 +17,11 @@ export interface CapabilityStatus {
   error?: string;
   loginState: "idle" | "waiting" | "succeeded" | "failed";
   message?: string;
+  source?: "github-app" | "gh-cli";
 }
 
 export interface GitHubAuthStatus {
-  provider: "github-app-device-flow";
+  provider: "github-app-device-flow" | "gh-cli" | "mixed" | "unavailable";
   capabilities: Record<GitHubCapability, CapabilityStatus>;
   /** Never includes a token, client secret, device code, or refresh token. */
 }
@@ -28,6 +30,7 @@ interface AppConfig { clientIds: Partial<Record<GitHubCapability, string>>; }
 interface TokenRecord { accessToken: string; refreshToken?: string; expiresAt?: number; login?: string; clientId?: string; }
 interface PendingLogin { deviceCode: string; clientId: string; expiresAt: number; intervalMs: number; userCode: string; verificationUri: string; }
 type FetchLike = typeof fetch;
+export type GhTokenProvider = () => Promise<string | undefined>;
 
 function configPath(): string { return join(localreviewDataDir(), "github-apps.json"); }
 function account(capability: GitHubCapability): string { return `github.com:${capability}`; }
@@ -50,12 +53,37 @@ async function json(response: Response): Promise<Record<string, unknown>> {
   return value && typeof value === "object" ? value as Record<string, unknown> : {};
 }
 
+function commandOutput(command: string, args: string[]): Promise<string> {
+  return new Promise((resolvePromise, reject) => {
+    execFile(command, args, { encoding: "utf8", timeout: 7_000, maxBuffer: 128 * 1024 }, (error, stdout, stderr) => {
+      if (error) { reject(error); return; }
+      resolvePromise(`${stdout}\n${stderr}`);
+    });
+  });
+}
+
 /**
- * Dedicated GitHub App device-flow authority. Each capability should use a
- * separate GitHub App registration with only its required fine-grained
- * permissions. There is intentionally no gh, PAT, environment-token, or
- * Copilot-CLI credential fallback.
+ * Read an already-authenticated `gh` credential only when a request needs it.
+ * The value is returned to the caller in memory and is deliberately never
+ * persisted in the daemon DB, discovery file, browser, or App secret store.
  */
+export const tokenFromGhCli: GhTokenProvider = async () => {
+  try {
+    // Recent GitHub CLI versions print just the token with this command.
+    const output = (await commandOutput("gh", ["auth", "token", "--hostname", "github.com"])).trim();
+    if (output && !/\s/.test(output)) return output;
+  } catch { /* Fall through for older gh releases. */ }
+  try {
+    // `gh auth token` was added after several supported CLI releases. The
+    // status form works on those versions and writes status to stderr.
+    const output = await commandOutput("gh", ["auth", "status", "--hostname", "github.com", "--show-token"]);
+    return output.match(/Token:\s*([^\s]+)/)?.[1];
+  } catch {
+    return undefined;
+  }
+};
+
+/** GitHub App credentials are an optional least-privilege override; `gh` is the local default. */
 export class GitHubAuthService {
   private config: AppConfig;
   private readonly pending = new Map<GitHubCapability, PendingLogin>();
@@ -67,6 +95,7 @@ export class GitHubAuthService {
     private readonly fetcher: FetchLike = fetch,
     private readonly launch: (url: string) => Promise<unknown> = (url) => open(url),
     private readonly configFile = configPath(),
+    private readonly ghToken: GhTokenProvider = tokenFromGhCli,
   ) { this.config = readConfig(configFile); }
 
   async configure(capability: GitHubCapability, clientId: string): Promise<void> {
@@ -84,6 +113,9 @@ export class GitHubAuthService {
   }
 
   private clientId(capability: GitHubCapability): string {
+    // The CLI may update the shared config after this daemon has started.
+    // Reload on demand so a restart is not required before the next request.
+    this.config = readConfig(this.configFile);
     const id = this.config.clientIds[capability];
     if (!id) throw new Error(`Configure the ${capability} GitHub App client ID before connecting it.`);
     return id;
@@ -162,11 +194,12 @@ export class GitHubAuthService {
 
   /** Loads an app-owned token and refreshes it when the GitHub App issued one. */
   async token(capability: GitHubCapability): Promise<string> {
+    this.config = readConfig(this.configFile);
     const token = await this.readToken(capability);
-    if (!token) throw new Error(`The ${capability} GitHub App is not connected.`);
+    if (!token) return this.ghTokenOrThrow(capability);
     if (token.clientId && token.clientId !== this.clientId(capability)) {
       await this.secrets.remove(SERVICE, account(capability));
-      throw new Error(`The ${capability} GitHub App registration changed. Connect it again.`);
+      return this.ghTokenOrThrow(capability);
     }
     if (!token.expiresAt || token.expiresAt > Date.now() + 60_000) return token.accessToken;
     if (!token.refreshToken) throw new Error(`The ${capability} GitHub App token expired. Connect it again.`);
@@ -181,24 +214,46 @@ export class GitHubAuthService {
     return next.accessToken;
   }
 
+  private async ghTokenOrThrow(capability: GitHubCapability): Promise<string> {
+    const token = await this.ghToken();
+    if (token) {
+      this.messages.set(capability, "Using the authenticated gh CLI credential; it is kept only in memory for this request.");
+      return token;
+    }
+    throw new Error(`No GitHub credential is available for ${capability}. Run \`gh auth login\`, or configure a dedicated GitHub App.`);
+  }
+
   async disconnect(capability: GitHubCapability): Promise<void> {
     await this.secrets.remove(SERVICE, account(capability));
     this.pending.delete(capability); this.state.set(capability, "idle"); this.messages.set(capability, "Disconnected locally. Remove the GitHub App installation in GitHub settings to revoke it at GitHub too.");
   }
 
   async status(): Promise<GitHubAuthStatus> {
+    this.config = readConfig(this.configFile);
     const capabilities = {} as Record<GitHubCapability, CapabilityStatus>;
+    const ghToken = await this.ghToken();
+    let ghLogin: string | undefined;
+    let ghError: string | undefined;
+    if (ghToken) {
+      try { ghLogin = (await this.viewer(ghToken)).login; }
+      catch (error) { ghError = concise(String(error)); }
+    }
     for (const capability of CAPABILITIES) {
       const configured = !!this.config.clientIds[capability];
       const state = this.state.get(capability) ?? "idle";
       const base: CapabilityStatus = { configured, authenticated: false, loginState: state, message: this.messages.get(capability) };
-      if (!configured) { base.error = `Configure a dedicated GitHub App for ${capability}.`; capabilities[capability] = base; continue; }
       try {
         const token = await this.readToken(capability);
-        if (token) { const viewer = await this.viewer(token.accessToken); base.authenticated = true; base.login = viewer.login; }
+        if (token) { const viewer = await this.viewer(token.accessToken); base.authenticated = true; base.login = viewer.login; base.source = "github-app"; }
+        else if (ghToken && ghLogin) { base.authenticated = true; base.login = ghLogin; base.source = "gh-cli"; base.message = "Using the authenticated gh CLI credential; no token is persisted by cmux-localreview."; }
+        else base.error = ghError ?? (configured
+          ? `The optional ${capability} GitHub App is not connected. Connect it, or run \`gh auth login\`.`
+          : "Run `gh auth login`, or configure a dedicated GitHub App.");
       } catch (error) { base.error = concise(String(error)); }
       capabilities[capability] = base;
     }
-    return { provider: "github-app-device-flow", capabilities };
+    const sources = new Set(Object.values(capabilities).flatMap((status) => status.source ? [status.source] : []));
+    const provider: GitHubAuthStatus["provider"] = sources.size === 0 ? "unavailable" : sources.size > 1 ? "mixed" : sources.has("gh-cli") ? "gh-cli" : "github-app-device-flow";
+    return { provider, capabilities };
   }
 }

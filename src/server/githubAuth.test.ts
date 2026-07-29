@@ -20,7 +20,7 @@ describe("GitHubAuthService", () => {
       if (url.endsWith("/user")) return new Response(JSON.stringify({ login: "octocat" }), { status: 200 });
       return new Response(JSON.stringify({ message: "unexpected" }), { status: 500 });
     }) as typeof fetch;
-    const service = new GitHubAuthService(secrets, fetcher, async () => undefined, "/tmp/cmux-localreview-github-auth-test.json");
+    const service = new GitHubAuthService(secrets, fetcher, async () => undefined, "/tmp/cmux-localreview-github-auth-test.json", async () => undefined);
     await service.configure("read", "Iv1.readClient");
     await service.configure("write", "Iv1.writeClient");
     await service.configure("copilot", "Iv1.copilotClient");
@@ -38,20 +38,41 @@ describe("GitHubAuthService", () => {
     expect(status.capabilities.copilot.authenticated).toBe(true);
 
     await service.disconnect("copilot");
-    await expect(service.token("copilot")).rejects.toThrow("not connected");
+    await expect(service.token("copilot")).rejects.toThrow("No GitHub credential is available");
   });
 
   test("revokes a saved capability token when its GitHub App client ID changes", async () => {
     const secrets = memorySecrets();
-    const service = new GitHubAuthService(secrets, fetch, async () => undefined, "/tmp/cmux-localreview-github-auth-client-change.json");
+    const service = new GitHubAuthService(secrets, fetch, async () => undefined, "/tmp/cmux-localreview-github-auth-client-change.json", async () => undefined);
     await service.configure("read", "Iv1.firstClient");
     await secrets.set("cmux-localreview.github-app", "github.com:read", JSON.stringify({ accessToken: "old", clientId: "Iv1.firstClient" }));
     await service.configure("read", "Iv1.secondClient");
-    await expect(service.token("read")).rejects.toThrow("not connected");
+    await expect(service.token("read")).rejects.toThrow("No GitHub credential is available");
   });
 
-  test("requires configured capability instead of falling back to gh or another capability", async () => {
-    const service = new GitHubAuthService(memorySecrets(), fetch, async () => undefined, "/tmp/cmux-localreview-github-auth-unconfigured.json");
+  test("still requires an App registration to start device flow", async () => {
+    const service = new GitHubAuthService(memorySecrets(), fetch, async () => undefined, "/tmp/cmux-localreview-github-auth-unconfigured.json", async () => undefined);
     await expect(service.start("read" as GitHubCapability)).rejects.toThrow("Configure the read GitHub App");
+  });
+
+  test("uses the authenticated gh CLI credential ephemerally when no App is configured", async () => {
+    const secrets = memorySecrets();
+    const service = new GitHubAuthService(secrets, (async (input: string | URL | Request) => {
+      if (String(input).endsWith("/user")) return new Response(JSON.stringify({ login: "octocat" }), { status: 200 });
+      return new Response("unexpected", { status: 500 });
+    }) as typeof fetch, async () => undefined, "/tmp/cmux-localreview-github-auth-gh.json", async () => "gho_from_cli");
+    expect(await service.token("copilot")).toBe("gho_from_cli");
+    const status = await service.status();
+    expect(status.provider).toBe("gh-cli");
+    expect(status.capabilities.copilot).toMatchObject({ authenticated: true, login: "octocat", source: "gh-cli" });
+    expect(secrets.values.size).toBe(0);
+  });
+
+  test("keeps an optional App's disconnected state actionable when gh is unavailable", async () => {
+    const service = new GitHubAuthService(memorySecrets(), fetch, async () => undefined, "/tmp/cmux-localreview-github-auth-optional-app.json", async () => undefined);
+    await service.configure("read", "Iv1.optionalRead");
+    const status = await service.status();
+    expect(status.capabilities.read.error).toContain("not connected");
+    expect(status.capabilities.read.error).toContain("gh auth login");
   });
 });

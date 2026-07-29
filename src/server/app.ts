@@ -52,7 +52,7 @@ export interface WorkspaceServerOptions {
   defaultTerminalAgentId?: string;
   onTerminalDeliverySuccess?: (agentId: string) => void;
   onTerminalDeliveryFailure?: (agentId: string, error: unknown) => void;
-  /** Dedicated GitHub App token for the fresh Copilot SDK `/ask` runtime. */
+  /** Explicit daemon token for the fresh Copilot SDK `/ask` runtime. */
   copilotToken?: () => Promise<string>;
   /** Active global queue item: formal diff comments are mirrored to it. */
   queueItemId?: string;

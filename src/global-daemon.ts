@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { createHash } from "node:crypto";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { Socket } from "node:net";
 import { fileURLToPath } from "node:url";
@@ -64,6 +64,12 @@ function isLoopbackRequest(req: Request): boolean {
 
 const BROWSER_SESSION_COOKIE = "cmux_localreview_browser_session";
 const BROWSER_SESSION_TTL_MS = 8 * 60 * 60 * 1_000;
+// A browser bootstrap code is deliberately distinct from the discovery
+// capability.  `localreview-open` spends the owner-only daemon token to mint
+// this short-lived, one-time value, then places *that* value in the URL
+// fragment.  A copied bootstrap URL cannot be used after its first exchange
+// and can never be used to operate the daemon as a CLI capability.
+const BROWSER_BOOTSTRAP_TTL_MS = 60_000;
 
 function cookie(req: Request, name: string): string | undefined {
   const value = req.header("cookie");
@@ -105,6 +111,7 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
   // daemon master token is exchanged once and is never persisted in browser
   // storage or exposed to JavaScript after that exchange.
   const browserSessions = new Map<string, number>();
+  const browserBootstrapCodes = new Map<string, number>();
   const app = express();
   app.use(express.json({ limit: "2mb" }));
   app.get("/health", (_req, res) => res.json({ ok: true, version: VERSION, pid: process.pid }));
@@ -113,7 +120,10 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
   // by the active workspace app and deliberately remain local-browser usable.
   // Only the daemon control plane is bearer-protected.
   api.use((req, res, next) => {
-    if (/^\/(browser\/session|workspaces|queue|agents|packages|federation|github)(?:\/|$)/.test(req.path)) return requireAuth(token, browserSessions)(req, res, next);
+    // This endpoint authenticates a one-time bootstrap code itself. It must
+    // not accept the long-lived discovery capability in a browser request.
+    if (req.path === "/browser/session") return next();
+    if (/^\/(browser|workspaces|queue|agents|packages|federation|github)(?:\/|$)/.test(req.path)) return requireAuth(token, browserSessions)(req, res, next);
     next();
   });
   app.use("/api", api);
@@ -127,15 +137,32 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
   // before either marks them delivered and send duplicate instructions.
   const feedbackDeliveries = new Map<string, Promise<unknown>>();
 
+  /** Mint a short-lived browser bootstrap code from the owner-only CLI token. */
+  api.post("/browser/grant", (req, res) => {
+    const now = Date.now();
+    for (const [code, expiresAt] of browserBootstrapCodes) if (expiresAt <= now) browserBootstrapCodes.delete(code);
+    const code = newDaemonToken();
+    const expiresAt = now + BROWSER_BOOTSTRAP_TTL_MS;
+    browserBootstrapCodes.set(code, expiresAt);
+    res.status(201).json({ bootstrapCode: code, expiresAt });
+  });
+
   /**
-   * Exchanges the owner-only discovery capability for an HttpOnly, local
-   * browser-session cookie. This is intentionally the *only* route which
-   * accepts the long-lived daemon token from browser JavaScript.
+   * Exchanges exactly one short-lived bootstrap code for an HttpOnly,
+   * loopback browser-session cookie. The daemon discovery capability is never
+   * accepted here, so it is never exposed to browser JavaScript or URLs.
    */
   api.post("/browser/session", (req, res) => {
-    if (req.header("authorization") !== `Bearer ${token}`) { res.status(401).json({ error: "Daemon capability required to create a browser session" }); return; }
     const now = Date.now();
     for (const [id, expiresAt] of browserSessions) if (expiresAt <= now) browserSessions.delete(id);
+    for (const [code, expiresAt] of browserBootstrapCodes) if (expiresAt <= now) browserBootstrapCodes.delete(code);
+    const authorization = req.header("authorization");
+    const bootstrapCode = authorization?.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : undefined;
+    const bootstrapExpiry = bootstrapCode ? browserBootstrapCodes.get(bootstrapCode) : undefined;
+    if (!bootstrapCode || !bootstrapExpiry || bootstrapExpiry <= now) { res.status(401).json({ error: "A fresh local browser bootstrap code is required. Reopen Queue Home with localreview-open." }); return; }
+    // Spend it before creating the cookie so two simultaneous requests cannot
+    // both turn one copied fragment into independent browser sessions.
+    browserBootstrapCodes.delete(bootstrapCode);
     const id = newDaemonToken();
     browserSessions.set(id, now + BROWSER_SESSION_TTL_MS);
     // `Secure` cannot be required because the loopback daemon intentionally
@@ -336,9 +363,9 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
     agentId?: string; agentProvider?: string; copilotSessionId?: string; feedbackTarget?: string; provenance?: unknown;
     acpHost?: string; acpPort?: number; acpSessionId?: string; agentKind?: string;
   }) => {
-    // A remote checkout is never allowed to borrow credentials from `gh`, a
-    // Git credential helper, or the browser.  The read-only GitHub App owns
-    // both PR resolution and the short-lived HTTP header used by git.
+    // The daemon resolves remote PRs with its local GitHub credential: the
+    // authenticated `gh` CLI by default, or an optional read App override.
+    // The browser never receives that credential or the resulting Git header.
     const readToken = await githubAuth.token("read");
     const pr = await resolveRemotePullRequest(input.remoteUrl, readToken);
     const remoteWorkspace = await prepareRemoteWorkspace(pr, readToken);
@@ -404,9 +431,9 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
       resolveTerminalAgent: (agentId, rootPath) => resolveTerminalTarget(db, agentId, rootPath),
       onTerminalDeliverySuccess: (agentId) => markAgentDelivered(db, agentId),
       onTerminalDeliveryFailure: (agentId, error) => markAgentDeliveryFailed(db, agentId, error),
-      // `/ask` is deliberately a fresh Copilot SDK session, authenticated by
-      // the capability-specific App token. It does not inherit Copilot CLI,
-      // `gh`, environment, or browser credentials.
+      // `/ask` is deliberately a fresh Copilot SDK session. It is given one
+      // explicit daemon credential (the local `gh` token by default, or an
+      // optional Copilot App override), and never browser/session credentials.
       copilotToken: () => githubAuth.token("copilot"),
       queueItemId,
       queueDb: queueItemId ? db : undefined,
@@ -858,13 +885,22 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
   // shared SPA shell from the daemon itself, then delegate only API traffic
   // to the currently active workspace application.
   const clientDist = join(dirname(fileURLToPath(import.meta.url)), "..", "vendor", "difit", "dist", "client");
+  // Keep the SPA document in memory. Apart from avoiding an Express/Bun
+  // `sendFile` interoperability edge case on virtual SPA paths, this makes
+  // `/review` deterministic while the static middleware remains responsible
+  // for the hashed JS/CSS assets.
+  const clientIndex = readFileSync(join(clientDist, "index.html"), "utf8");
   // A shareable local URL is useful when all the reviewer wants is to inspect
   // a PR and ask Copilot questions. The PR URL is consumed server-side and is
   // removed before serving the client, so it is neither retained in browser
   // history nor confused with a formal queue submission.
   app.get("/review", async (req, res, next) => {
     const remoteUrl = bodyString(req.query.pr);
-    if (!remoteUrl) { next(); return; }
+    // `/review` is a client-side SPA route, not a static file. Serving the
+    // shell directly avoids handing this path to `serve-static`, which may
+    // otherwise turn the missing `dist/client/review` file into a 404 before
+    // the SPA fallback gets a chance to run.
+    if (!remoteUrl) { res.type("html").send(clientIndex); return; }
     if (!isLoopbackRequest(req)) { res.status(403).type("text/plain").send("Local question-only PR review is available only from loopback."); return; }
     try {
       const opened = await openReadOnlyPullRequest(remoteUrl);
@@ -874,7 +910,7 @@ export async function startGlobalDaemon(options: GlobalDaemonOptions = {}) {
     }
   });
   app.use(express.static(clientDist));
-  app.get(/^(?!\/api\/).*/, (_req, res) => res.sendFile(join(clientDist, "index.html")));
+  app.get(/^(?!\/api\/).*/, (_req, res) => res.type("html").send(clientIndex));
   // Only review API traffic reaches this dispatcher. Control endpoints above
   // remain token-protected and cannot be shadowed by a workspace app.
   app.use((req, res, next) => active ? active.workspace.app(req, res, next) : res.status(404).json({ error: "No workspace is open. Use POST /api/workspaces/open." }));

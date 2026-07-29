@@ -1,7 +1,7 @@
 import { mkdirSync, realpathSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import type { Database } from "bun:sqlite";
-import { CopilotClient, RuntimeConnection, type CopilotSession, type ModelInfo, type PermissionRequest } from "@github/copilot-sdk";
+import { CopilotClient, RuntimeConnection, ToolSet, type CopilotSession, type ModelInfo, type PermissionRequest } from "@github/copilot-sdk";
 import express, { type Response, type Router } from "express";
 
 import {
@@ -38,7 +38,7 @@ export interface AskRouterOptions {
   getReviewSessionId?: () => number;
   /** Maps the mounted diff application's public repo id to its actual root. */
   repoRoots?: ReadonlyMap<string, string>;
-  /** Returns the daemon-owned token for the dedicated Copilot GitHub App. */
+  /** Returns a fresh GitHub credential for the dedicated App or authenticated local gh CLI. */
   copilotToken?: () => Promise<string>;
   /** Binds new chats to the exact queued revision open in this reviewer. */
   getQueueItemId?: () => string | undefined;
@@ -116,7 +116,7 @@ export class AskService {
 
   private async clientFor(): Promise<CopilotClient> {
     if (this.client) return this.client;
-    if (!this.copilotToken) throw new Error("The Copilot GitHub App is not connected. Configure and connect the Copilot capability in Queue Home.");
+    if (!this.copilotToken) throw new Error("No GitHub credential is available for Copilot. Run `gh auth login`, or configure a Copilot GitHub App in Queue Home.");
     const gitHubToken = await this.copilotToken();
     // Give the spawned runtime only the ordinary process plumbing it needs.
     // In particular, it cannot see GH_TOKEN, GITHUB_TOKEN, COPILOT_HOME, or
@@ -136,7 +136,7 @@ export class AskService {
       workingDirectory: this.realWorkspaceRoot,
       baseDirectory: runtimeHome,
       connection: RuntimeConnection.forStdio({ path: process.env.COPILOT_CLI_PATH ?? "copilot", env: runtimeEnv }),
-      // Explicit GitHub App credentials take precedence in the SDK and we
+      // The explicit daemon credential takes precedence in the SDK and we
       // explicitly reject all stored Copilot CLI / gh / environment auth.
       gitHubToken,
       useLoggedInUser: false,
@@ -221,6 +221,12 @@ export class AskService {
       model: conversation.model ?? undefined,
       reasoningEffort: conversation.reasoningEffort ?? undefined,
       contextTier: conversation.contextTier ?? undefined,
+      // SDK empty mode requires an explicit allowlist. An empty ToolSet is
+      // intentional: /ask gets its location/selected-code context in the
+      // prompt and must not inspect the host, shell, network, MCP servers, or
+      // user Copilot configuration. This also makes the SDK contract resilient
+      // when its default tool set changes.
+      availableTools: new ToolSet(),
       onPermissionRequest: this.readOnlyPermissions,
       enableConfigDiscovery: false,
       skipCustomInstructions: true,

@@ -18,11 +18,12 @@ cmux-localreview-managed Copilot skill files and instructions it owns.
 
 ### Why does opening `/queue` directly say “Bearer token required”?
 
-The browser UI controls a loopback daemon that requires its discovery token.
-Open it with `bun src/localreview-open.ts --home`; the CLI appends the token in
-the URL fragment, which the server never receives. If you are already on Queue
-Home, use its local token-recovery control rather than placing the token in a
-URL query parameter.
+The browser UI controls a loopback daemon that requires an authenticated local
+session. Open it with `bun src/localreview-open.ts --home`; the CLI appends a
+one-time, 60-second bootstrap code in the URL fragment, which the client
+immediately exchanges for an HttpOnly cookie and removes. If you are already
+on Queue Home, use its local token-recovery control rather than placing the
+token in a URL query parameter.
 
 ### Why is Queue Home separate from the reviewer?
 
@@ -172,7 +173,9 @@ managed remote review.
 
 ### Copilot models show unauthenticated or unavailable
 
-In Queue Home, configure and connect the dedicated **Copilot /ask** GitHub App,
+Run `gh auth login --hostname github.com` on the machine that runs the daemon.
+Queue Home uses that credential in memory by default. You may instead configure
+and connect the optional dedicated **Copilot /ask** GitHub App,
 then retry model selection. The daemon passes that App token explicitly to the
 SDK and disables stored Copilot CLI, `gh`, and environment authentication.
 Confirm Copilot CLI is installed and on `PATH` (or set `COPILOT_CLI_PATH` for
@@ -181,7 +184,8 @@ session.
 
 ### GitHub PR submission fails
 
-Connect the **PR read** GitHub App, confirm it is installed on the repository,
+Confirm `gh auth status --hostname github.com` succeeds (or connect the optional
+**PR read** GitHub App), then confirm it is installed on the repository,
 then submit or refresh again. Connect **PR publish** only before publishing a
 formal review. The queue UI should show its remote error/cache state instead
 of hiding it.

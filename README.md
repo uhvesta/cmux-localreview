@@ -7,12 +7,18 @@
 - [Agent guide](docs/AGENT-GUIDE.md) — operating model, safe agent workflows, handoffs, and review boundaries.
 - [FAQ](docs/FAQ.md) — concise setup, recovery, Copilot/ACP, GitHub, and remote-daemon answers.
 - [Setup](docs/SETUP.md) — macOS/Linux configuration, Copilot skills, remote nodes, and security boundaries.
+- [CLI playbook](docs/CLI-PLAYBOOK.md) — copyable human/agent commands for setup, queueing, reproduction, and recovery.
 - [Demo and source install](docs/DEMO.md) — disposable browser demo plus a user-prefix CLI installation flow.
 - [Troubleshooting](docs/TROUBLESHOOTING.md) — actionable recovery for auth, diff, Copilot, GitHub, cmux, and SSH states.
 
 ## Common workflow
 
 ```sh
+# First-time local review: install managed skills, start the daemon, capture a
+# snapshot, queue it, and open the exact review item.
+bun src/localreview-start.ts /path/to/workspace --setup-copilot --submit \
+  --title "Review parser change"
+
 # Start/open an explicit workspace reviewer (starts the daemon when needed)
 bun src/localreview-open.ts /path/to/workspace
 
@@ -46,8 +52,11 @@ bun src/localreview-setup.ts /path/to/workspace --personal
 The daemon only binds `127.0.0.1`. Its discovery file is
 `~/.local/share/cmux-localreview/daemon.json`, is written atomically with mode
 `0600`, and holds the bearer token used by queue/workspace/agent control APIs.
-The browser receives that token only through a URL fragment from
-`localreview-open`; fragments are not sent to the server.
+`localreview-open` spends that token locally to mint a separate, one-time,
+60-second browser bootstrap code. The bootstrap code is placed in a URL
+fragment, immediately exchanged for an `HttpOnly; SameSite=Strict` loopback
+cookie, and scrubbed from the address bar; the discovery token never enters a
+browser URL.
 
 ## Copilot CLI setup and skills
 
@@ -151,18 +160,25 @@ checks for its self-contained Git bundles.
 
 ## GitHub PR reviews
 
-### Authenticate with dedicated GitHub Apps
+### Authenticate with your existing GitHub CLI login
 
-Queue Home uses three separate GitHub App device-flow connections, not `gh`,
-PATs, environment variables, or an existing Copilot CLI login:
+On a local review machine, Queue Home uses the credential already held by an
+authenticated `gh` CLI. Run this once if needed:
 
-- **PR read** resolves and mirrors PRs for local review.
-- **PR publish** is required only when publishing an approval, request for
-  changes, or GitHub comment.
-- **Copilot /ask** authenticates fresh Copilot SDK sessions.
+```sh
+gh auth login --hostname github.com
+localreview-github-app status
+```
 
-Create the App registrations once (device flow must be enabled), then connect
-them in Queue Home or run:
+The daemon asks `gh` for a credential only while a GitHub request is running.
+It keeps that value in process memory only: not in the browser, URL, daemon
+database, discovery file, environment, project files, or logs. It is used for
+PR reads, explicit GitHub publication, and fresh Copilot SDK `/ask` sessions.
+
+Dedicated GitHub Apps remain an optional least-privilege override when a
+shared machine or organization policy calls for separate **PR read**, **PR
+publish**, or **Copilot /ask** identities. Create the App registrations once
+(device flow must be enabled), then connect an override in Queue Home or run:
 
 ```sh
 bun src/localreview-github-app.ts guide
@@ -170,13 +186,13 @@ bun src/localreview-github-app.ts configure --capability read --client-id Iv1.�
 bun src/localreview-github-app.ts connect --capability read
 ```
 
-The daemon keeps issued access and refresh tokens only in macOS Keychain or
-Linux libsecret, under its own service name. The browser receives a short-lived
-device code, never a GitHub token. Its local daemon capability is immediately
+If an optional App is connected, its issued access and refresh tokens stay only
+in macOS Keychain or Linux libsecret, under the daemon's service name. The
+browser never receives a GitHub token. Its local daemon capability is immediately
 exchanged for an `HttpOnly; SameSite=Strict` loopback session cookie; it is not
 written to web storage. The public App client IDs are the only values written
 to daemon configuration. See [the operator setup guide](docs/SETUP.md)
-for exact permissions and headless setup.
+for optional App permissions and headless setup.
 
 The daemon resolves the PR's repository plus base/head SHAs before cloning,
 then checks out that exact head in a managed cache worktree. Re-submitting the
@@ -269,7 +285,8 @@ its actual absolute path is retained on every queue item. If Queue Home was
 opened directly rather than through `localreview-open`, it offers a local-only
 token recovery field instead of silently failing with a bare 401.
 Control APIs require the loopback daemon bearer token in the owner-only
-discovery file (the browser receives it through a URL fragment).
+discovery file. The CLI converts it into a one-time browser bootstrap code;
+the browser never receives the discovery token.
 
 | Need | Control/API | Recovery |
 | --- | --- | --- |

@@ -3,7 +3,7 @@ import { runCommand, type CommandResult } from "./gitExec.ts";
 /**
  * A deliberately small OS-secret-store boundary. There is no plaintext-file
  * fallback: a daemon that cannot reach a supported credential manager simply
- * cannot hold GitHub credentials. The public GitHub App client IDs live in a
+ * cannot hold optional GitHub App credentials. The public GitHub App client IDs live in a
  * separate configuration file; only issued user tokens arrive here.
  */
 export interface SecretStore {

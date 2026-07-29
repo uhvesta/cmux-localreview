@@ -91,7 +91,7 @@ async function githubJson<T>(url: string, token: string, init: RequestInit = {})
   try { return JSON.parse(body) as T; } catch { throw new Error("GitHub API returned invalid JSON"); }
 }
 
-/** Resolve a PR using only the daemon-owned read-capability GitHub App token. */
+/** Resolve a PR using the daemon-owned read credential (local `gh` or an App override). */
 export async function resolveRemotePullRequest(remoteUrl: string, token: string): Promise<RemotePullRequest> {
   const target = pullRequestTarget(remoteUrl);
   const apiBase = githubApiBase(target.host);
