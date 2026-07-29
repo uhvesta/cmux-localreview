@@ -65,6 +65,12 @@ GitHub's Authorized OAuth Apps page to revoke server-side authorization.
 6. Return to the desktop app; it polls and changes the capability to
    **Connected**. No token is displayed or pasted.
 
+If the normal browser does not open, use the visible `github.com/login/device`
+link and displayed code yourself. Refreshing Queue Home does not lose an
+in-progress code: the daemon returns that short-lived public approval data
+until it expires, succeeds, or is canceled. Use **Cancel device flow** to
+discard a code before starting a replacement.
+
 The capability split is a local secret-store and routing boundary. OAuth scope
 limits still apply: GitHub OAuth cannot make private repository source access
 strictly read-only, so `read` and `write` should use separate registrations
@@ -94,6 +100,8 @@ be used as a production workaround for failed Device Flow.
 | --- | --- |
 | No Client ID configured | Save the public ID from the dedicated OAuth App in Queue Home. |
 | Device code expired | Click **Connect** once more and use the new code; do not paste a token. |
+| Browser did not open | Use the displayed `github.com/login/device` link and code; no callback listener is required. |
+| Started the wrong capability/account | Click **Cancel device flow**, then start the intended capability again. |
 | Wrong GitHub account/app | Disconnect the capability, revoke the OAuth App in GitHub, then configure/connect again. |
 | Keychain unavailable | Repair/unlock the OS secret store. The desktop app does not fall back to plaintext. |
 | `/ask` cannot list models | Confirm `copilot` shows Connected, then check the displayed Copilot entitlement recovery; OAuth success is not a model-access guarantee. |

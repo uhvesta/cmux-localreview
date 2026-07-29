@@ -79,6 +79,62 @@ func TestCaptureIncludesSiblingRepositories(t *testing.T) {
 	}
 }
 
+func TestCaptureIncludesNestedRepositoriesWithoutAddingGitlinks(t *testing.T) {
+	workspace := t.TempDir()
+	git(t, workspace, "init")
+	git(t, workspace, "config", "user.email", "test@example.com")
+	git(t, workspace, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(workspace, "parent.txt"), []byte("parent\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	git(t, workspace, "add", "parent.txt")
+	git(t, workspace, "commit", "-m", "parent")
+
+	nested := filepath.Join(workspace, "nested")
+	if err := os.MkdirAll(nested, 0700); err != nil {
+		t.Fatal(err)
+	}
+	git(t, nested, "init")
+	git(t, nested, "config", "user.email", "test@example.com")
+	git(t, nested, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(nested, "child.txt"), []byte("child\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	git(t, nested, "add", "child.txt")
+	git(t, nested, "commit", "-m", "child")
+	if err := os.WriteFile(filepath.Join(nested, "untracked.txt"), []byte("untracked\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	manifest, manifestPath, err := Capture(workspace, filepath.Join(t.TempDir(), "artifacts"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Repos) != 2 {
+		t.Fatalf("repos=%#v", manifest.Repos)
+	}
+	seen := map[string]bool{}
+	for _, repo := range manifest.Repos {
+		seen[repo.WorkspaceRelativePath] = true
+	}
+	if !seen["."] || !seen["nested"] {
+		t.Fatalf("paths=%v", seen)
+	}
+	destination := filepath.Join(t.TempDir(), "reproduced")
+	if _, err := Materialize(manifestPath, destination); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(destination, "nested", "untracked.txt")); err != nil {
+		t.Fatalf("nested working tree file missing after materialization: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(destination, "nested", ".git")); err != nil {
+		t.Fatalf("nested repository was not materialized independently: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(destination, ".git", "modules", "nested")); !os.IsNotExist(err) {
+		t.Fatalf("parent snapshot unexpectedly captured nested gitlink: %v", err)
+	}
+}
+
 func TestMaterializeRestoresSiblingRepositories(t *testing.T) {
 	workspace := t.TempDir()
 	for _, name := range []string{"api", "web"} {

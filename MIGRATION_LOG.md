@@ -995,3 +995,45 @@ Not yet claimed:
 
 - The runner's structural success is not an authenticated acceptance pass.
   No ledger values were fabricated for OAuth, Copilot streaming, or Electron.
+
+## 2026-07-28 — Desktop-only recovery and Device Flow continuity sweep
+
+Done:
+
+- Hardened Electron ownership of the private Go sidecar: closing the desktop
+  app now quits the single-window application and terminates its sidecar; an
+  activate/second-window path reuses a healthy existing child rather than
+  racing a second daemon against the same SQLite profile. An unexpected
+  sidecar exit offers a concrete **Restart review** action.
+- Queue Home preserves an already-issued public, short-lived GitHub Device
+  Flow code across a renderer reload or an immediately stale status read. It
+  exposes the normal-browser URL, supports cancellation, observes GitHub's
+  polling interval at the daemon boundary, and never returns an access token
+  to the renderer.
+- Replaced desktop-visible CLI/token recovery instructions with the supported
+  recovery action: quit and reopen CMUX Local Review. `/ask` and review
+  controls preserve saved state and direct the reviewer to Queue Home for
+  capability setup rather than an unsupported terminal path.
+- Snapshot capture now retains nested Git repositories as independent bundles
+  while excluding them from the parent temporary index; materialization
+  restores both working trees without creating a parent gitlink.
+
+Validated:
+
+- `npm --prefix desktop run check`
+- `npm --prefix desktop run verify:sidecar` (31 MB idle RSS; below 50 MB)
+- `cd vendor/difit && bunx vitest run src/client/QueueHome.test.tsx src/client/components/AskPanel.test.tsx`
+- `cd vendor/difit && bunx tsc --project tsconfig.json --noEmit`
+- `go test ./...`
+- `bazel test //... --test_output=errors`
+- `bash scripts/verify-native-runtime-boundary.sh`
+- `bash scripts/verify-e2e-copilot-fixture.sh`
+- `bash scripts/verify-release-archives.sh`
+
+Not yet claimed:
+
+- Fixture, source, and sidecar-lifecycle coverage do not prove every real GUI
+  flow. In particular, the two clean authenticated Electron Phase-3 passes
+  (real Device Flow approval, live Copilot model/stream/cancel, refresh, and
+  restart persistence) still require explicit browser approval and manual
+  computer-use evidence.

@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 
 let daemon;
+let daemonDiscovery;
 let reviewWindow;
 let opening;
 let quitting = false;
@@ -57,6 +58,17 @@ async function waitForDaemon(dataDir, expectedPID, timeoutMs = 15_000) {
   throw new Error("localreviewd did not become healthy within 15 seconds");
 }
 
+async function daemonIsHealthy(discovered, expectedPID) {
+  if (!discovered || discovered.pid !== expectedPID) return false;
+  try {
+    const response = await fetch(`http://127.0.0.1:${discovered.port}/health`);
+    const health = response.ok ? await response.json() : undefined;
+    return Boolean(health?.ok && health.pid === expectedPID);
+  } catch {
+    return false;
+  }
+}
+
 function stopDaemon() {
   if (!daemon || daemon.killed) return;
   daemon.kill("SIGTERM");
@@ -74,18 +86,47 @@ function focusReviewWindow() {
 async function startReviewWindow() {
   if (focusReviewWindow()) return;
   const dataDir = dataDirectory();
+  // On macOS closing the last window intentionally leaves Electron alive.
+  // Re-use its still-owned sidecar when the app is activated again; spawning
+  // a second daemon here races the same SQLite profile and leaves the user at
+  // an unrecoverable startup error.
+  if (daemon && !daemon.killed && await daemonIsHealthy(daemonDiscovery, daemon.pid)) {
+    await openQueueWindow(daemonDiscovery);
+    return;
+  }
   const binary = daemonPath();
   if (!existsSync(binary)) throw new Error(`localreviewd was not found at ${binary}. Set LOCALREVIEWD_PATH while developing.`);
-  daemon = spawn(binary, ["--port=0", `--data-dir=${dataDir}`, `--parent-pid=${process.pid}`], { stdio: ["ignore", "pipe", "pipe"] });
-  daemon.once("error", (error) => { if (!quitting) console.error("localreviewd failed to start", error); });
-  daemon.once("exit", (code, signal) => {
+  const spawnedDaemon = spawn(binary, ["--port=0", `--data-dir=${dataDir}`, `--parent-pid=${process.pid}`], { stdio: ["ignore", "pipe", "pipe"] });
+  daemon = spawnedDaemon;
+  spawnedDaemon.once("error", (error) => { if (!quitting) console.error("localreviewd failed to start", error); });
+  spawnedDaemon.once("exit", (code, signal) => {
     if (quitting) return;
+    // A delayed exit from an older child must never erase the replacement
+    // daemon's ownership record.
+    if (daemon !== spawnedDaemon) return;
     daemon = undefined;
+    daemonDiscovery = undefined;
     if (reviewWindow && !reviewWindow.isDestroyed()) {
-      void dialog.showMessageBox(reviewWindow, { type: "error", title: "cmux local review", message: "The local review daemon stopped", detail: `Exit code: ${code ?? "none"}; signal: ${signal ?? "none"}` });
+      void dialog.showMessageBox(reviewWindow, {
+        type: "error",
+        title: "cmux local review",
+        message: "The local review daemon stopped",
+        detail: `Exit code: ${code ?? "none"}; signal: ${signal ?? "none"}`,
+        buttons: ["Restart review", "Close window"],
+        defaultId: 0,
+      }).then(({ response }) => {
+        if (!reviewWindow || reviewWindow.isDestroyed()) return;
+        reviewWindow.destroy();
+        if (response === 0) void openReviewWindow();
+      });
     }
   });
-  const discovered = await waitForDaemon(dataDir, daemon.pid);
+  const discovered = await waitForDaemon(dataDir, spawnedDaemon.pid);
+  daemonDiscovery = discovered;
+  await openQueueWindow(discovered);
+}
+
+async function openQueueWindow(discovered) {
   reviewWindow = new BrowserWindow({
     width: 1440, height: 960, minWidth: 960, minHeight: 640,
     backgroundColor: "#0d1117",
@@ -126,6 +167,9 @@ app.whenReady().then(openReviewWindow).catch(async (error) => {
   await dialog.showMessageBox({ type: "error", title: "cmux local review", message: "Could not start localreviewd", detail: String(error) });
   app.quit();
 });
-app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
+// CMUX Local Review is a single-window desktop application, not a background
+// service. Quitting with the last window guarantees that its private sidecar
+// is torn down and the next launch receives a fresh browser capability.
+app.on("window-all-closed", () => { app.quit(); });
 app.on("activate", () => { void openReviewWindow(); });
 app.on("before-quit", () => { quitting = true; stopDaemon(); });

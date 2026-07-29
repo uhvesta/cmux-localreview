@@ -143,8 +143,10 @@ func (f *LoopbackFlow) exchange(ctx context.Context, code string) error {
 	if e = f.service.write(f.capability, t); e != nil {
 		return e
 	}
+	f.service.mu.Lock()
 	f.service.state[f.capability] = "succeeded"
 	f.service.message[f.capability] = "Connected as @" + login + "."
+	f.service.mu.Unlock()
 	return nil
 }
 func (f *LoopbackFlow) finish(e error) {

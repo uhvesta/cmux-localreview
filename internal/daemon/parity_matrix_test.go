@@ -864,7 +864,10 @@ func assertNativeQueueReproductionFixture(t *testing.T, fixture frozenParityFixt
 	if canonical, err := filepath.EvalSymlinks(wantWorkspace); err == nil {
 		wantWorkspace = canonical
 	}
-	if payload.ItemID != state["<uuid>"] || payload.WorkspacePath != wantWorkspace || payload.Snapshot == nil || strings.TrimSpace(payload.Snapshot.ID) == "" || payload.Snapshot.Repositories != 1 {
+	// The frozen browser fixture predated nested-repository workspace support.
+	// Native snapshots deliberately retain both repositories in this fixture so
+	// reopening/reproduction cannot silently omit a child checkout.
+	if payload.ItemID != state["<uuid>"] || payload.WorkspacePath != wantWorkspace || payload.Snapshot == nil || strings.TrimSpace(payload.Snapshot.ID) == "" || payload.Snapshot.Repositories != 2 {
 		t.Fatalf("%s: incomplete native reproduce plan: %#v", fixture.Name, payload)
 	}
 	reproduce := payload.Commands["reproduceSnapshot"]

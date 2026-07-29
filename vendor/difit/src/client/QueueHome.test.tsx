@@ -29,7 +29,7 @@ describe('Queue Home lifecycle recovery', () => {
     const alert = await screen.findByText('The local review queue is unavailable.');
     expect(alert.parentElement?.textContent).toContain('The local review queue is unavailable.');
     expect(screen.getByRole('button', { name: 'Retry Queue Home' })).not.toBeNull();
-    expect(screen.getByText('localreview daemon status')).not.toBeNull();
+    expect(screen.getByText(/quit CMUX Local Review and open it again/i)).not.toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Retry Queue Home' }));
     await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(4));
   });
@@ -111,6 +111,65 @@ describe('Queue Home lifecycle recovery', () => {
     // paste flow and never borrows the user's general gh credential.
     expect(screen.queryByRole('textbox', { name: /secret/i })).toBeNull();
     expect(screen.getByText(/gh login/i)).not.toBeNull();
+  });
+
+  it('restores a waiting device code after refresh and lets the reviewer cancel it', async () => {
+    let waiting = false;
+    const auth = () => ({ provider: 'github-oauth-pkce', capabilities: {
+      read: { configured: true, clientId: 'Iv1.readclient', authenticated: false, loginState: waiting ? 'waiting' : 'idle', ...(waiting ? { deviceFlow: { userCode: 'ABCD-EFGH', verificationUri: 'https://github.com/login/device', expiresAt: 1_800_000_000_000 } } : {}) },
+      write: { configured: false, authenticated: false, loginState: 'idle' },
+      copilot: { configured: false, authenticated: false, loginState: 'idle' },
+    } });
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.includes('/api/github/auth/status')) return Promise.resolve({ ok: true, status: 200, json: async () => auth() });
+      if (path.includes('/api/github/auth/read/start')) {
+        waiting = true;
+        return Promise.resolve({ ok: true, status: 202, json: async () => ({ flow: 'device', userCode: 'ABCD-EFGH', verificationUri: 'https://github.com/login/device', expiresAt: 1_800_000_000_000 }) });
+      }
+      if (path.includes('/api/github/auth/read') && init?.method === 'DELETE') {
+        waiting = false;
+        return Promise.resolve({ ok: true, status: 204, json: async () => null });
+      }
+      if (path.includes('/api/queue')) return Promise.resolve({ ok: true, status: 200, json: async () => ({ items: [] }) });
+      if (path.includes('/api/workspaces')) return Promise.resolve({ ok: true, status: 200, json: async () => ({ activeWorkspace: null }) });
+      if (path.includes('/api/federation/')) return Promise.resolve({ ok: true, status: 200, json: async () => ({ nodes: [] }) });
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({}) });
+    }));
+    render(<QueueHome />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect' }));
+    expect(await screen.findByText('ABCD-EFGH')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Cancel device flow' })).not.toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel device flow' }));
+    await waitFor(() => expect(screen.queryByText('ABCD-EFGH')).toBeNull());
+  });
+
+  it('opens GitHub device verification and keeps an in-app recovery link', async () => {
+    const auth = {
+      provider: 'github-oauth-pkce',
+      capabilities: {
+        read: { configured: true, clientId: 'Iv1.readclient', authenticated: false, loginState: 'idle' },
+        write: { configured: false, authenticated: false, loginState: 'idle' },
+        copilot: { configured: false, authenticated: false, loginState: 'idle' },
+      },
+    };
+    const open = vi.fn();
+    vi.stubGlobal('open', open);
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.includes('/api/github/auth/read/start')) return Promise.resolve({ ok: true, status: 200, json: async () => ({ flow: 'device', userCode: 'ABCD-1234', verificationUri: 'https://github.com/login/device' }) });
+      if (path.includes('/api/github/auth/status')) return Promise.resolve({ ok: true, status: 200, json: async () => auth });
+      if (path.includes('/api/queue')) return Promise.resolve({ ok: true, status: 200, json: async () => ({ items: [] }) });
+      if (path.includes('/api/workspaces')) return Promise.resolve({ ok: true, status: 200, json: async () => ({ activeWorkspace: null }) });
+      if (path.includes('/api/federation/')) return Promise.resolve({ ok: true, status: 200, json: async () => ({ nodes: [] }) });
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({}) });
+    }));
+    render(<QueueHome />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect' }));
+    expect(await screen.findByText('ABCD-1234')).not.toBeNull();
+    expect(open).toHaveBeenCalledWith('https://github.com/login/device', '_blank', 'noopener,noreferrer');
+    expect(screen.getByRole('link', { name: 'github.com/login/device' })).not.toBeNull();
   });
 
   it('shows a remote tunnel cache state rather than hiding lazy federation reads', async () => {

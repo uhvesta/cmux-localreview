@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 
-import { captureDaemonTokenFromLocation, daemonFetch, saveDaemonToken } from './services/daemonAuth';
+import { captureDaemonTokenFromLocation, daemonFetch } from './services/daemonAuth';
 
 type QueueStatus = 'queued' | 'in_review' | 'changes_requested' | 'approved' | 'completed';
 
@@ -56,6 +56,7 @@ interface GitHubCapabilityStatus {
   requestedScopes?: string[];
   grantedScopes?: string[];
   scopeWarning?: string;
+  deviceFlow?: { userCode: string; verificationUri: string; expiresAt: number };
 }
 interface GitHubAuthStatus {
   // Desktop builds use device authorization. Keep provider as a string so an
@@ -152,7 +153,6 @@ export function QueueHome() {
   const [nodeToken, setNodeToken] = useState('');
   const [savingNode, setSavingNode] = useState(false);
   const [nodeAction, setNodeAction] = useState<string | null>(null);
-  const [daemonToken, setDaemonToken] = useState('');
   const [authRequired, setAuthRequired] = useState(false);
   const [githubAuth, setGithubAuth] = useState<GitHubAuthStatus | null>(null);
   const [githubAuthLoading, setGithubAuthLoading] = useState(false);
@@ -164,7 +164,7 @@ export function QueueHome() {
   // their normal GitHub browser session, while this Electron-owned daemon
   // polls and retains only its own Keychain credential.
   const githubFlow: 'device' = 'device';
-  const [deviceCode, setDeviceCode] = useState<{ capability: GitHubCapability; userCode: string; verificationUri: string } | null>(null);
+  const [deviceCodes, setDeviceCodes] = useState<Array<{ capability: GitHubCapability; userCode: string; verificationUri: string; expiresAt: number }>>([]);
   const [showHistory, setShowHistory] = useState(true);
 
   useEffect(() => { captureDaemonTokenFromLocation(); }, []);
@@ -217,7 +217,33 @@ export function QueueHome() {
         const body = (await response.json().catch(() => null)) as { error?: string } | null;
         throw new Error(body?.error ?? 'GitHub connection status is unavailable.');
       }
-      setGithubAuth((await response.json()) as GitHubAuthStatus);
+      const next = (await response.json()) as GitHubAuthStatus;
+      setGithubAuth(next);
+      // A renderer reload must never hide an already-issued device code. The
+      // daemon returns only the public, short-lived approval data while the
+      // flow is waiting; it never returns an OAuth credential.
+      setDeviceCodes((current) => {
+        const now = Date.now();
+        const retained = new Map(current
+          .filter((device) => device.expiresAt <= 0 || device.expiresAt > now)
+          .map((device) => [device.capability, device]));
+        for (const capability of Object.keys(next.capabilities) as GitHubCapability[]) {
+          const status = next.capabilities[capability];
+          const device = status?.deviceFlow;
+          if (status?.loginState === 'waiting' && device) {
+            retained.set(capability, { capability, ...device });
+          } else if (status?.loginState === 'succeeded' || status?.loginState === 'failed' || status?.authenticated) {
+            // Completion, cancellation, and an expired/failed flow are
+            // terminal. Do not retain its old public code in the renderer.
+            retained.delete(capability);
+          }
+          // An immediate status request can race the start response on a
+          // slow daemon. Keep a still-valid public device code through an
+          // "idle" snapshot so the reviewer never loses the only recovery
+          // link/code after clicking Connect.
+        }
+        return [...retained.values()];
+      });
       setGithubAuthError(null);
     } catch (err) {
       setGithubAuthError(`${err instanceof Error ? err.message : 'GitHub connection status is unavailable.'} Queue Home remains usable; retry this status before configuring or disconnecting a GitHub connection.`);
@@ -254,10 +280,19 @@ export function QueueHome() {
     setGithubAction(capability); setError(null); setErrorRecovery(null);
     try {
       const response = await daemonFetch(`/api/github/auth/${capability}/start`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ flow: githubFlow }) });
-      const body = (await response.json().catch(() => null)) as { flow?: 'loopback' | 'device'; authorizationUrl?: string; userCode?: string; verificationUri?: string; error?: string } | null;
+      const body = (await response.json().catch(() => null)) as { flow?: 'loopback' | 'device'; authorizationUrl?: string; userCode?: string; verificationUri?: string; expiresAt?: number; error?: string } | null;
       if (!response.ok || !body?.flow) throw new Error(body?.error ?? 'Could not start GitHub App authorization.');
       if (body.flow !== 'device' || !body.userCode || !body.verificationUri) throw new Error('The desktop app requires a GitHub device code. Restart the desktop app and try Connect again.');
-      setDeviceCode({ capability, userCode: body.userCode, verificationUri: body.verificationUri });
+      const userCode = body.userCode;
+      const verificationUri = body.verificationUri;
+      setDeviceCodes((current) => [
+        ...current.filter((device) => device.capability !== capability),
+        { capability, userCode, verificationUri, expiresAt: body.expiresAt ?? 0 },
+      ]);
+      // Electron denies renderer-created windows and delegates this to its
+      // system-browser handler. A normal browser follows the same call. Keep
+      // the durable link rendered below in case an OS/browser blocks it.
+      window.open(verificationUri, '_blank', 'noopener,noreferrer');
       await refreshGitHubAuth();
     } catch (err) { setError(err instanceof Error ? err.message : 'Could not start GitHub App authorization.'); }
     finally { setGithubAction(null); }
@@ -271,6 +306,7 @@ export function QueueHome() {
         const body = (await response.json().catch(() => null)) as { error?: string } | null;
         throw new Error(body?.error ?? 'Could not disconnect this GitHub connection.');
       }
+      setDeviceCodes((current) => current.filter((device) => device.capability !== capability));
       await refreshGitHubAuth();
     } catch (err) { setError(err instanceof Error ? err.message : 'Could not disconnect this GitHub connection.'); }
     finally { setGithubAction(null); }
@@ -426,12 +462,10 @@ export function QueueHome() {
       <div><div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', opacity: 0.62 }}>CMUX LOCAL REVIEW</div><h1 style={{ margin: '5px 0 0', fontSize: 28 }}>Queue Home</h1><p style={{ margin: '7px 0 0', opacity: 0.72, fontSize: 13 }}>{activeWorkspace ? <>Active workspace: <code>{activeWorkspace}</code></> : 'No review workspace is open. Select a queue item to begin.'}</p></div>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>{activeWorkspace && <button onClick={() => window.location.assign('/review')} style={buttonStyle}>Current review</button>}<label style={{ fontSize: 12, display: 'flex', gap: 4, alignItems: 'center' }}><input type="checkbox" checked={showHistory} onChange={(event) => setShowHistory(event.target.checked)} /> Show review history</label><button onClick={() => void refresh()} disabled={loading || opening} style={buttonStyle}>{loading ? 'Loading…' : 'Refresh'}</button><button onClick={() => void openNext()} disabled={opening || queuedCount === 0} style={{ ...buttonStyle, borderColor: '#2ea043' }}>Open next ({queuedCount})</button></div>
     </header>
-    {error && <div role="alert" style={{ marginBottom: 16, padding: '10px 12px', borderRadius: 6, color: '#f85149', border: '1px solid rgba(248,81,73,0.5)' }}><div>{error}</div>{errorRecovery && <p style={{ margin: '7px 0 0', color: 'inherit', fontSize: 12 }}>{errorRecovery}</p>}<div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 8 }}><button onClick={() => void refresh()} disabled={loading || opening} style={buttonStyle}>{loading ? 'Retrying…' : 'Retry Queue Home'}</button>{errorRecovery ? <span style={{ fontSize: 11, opacity: 0.82 }}>The review is still queued; fix the retained source, then try opening it again.</span> : <span style={{ fontSize: 11, opacity: 0.82 }}>If it persists, run <code>localreview daemon status</code> and then <code>localreview daemon run --port 0</code>.</span>}</div></div>}
-    {authRequired && <form onSubmit={(event) => { event.preventDefault(); if (saveDaemonToken(daemonToken)) { setDaemonToken(''); void refresh(); } }} style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '0 0 16px', padding: 12, border: '1px solid rgba(210,153,34,0.55)', borderRadius: 6 }} aria-label="Connect Queue Home to local daemon">
-      <span style={{ fontSize: 12, opacity: 0.82 }}>Paste the daemon token from <code>localreview-open --home</code>:</span>
-      <input value={daemonToken} onChange={(event) => setDaemonToken(event.target.value)} type="password" autoComplete="off" aria-label="Daemon bearer token" placeholder="Daemon token" style={{ flex: 1, minWidth: 180, padding: '7px 8px', borderRadius: 5, border: '1px solid rgba(127,127,127,0.45)', background: 'transparent', color: 'inherit' }} />
-      <button type="submit" disabled={!daemonToken.trim()} style={buttonStyle}>Connect</button>
-    </form>}
+    {error && <div role="alert" style={{ marginBottom: 16, padding: '10px 12px', borderRadius: 6, color: '#f85149', border: '1px solid rgba(248,81,73,0.5)' }}><div>{error}</div>{errorRecovery && <p style={{ margin: '7px 0 0', color: 'inherit', fontSize: 12 }}>{errorRecovery}</p>}<div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 8 }}><button onClick={() => void refresh()} disabled={loading || opening} style={buttonStyle}>{loading ? 'Retrying…' : 'Retry Queue Home'}</button>{errorRecovery ? <span style={{ fontSize: 11, opacity: 0.82 }}>The review is still queued; fix the retained source, then try opening it again.</span> : <span style={{ fontSize: 11, opacity: 0.82 }}>If it persists, quit CMUX Local Review and open it again. It will start a fresh private daemon automatically.</span>}</div></div>}
+    {authRequired && <div role="alert" style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '0 0 16px', padding: 12, border: '1px solid rgba(210,153,34,0.55)', borderRadius: 6 }} aria-label="Renew desktop connection">
+      <span style={{ fontSize: 12, opacity: 0.82 }}>The desktop app’s private connection expired. Quit CMUX Local Review and open it again to create a fresh secure connection.</span>
+    </div>}
     {(githubAuth || githubAuthError) && <section aria-label="GitHub OAuth connections" style={{ margin: '0 0 18px', padding: 12, border: '1px solid rgba(127,127,127,0.42)', borderRadius: 8 }}>
       {githubAuthError && <div role="alert" style={{ marginBottom: 10, padding: '8px 9px', borderRadius: 5, border: '1px solid rgba(248,81,73,0.5)', color: '#f85149', fontSize: 12 }}>{githubAuthError} <button onClick={() => void refreshGitHubAuth()} disabled={githubAuthLoading} style={{ ...buttonStyle, marginLeft: 6 }}>{githubAuthLoading ? 'Retrying…' : 'Retry GitHub status'}</button></div>}
       {githubAuth && <>
@@ -446,6 +480,7 @@ export function QueueHome() {
             {status.requestedScopes !== undefined && <p style={{ margin: '0 0 9px', fontSize: 10, opacity: 0.64 }}>Requested OAuth scopes: <code>{status.requestedScopes.length ? status.requestedScopes.join(' ') : 'none'}</code>{status.grantedScopes && status.grantedScopes.length > 0 ? <> · Granted: <code>{status.grantedScopes.join(' ')}</code></> : ''}{status.scopeWarning ? <><br />{status.scopeWarning}</> : null}</p>}
             <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
               {status.configured && !status.authenticated && <button onClick={() => void startGitHubAuth(capability)} disabled={githubAction !== null} style={{ ...buttonStyle, borderColor: '#2ea043' }}>{githubAction === capability ? 'Opening…' : waiting ? 'Restart device flow' : 'Connect'}</button>}
+              {waiting && <button onClick={() => void disconnectGitHubApp(capability)} disabled={githubAction !== null} style={buttonStyle}>{githubAction === capability ? 'Canceling…' : 'Cancel device flow'}</button>}
               {status.authenticated && <button onClick={() => void disconnectGitHubApp(capability)} disabled={githubAction !== null} style={buttonStyle}>{githubAction === capability ? 'Disconnecting…' : 'Disconnect'}</button>}
             </div>
           </article>;
@@ -466,7 +501,7 @@ export function QueueHome() {
           <li>This setup never falls back to <code>gh login</code>, a PAT, environment credentials, or an existing Copilot CLI session.</li>
         </ol>
       </details>
-      {deviceCode && <div role="status" style={{ marginTop: 10, padding: 10, border: '1px solid rgba(88,166,255,0.5)', borderRadius: 6, fontSize: 12 }}>Authorize <strong>{capabilityLabels[deviceCode.capability].title}</strong> at <a href={deviceCode.verificationUri} target="_blank" rel="noreferrer">github.com/login/device</a> with code <code style={{ fontWeight: 700, fontSize: 14 }}>{deviceCode.userCode}</code>. This page checks automatically; no token is shown or pasted.</div>}
+      {deviceCodes.map((deviceCode) => <div key={deviceCode.capability} role="status" style={{ marginTop: 10, padding: 10, border: '1px solid rgba(88,166,255,0.5)', borderRadius: 6, fontSize: 12 }}>Authorize <strong>{capabilityLabels[deviceCode.capability].title}</strong> at <a href={deviceCode.verificationUri} target="_blank" rel="noreferrer">github.com/login/device</a> with code <code style={{ fontWeight: 700, fontSize: 14 }}>{deviceCode.userCode}</code>. This page checks automatically; no token is shown or pasted. {deviceCode.expiresAt > 0 ? <> It expires at {new Date(deviceCode.expiresAt).toLocaleTimeString()}.</> : null}</div>)}
       </>}
     </section>}
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 22, alignItems: 'start' }}>

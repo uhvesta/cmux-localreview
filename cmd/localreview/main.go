@@ -465,6 +465,14 @@ func authCommand(args []string) error {
 			}
 		} else {
 			fmt.Printf("Open %s and enter code %s.\n", start.VerificationURI, start.UserCode)
+			if !*noOpen {
+				// The native daemon never opens Device Flow URLs: Electron owns
+				// its own system-browser launch, while the CLI keeps that choice
+				// explicit and honours --no-open for SSH/headless use.
+				if err := openExternalURL(start.VerificationURI); err != nil {
+					fmt.Fprintf(os.Stderr, "Could not open a browser automatically; open the URL above instead: %v\n", err)
+				}
+			}
 		}
 		if *noWait {
 			return nil

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -103,6 +104,18 @@ type Pending struct {
 	VerificationURI string
 	ExpiresAt       int64
 	Interval        time.Duration
+	NextPollAt      int64
+}
+
+// DeviceFlow is intentionally safe to expose to the desktop renderer. A
+// device code is short-lived, single-use, and designed to be shown to the
+// person approving the flow; unlike an OAuth access token it cannot call an
+// API. Returning it from Status lets a desktop reload recover an in-progress
+// approval instead of stranding the user with a "Waiting" state and no code.
+type DeviceFlow struct {
+	UserCode        string `json:"userCode"`
+	VerificationURI string `json:"verificationUri"`
+	ExpiresAt       int64  `json:"expiresAt"`
 }
 
 type StartResult struct {
@@ -110,17 +123,18 @@ type StartResult struct {
 	ExpiresAt                 int64
 }
 type Status struct {
-	Configured        bool     `json:"configured"`
-	ClientID          string   `json:"clientId,omitempty"`
-	BrowserOAuthReady bool     `json:"browserOAuthReady"`
-	Authenticated     bool     `json:"authenticated"`
-	Login             string   `json:"login,omitempty"`
-	State             string   `json:"loginState"`
-	Message           string   `json:"message,omitempty"`
-	Error             string   `json:"error,omitempty"`
-	RequestedScopes   []string `json:"requestedScopes,omitempty"`
-	GrantedScopes     []string `json:"grantedScopes,omitempty"`
-	ScopeWarning      string   `json:"scopeWarning,omitempty"`
+	Configured        bool        `json:"configured"`
+	ClientID          string      `json:"clientId,omitempty"`
+	BrowserOAuthReady bool        `json:"browserOAuthReady"`
+	Authenticated     bool        `json:"authenticated"`
+	Login             string      `json:"login,omitempty"`
+	State             string      `json:"loginState"`
+	Message           string      `json:"message,omitempty"`
+	Error             string      `json:"error,omitempty"`
+	RequestedScopes   []string    `json:"requestedScopes,omitempty"`
+	GrantedScopes     []string    `json:"grantedScopes,omitempty"`
+	ScopeWarning      string      `json:"scopeWarning,omitempty"`
+	DeviceFlow        *DeviceFlow `json:"deviceFlow,omitempty"`
 }
 
 type ServiceClient struct {
@@ -129,6 +143,7 @@ type ServiceClient struct {
 	HTTP              HTTPDoer
 	Open              Opener
 	Now               func() time.Time
+	mu                sync.Mutex
 	pending           map[Capability]Pending
 	state             map[Capability]string
 	message           map[Capability]string
@@ -181,9 +196,11 @@ func (s *ServiceClient) Configure(c Capability, id string) error {
 			return err
 		}
 	}
+	s.mu.Lock()
 	delete(s.pending, c)
 	s.state[c] = "idle"
 	delete(s.message, c)
+	s.mu.Unlock()
 	return nil
 }
 
@@ -242,12 +259,21 @@ func (s *ServiceClient) Start(ctx context.Context, c Capability) (StartResult, e
 	if p.Interval < time.Second {
 		p.Interval = time.Second
 	}
+	// Allow the first poll immediately. GitHub may return authorization_pending;
+	// after that response the daemon enforces the advertised interval for every
+	// renderer/window. This also keeps the API responsive for an approval that
+	// finished while the desktop was opening its external browser.
+	p.NextPollAt = s.Now().UnixMilli()
+	s.mu.Lock()
 	s.pending[c] = p
 	s.state[c] = "waiting"
 	s.message[c] = "Complete GitHub OAuth authorization in the browser, then return here."
-	if err := s.Open(uri); err != nil {
-		return StartResult{}, err
-	}
+	s.mu.Unlock()
+	// Device Flow deliberately does not launch a browser from the daemon. The
+	// desktop renderer owns its external-browser interaction (and the CLI owns
+	// its own --no-open behaviour), so one Connect action cannot create two
+	// tabs. The verification URI and code above are the durable manual recovery
+	// path if either caller cannot open a browser.
 	return StartResult{UserCode: user, VerificationURI: uri, ExpiresAt: p.ExpiresAt}, nil
 }
 func number(v any, fallback int64) int64 {
@@ -264,14 +290,27 @@ func number(v any, fallback int64) int64 {
 }
 
 func (s *ServiceClient) Poll(ctx context.Context, c Capability) (Status, error) {
+	s.mu.Lock()
 	p, ok := s.pending[c]
+	s.mu.Unlock()
 	if !ok {
 		return s.Status(ctx, c)
 	}
-	if s.Now().UnixMilli() >= p.ExpiresAt {
-		delete(s.pending, c)
-		s.state[c] = "failed"
-		s.message[c] = "This GitHub authorization code expired. Start again."
+	now := s.Now()
+	if now.UnixMilli() >= p.ExpiresAt {
+		s.mu.Lock()
+		if current, exists := s.pending[c]; exists && current.DeviceCode == p.DeviceCode {
+			delete(s.pending, c)
+			s.state[c] = "failed"
+			s.message[c] = "This GitHub authorization code expired. Start again."
+		}
+		s.mu.Unlock()
+		return s.Status(ctx, c)
+	}
+	// GitHub's Device Flow interval is a protocol requirement, not a UI hint.
+	// Queue Home may be open in more than one window, so enforce it at the
+	// daemon boundary rather than relying on every renderer to time requests.
+	if now.UnixMilli() < p.NextPollAt {
 		return s.Status(ctx, c)
 	}
 	body, code, err := s.request(ctx, s.tokenEndpoint(), url.Values{"client_id": {p.ClientID}, "device_code": {p.DeviceCode}, "grant_type": {"urn:ietf:params:oauth:grant-type:device_code"}})
@@ -279,13 +318,26 @@ func (s *ServiceClient) Poll(ctx context.Context, c Capability) (Status, error) 
 		return Status{}, err
 	}
 	if field(body, "error") == "authorization_pending" || field(body, "error") == "slow_down" {
+		s.mu.Lock()
+		if current, exists := s.pending[c]; exists && current.DeviceCode == p.DeviceCode {
+			if field(body, "error") == "slow_down" {
+				current.Interval += 5 * time.Second
+			}
+			current.NextPollAt = now.Add(current.Interval).UnixMilli()
+			s.pending[c] = current
+		}
+		s.mu.Unlock()
 		return s.Status(ctx, c)
 	}
 	access := field(body, "access_token")
 	if code < 200 || code > 299 || access == "" {
-		delete(s.pending, c)
-		s.state[c] = "failed"
-		s.message[c] = message(body, "GitHub authorization failed.")
+		s.mu.Lock()
+		if current, exists := s.pending[c]; exists && current.DeviceCode == p.DeviceCode {
+			delete(s.pending, c)
+			s.state[c] = "failed"
+			s.message[c] = message(body, "GitHub authorization failed.")
+		}
+		s.mu.Unlock()
 		return s.Status(ctx, c)
 	}
 	t := Token{AccessToken: access, RefreshToken: field(body, "refresh_token"), ClientID: p.ClientID, Scopes: parseScopes(field(body, "scope"))}
@@ -300,9 +352,13 @@ func (s *ServiceClient) Poll(ctx context.Context, c Capability) (Status, error) 
 	if err = s.write(c, t); err != nil {
 		return Status{}, err
 	}
-	delete(s.pending, c)
-	s.state[c] = "succeeded"
-	s.message[c] = "Connected as @" + login + "."
+	s.mu.Lock()
+	if current, exists := s.pending[c]; exists && current.DeviceCode == p.DeviceCode {
+		delete(s.pending, c)
+		s.state[c] = "succeeded"
+		s.message[c] = "Connected as @" + login + "."
+	}
+	s.mu.Unlock()
 	return s.Status(ctx, c)
 }
 
@@ -399,9 +455,11 @@ func (s *ServiceClient) Disconnect(c Capability) error {
 	if err := s.Secrets.Delete(Service, account(c)); err != nil {
 		return err
 	}
+	s.mu.Lock()
 	delete(s.pending, c)
 	s.state[c] = "idle"
 	s.message[c] = "Disconnected locally. Revoke the OAuth App authorization in GitHub settings too."
+	s.mu.Unlock()
 	return nil
 }
 func (s *ServiceClient) Status(ctx context.Context, c Capability) (Status, error) {
@@ -412,7 +470,14 @@ func (s *ServiceClient) Status(ctx context.Context, c Capability) (Status, error
 	if err != nil {
 		return Status{}, err
 	}
-	out := Status{Configured: strings.TrimSpace(id) != "", ClientID: strings.TrimSpace(id), State: s.state[c], Message: s.message[c], RequestedScopes: requestedScopes(c), ScopeWarning: scopeWarning(c)}
+	s.mu.Lock()
+	state, statusMessage := s.state[c], s.message[c]
+	p, waiting := s.pending[c]
+	s.mu.Unlock()
+	out := Status{Configured: strings.TrimSpace(id) != "", ClientID: strings.TrimSpace(id), State: state, Message: statusMessage, RequestedScopes: requestedScopes(c), ScopeWarning: scopeWarning(c)}
+	if waiting && state == "waiting" {
+		out.DeviceFlow = &DeviceFlow{UserCode: p.UserCode, VerificationURI: p.VerificationURI, ExpiresAt: p.ExpiresAt}
+	}
 	if out.State == "" {
 		out.State = "idle"
 	}

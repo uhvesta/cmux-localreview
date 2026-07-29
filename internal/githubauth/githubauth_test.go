@@ -3,6 +3,7 @@ package githubauth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -41,7 +42,7 @@ func TestDeviceFlowSeparatesCapabilitiesAndStoresOnlySecret(t *testing.T) {
 			if got := r.Form.Get("scope"); got != "repo" {
 				t.Fatalf("read device flow scope=%q want repo", got)
 			}
-			return response(200, `{"device_code":"device","user_code":"ABCD","verification_uri":"https://github.com/login/device","expires_in":900}`), nil
+			return response(200, `{"device_code":"device","user_code":"ABCD","verification_uri":"https://github.com/login/device","expires_in":900,"interval":1}`), nil
 		case "/login/oauth/access_token":
 			stage++
 			if stage == 1 {
@@ -57,19 +58,24 @@ func TestDeviceFlowSeparatesCapabilitiesAndStoresOnlySecret(t *testing.T) {
 		t.Fatal(r.URL)
 		return nil, nil
 	})
-	opened := ""
-	s := New(secrets, cfg, client, func(url string) error { opened = url; return nil })
-	s.Now = func() time.Time { return time.Unix(100, 0) }
+	openerCalls := 0
+	s := New(secrets, cfg, client, func(string) error { openerCalls++; return nil })
+	now := time.Unix(100, 0)
+	s.Now = func() time.Time { return now }
 	if _, err := s.Start(context.Background(), Read); err != nil {
 		t.Fatal(err)
 	}
-	if opened == "" {
-		t.Fatal("did not open browser")
+	if openerCalls != 0 {
+		t.Fatalf("daemon must not launch a duplicate Device Flow browser, calls=%d", openerCalls)
 	}
+	// Device Flow's advertised interval is daemon-enforced after GitHub's first
+	// authorization_pending response, so a renderer reload cannot hammer the
+	// token endpoint.
 	waiting, err := s.Poll(context.Background(), Read)
 	if err != nil || waiting.State != "waiting" {
 		t.Fatalf("waiting %#v %v", waiting, err)
 	}
+	now = now.Add(time.Second)
 	done, err := s.Poll(context.Background(), Read)
 	if err != nil || !done.Authenticated || done.Login != "octo" {
 		t.Fatalf("done %#v %v", done, err)
@@ -82,6 +88,83 @@ func TestDeviceFlowSeparatesCapabilitiesAndStoresOnlySecret(t *testing.T) {
 	}
 	if _, err := s.Token(context.Background(), Write); err == nil {
 		t.Fatal("write must not inherit read token")
+	}
+}
+
+func TestDeviceFlowCanBeRecoveredFromStatusWithoutDaemonBrowserLaunch(t *testing.T) {
+	secrets := memSecrets{}
+	cfg := memConfig{Copilot: "Iv1.copilot-client"}
+	now := time.Unix(100, 0)
+	openerCalls := 0
+	s := New(secrets, cfg, roundTrip(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/login/device/code" {
+			t.Fatalf("unexpected request %s", r.URL)
+		}
+		return response(200, `{"device_code":"opaque-device","user_code":"ABCD-EFGH","verification_uri":"https://github.com/login/device","expires_in":900,"interval":5}`), nil
+	}), func(string) error { openerCalls++; return errors.New("no default browser") })
+	s.Now = func() time.Time { return now }
+	result, err := s.Start(context.Background(), Copilot)
+	if err != nil {
+		t.Fatalf("start=%v", err)
+	}
+	if result.UserCode != "ABCD-EFGH" || result.VerificationURI != "https://github.com/login/device" {
+		t.Fatalf("start=%#v", result)
+	}
+	status, err := s.Status(context.Background(), Copilot)
+	if err != nil || status.State != "waiting" || status.DeviceFlow == nil || status.DeviceFlow.UserCode != result.UserCode {
+		t.Fatalf("status must restore waiting device code: %#v err=%v", status, err)
+	}
+	if openerCalls != 0 {
+		t.Fatalf("daemon launched browser for device flow %d times", openerCalls)
+	}
+	encoded, _ := json.Marshal(status)
+	if strings.Contains(string(encoded), "opaque-device") {
+		t.Fatalf("status exposed device grant: %s", encoded)
+	}
+}
+
+func TestDeviceFlowSlowDownUpdatesDaemonPollInterval(t *testing.T) {
+	secrets := memSecrets{}
+	cfg := memConfig{Read: "Iv1.read-client"}
+	now := time.Unix(100, 0)
+	requests := 0
+	s := New(secrets, cfg, roundTrip(func(r *http.Request) (*http.Response, error) {
+		switch r.URL.Path {
+		case "/login/device/code":
+			return response(200, `{"device_code":"device","user_code":"CODE","verification_uri":"https://github.com/login/device","expires_in":900,"interval":1}`), nil
+		case "/login/oauth/access_token":
+			requests++
+			return response(200, `{"error":"slow_down"}`), nil
+		default:
+			t.Fatalf("unexpected request %s", r.URL)
+			return nil, nil
+		}
+	}), nil)
+	s.Now = func() time.Time { return now }
+	if _, err := s.Start(context.Background(), Read); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Poll(context.Background(), Read); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests=%d", requests)
+	}
+	// GitHub asks for an additional five seconds after slow_down; no request
+	// may escape before then, regardless of renderer polling frequency.
+	now = now.Add(5 * time.Second)
+	if _, err := s.Poll(context.Background(), Read); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 {
+		t.Fatalf("slow_down interval bypassed: %d", requests)
+	}
+	now = now.Add(time.Second)
+	if _, err := s.Poll(context.Background(), Read); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 2 {
+		t.Fatalf("requests after adjusted interval=%d", requests)
 	}
 }
 func TestClientIDChangeInvalidatesToken(t *testing.T) {

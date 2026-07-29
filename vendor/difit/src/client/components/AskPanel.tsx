@@ -142,7 +142,7 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
           // picker choice; preserve the saved draft and show the daemon's
           // token-free recovery guidance instead.
           setModels([]); setModelStatus('unavailable');
-          setError(modelData.warning || 'Copilot SDK is unavailable. Restart the localreview daemon, then refresh /ask; saved transcripts remain available.');
+          setError(modelData.warning || 'Copilot SDK is unavailable. Quit and reopen CMUX Local Review, then refresh /ask; saved transcripts remain available.');
         } else {
           setModels(nextModels); setModelStatus('available');
           // A workspace picker default is durable independently of a
@@ -160,7 +160,7 @@ export function AskPanel({ collapsed, onToggleCollapsed, requestedConversationId
           setError('Copilot SDK is unavailable or unauthenticated. Authenticate Copilot, then retry; saved transcripts remain available.');
         }
       }
-      if (!conversationsResponse?.ok) throw new Error('Open this review with localreview-open to use saved /ask conversations.');
+      if (!conversationsResponse?.ok) throw new Error('The desktop connection is unavailable. Quit and reopen CMUX Local Review to restore saved /ask conversations.');
       const conversationData = (await conversationsResponse.json()) as { conversations?: AskConversation[]; activeReviewSessionId?: number };
       const nextConversations = Array.isArray(conversationData.conversations) ? conversationData.conversations : [];
       setConversations(nextConversations);

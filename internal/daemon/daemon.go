@@ -112,14 +112,6 @@ type Daemon struct {
 	federationSecrets githubauth.SecretStore
 }
 
-func browserOpener(rawURL string) error {
-	command := "open"
-	if runtime.GOOS == "linux" {
-		command = "xdg-open"
-	}
-	return exec.Command(command, rawURL).Start()
-}
-
 func githubCapability(raw string) (githubauth.Capability, bool) {
 	value := githubauth.Capability(raw)
 	switch value {
@@ -144,6 +136,18 @@ type workspaceReview struct {
 	// Base is a remote PR's immutable base SHA. Empty means the ordinary
 	// working-tree comparison selected by the reviewer UI.
 	Base string
+	// BaseByRepo keeps an immutable snapshot's original base per repository.
+	// A multi-repository workspace can legitimately have different HEADs when
+	// it is submitted, so one workspace-wide base would make at least one
+	// materialized repository render as an empty working tree.
+	BaseByRepo map[string]string
+}
+
+func (review workspaceReview) baseForRepo(repo reviewRepo) string {
+	if base := review.BaseByRepo[repo.AbsolutePath]; base != "" {
+		return base
+	}
+	return review.Base
 }
 
 func dataDirectory(override string) (string, error) {
@@ -600,10 +604,14 @@ func shellQuote(value string) string {
 // workspace open. Queue opening calls it as well: changing queue lifecycle
 // alone is not enough for the reviewer UI to resolve /api/repos.
 func (d *Daemon) activateWorkspace(workspace, label string) ([]reviewRepo, error) {
-	return d.activateWorkspaceWithBase(workspace, label, "")
+	return d.activateWorkspaceWithBases(workspace, label, "", nil)
 }
 
 func (d *Daemon) activateWorkspaceWithBase(workspace, label, base string) ([]reviewRepo, error) {
+	return d.activateWorkspaceWithBases(workspace, label, base, nil)
+}
+
+func (d *Daemon) activateWorkspaceWithBases(workspace, label, base string, bases map[string]string) ([]reviewRepo, error) {
 	workspace, err := safeWorkspacePath(workspace)
 	if err != nil {
 		return nil, err
@@ -643,8 +651,14 @@ func (d *Daemon) activateWorkspaceWithBase(workspace, label, base string) ([]rev
 	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
+	baseByRepo := make(map[string]string, len(bases))
+	for _, repo := range repos {
+		if value := bases[repo.WorkspaceRelativePath]; value != "" {
+			baseByRepo[repo.AbsolutePath] = value
+		}
+	}
 	d.mu.Lock()
-	d.review = &workspaceReview{Root: workspace, SessionID: sessionID, Repos: repos, Base: base}
+	d.review = &workspaceReview{Root: workspace, SessionID: sessionID, Repos: repos, Base: base, BaseByRepo: baseByRepo}
 	d.mu.Unlock()
 	d.startDiffWatcher(repos)
 	return repos, nil
@@ -683,8 +697,15 @@ func (d *Daemon) restoreActiveWorkspace() error {
 	if err := d.db.QueryRow(`SELECT id FROM sessions ORDER BY started_at DESC,id DESC LIMIT 1`).Scan(&sessionID); err != nil {
 		return err
 	}
+	bases, _ := d.snapshotBasesForMaterializedWorkspace(workspace)
+	baseByRepo := make(map[string]string, len(bases))
+	for _, repo := range repos {
+		if value := bases[repo.WorkspaceRelativePath]; value != "" {
+			baseByRepo[repo.AbsolutePath] = value
+		}
+	}
 	d.mu.Lock()
-	d.review = &workspaceReview{Root: workspace, SessionID: sessionID, Repos: repos}
+	d.review = &workspaceReview{Root: workspace, SessionID: sessionID, Repos: repos, BaseByRepo: baseByRepo}
 	d.mu.Unlock()
 	d.startDiffWatcher(repos)
 	return nil
@@ -1681,18 +1702,14 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if len(parts) == 4 && parts[0] == "repos" && parts[2] == "api" && parts[3] == "diff" && r.Method == http.MethodGet {
-			repo, ok := d.reviewRepo(parts[1])
+			review, repo, ok := d.reviewContext(parts[1])
 			if !ok {
 				writeJSON(w, http.StatusNotFound, map[string]string{"error": "Unknown review repository"})
 				return
 			}
 			base := r.URL.Query().Get("base")
 			if base == "" {
-				d.mu.Lock()
-				if d.review != nil {
-					base = d.review.Base
-				}
-				d.mu.Unlock()
+				base = review.baseForRepo(repo)
 			}
 			selection := gitdiff.Selection{BaseCommitish: base, TargetCommitish: r.URL.Query().Get("target"), IgnoreWhitespace: r.URL.Query().Get("ignoreWhitespace") == "true"}
 			if raw := r.URL.Query().Get("contextLines"); raw != "" {
@@ -1913,14 +1930,23 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "No queued review items"})
 			return
 		}
-		// Queue contracts also represent remote/unavailable workspaces. Keep the
-		// lifecycle transition durable in that case; a local existing path is
-		// activated for the reviewer UI below.
-		if _, err := os.Stat(item.WorkspacePath); err == nil {
-			if _, err := d.activateWorkspace(item.WorkspacePath, item.Title); err != nil {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-				return
-			}
+		// Open-next must follow the same immutable path as an explicitly opened
+		// card. Opening the mutable source worktree here made the two Queue Home
+		// controls disagree and could silently review a later edit instead of the
+		// submitted snapshot.
+		workspace, _, openErr := d.materializeQueueWorkspace(item)
+		if openErr != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": openErr.Error(), "recovery": "The item is now marked in review, but its immutable snapshot could not be opened. Requeue it after restoring the snapshot, then open the card again."})
+			return
+		}
+		bases, baseErr := d.snapshotBases(item)
+		if baseErr != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": baseErr.Error(), "recovery": "The item remains in review but its snapshot metadata is unavailable. Requeue it from its source workspace to capture a fresh immutable snapshot."})
+			return
+		}
+		if _, err := d.activateWorkspaceWithBases(workspace, item.Title, "", bases); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"item": item, "reviewUrl": "/review?queueItem=" + item.ID})
 		return
@@ -2197,7 +2223,12 @@ func (d *Daemon) apiHandler(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusBadRequest, map[string]any{"error": openErr.Error(), "recovery": "The item remains queued. Restore the retained snapshot or requeue it from its source workspace, then try opening it again."})
 				return
 			}
-			if _, activateErr := d.activateWorkspace(workspace, pending.Title); activateErr != nil {
+			bases, baseErr := d.snapshotBases(pending)
+			if baseErr != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"error": baseErr.Error(), "recovery": "The item remains queued. Its immutable snapshot metadata is unavailable; resubmit the source workspace to capture a fresh snapshot."})
+				return
+			}
+			if _, activateErr := d.activateWorkspaceWithBases(workspace, pending.Title, "", bases); activateErr != nil {
 				writeJSON(w, http.StatusBadRequest, map[string]any{"error": activateErr.Error(), "recovery": "Retry after fixing the workspace. The queue item remains queued."})
 				return
 			}
@@ -2302,6 +2333,39 @@ func (d *Daemon) materializeQueueWorkspace(item *queueStore.Item) (workspace, so
 	return workspace, source, nil
 }
 
+// snapshotBases converts the portable snapshot manifest into the per-repo
+// comparison bases needed by a materialized review. Materialized worktrees
+// are clean synthetic commits, so omitting these values would compare HEAD to
+// its working tree and show an empty diff after a successful queue open.
+func (d *Daemon) snapshotBases(item *queueStore.Item) (map[string]string, error) {
+	bases := map[string]string{}
+	if item == nil || item.SnapshotManifestPath == nil || strings.TrimSpace(*item.SnapshotManifestPath) == "" {
+		return bases, nil
+	}
+	manifest, err := snapshot.ReadVerified(*item.SnapshotManifestPath)
+	if err != nil {
+		return nil, fmt.Errorf("read immutable snapshot metadata: %w", err)
+	}
+	for _, repo := range manifest.Repos {
+		if repo.BaseSHA != nil && strings.TrimSpace(*repo.BaseSHA) != "" {
+			bases[repo.WorkspaceRelativePath] = *repo.BaseSHA
+		}
+	}
+	return bases, nil
+}
+
+func (d *Daemon) snapshotBasesForMaterializedWorkspace(workspace string) (map[string]string, error) {
+	parent := filepath.Join(d.dataDir, "review-workspaces")
+	if filepath.Dir(filepath.Clean(workspace)) != parent {
+		return map[string]string{}, nil
+	}
+	item, err := queueStore.Get(d.db, filepath.Base(workspace))
+	if err != nil || item == nil {
+		return map[string]string{}, err
+	}
+	return d.snapshotBases(item)
+}
+
 func nullableString(value sql.NullString) any {
 	if !value.Valid {
 		return nil
@@ -2371,7 +2435,10 @@ func Start(ctx context.Context, options Options) (*Daemon, error) {
 			_ = db.Close()
 			return nil, secretErr
 		}
-		github = githubauth.New(secrets, githubauth.NewFileConfigStore(filepath.Join(dir, "github-apps.json")), http.DefaultClient, browserOpener)
+		// Device Flow browser ownership belongs to Electron or the explicit CLI
+		// command, never the daemon. This prevents a single desktop Connect
+		// action from opening duplicate external browser tabs.
+		github = githubauth.New(secrets, githubauth.NewFileConfigStore(filepath.Join(dir, "github-apps.json")), http.DefaultClient, nil)
 	}
 	// The native daemon always owns a real SDK runtime factory in production.
 	// It remains lazy: no credential is read and no Copilot child process is

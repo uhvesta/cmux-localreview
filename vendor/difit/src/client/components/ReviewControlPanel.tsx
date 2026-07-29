@@ -132,8 +132,8 @@ export function ReviewControlPanel({ collapsed, onToggleCollapsed, refreshNonce 
       const [queueResponse, agentsResponse] = await Promise.all([daemonFetch('/api/queue?history=true'), daemonFetch('/api/agents')]);
       if (!queueResponse.ok || !agentsResponse.ok) {
         throw new Error(queueResponse.status === 401 || agentsResponse.status === 401
-          ? 'Open this review with localreview-open to connect the daemon controls.'
-          : 'Queue or agent registry is unavailable. Start the global daemon, then refresh.');
+          ? 'The desktop connection expired. Quit and reopen CMUX Local Review to reconnect the review controls.'
+          : 'Queue or agent registry is unavailable. Quit and reopen CMUX Local Review, then refresh.');
       }
       const queueData = (await queueResponse.json()) as { items?: QueueItem[] };
       const agentData = (await agentsResponse.json()) as { agents?: Agent[] };

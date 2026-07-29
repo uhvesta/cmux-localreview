@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -141,7 +142,20 @@ func Capture(workspace, artifacts, base string) (Manifest, string, error) {
 		if e != nil {
 			return Manifest{}, "", e
 		}
-		if _, e = run(root, env, "add", "-A"); e != nil {
+		// An independent Git repository nested below this repository is part of
+		// the workspace too, but Git refuses to add an unborn nested repository
+		// to the parent's temporary index (and should not turn it into a gitlink
+		// in any case). Capture nested repositories as their own immutable
+		// bundles and exclude their directory from the parent's projection.
+		addArgs := []string{"add", "-A", "--", "."}
+		for _, candidate := range repos {
+			nested, relErr := filepath.Rel(root, candidate)
+			if relErr != nil || nested == "." || nested == ".." || strings.HasPrefix(nested, ".."+string(filepath.Separator)) {
+				continue
+			}
+			addArgs = append(addArgs, ":(exclude)"+filepath.ToSlash(nested))
+		}
+		if _, e = run(root, env, addArgs...); e != nil {
 			return Manifest{}, "", e
 		}
 		tree, e := run(root, env, "write-tree")
@@ -197,7 +211,6 @@ func discover(workspace string) ([]string, error) {
 		if err == nil && !seen[root] {
 			seen[root] = true
 			found = append(found, root)
-			return filepath.SkipDir
 		}
 		return nil
 	})
@@ -207,6 +220,10 @@ func discover(workspace string) ([]string, error) {
 	if len(found) == 0 {
 		return nil, errors.New("no Git repositories found below workspace")
 	}
+	// filepath.WalkDir is normally lexical, but sorting here makes manifests
+	// stable across supported filesystems and keeps the parent-before-child
+	// snapshot order obvious to callers.
+	sort.Strings(found)
 	return found, nil
 }
 func first(v, f string) string {
